@@ -113,7 +113,7 @@ pkg: check-host check-devconf $(BUILD_CONF) ## Build recipe(s) ARGS=... and opkg
 	@set -e; feed=$(ROOT)/$(YB)/tmp/deploy/ipk; \
 	python3 -m http.server -b 127.0.0.1 -d $$feed $(FEED_PORT) >/dev/null 2>&1 & srv=$$!; \
 	trap "kill $$srv 2>/dev/null" EXIT; sleep 0.5; \
-	ssh $(SSH_OPTS) -o ControlPath=none -R 8000:127.0.0.1:$(FEED_PORT) $(TARGET) \
+	ssh -o ControlPath=none $(SSH_OPTS) -R 8000:127.0.0.1:$(FEED_PORT) $(TARGET) \
 	  "opkg update >/dev/null && opkg install --force-reinstall $(PKGS)"
 
 ## ─── configure ───────────────────────────────────────────────────────────────
