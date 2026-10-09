@@ -252,6 +252,10 @@ void test_endpoints() {
       "node.description": "Pixel 7"}}},
     {"id": 43, "type": "PipeWire:Interface:Node", "info": {"props": {
       "media.class": "Stream/Output/Audio", "node.name": "btbench-stream-1"}}},
+    {"id": 45, "type": "PipeWire:Interface:Node", "info": {"state": "running", "props": {
+      "media.class": "Stream/Output/Audio", "node.name": "bluez_input.A4_B1_C1_0B_28_E4.2", "device.api": "bluez5",
+      "api.bluez5.address": "A4:B1:C1:0B:28:E4", "api.bluez5.profile": "a2dp-source", "api.bluez5.codec": "sbc",
+      "node.description": "SMI-PC"}}},
     {"id": 44, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Video/Source", "node.name": "v4l2"}}},
     {"id": 0, "type": "PipeWire:Interface:Metadata", "props": {"metadata.name": "default"}, "metadata": [
       {"subject": 0, "key": "default.configured.audio.sink", "value": {"name": "gone"}},
@@ -260,7 +264,7 @@ void test_endpoints() {
   ])");
   const json e = endpoints_from_pw_dump(dump);
   CHECK_EQ(e["sinks"].size(), size_t(2));
-  CHECK_EQ(e["sources"].size(), size_t(1));
+  CHECK_EQ(e["sources"].size(), size_t(2));  // the Pixel's source and SMI-PC's A2DP stream
   const json& jbl = e["sinks"][0];  // Bluetooth first
   CHECK_EQ(jbl["kind"].get<std::string>(), std::string("bluetooth"));
   CHECK_EQ(jbl["address"].get<std::string>(), std::string("F8:DF:15:0A:11:3C"));
@@ -268,7 +272,7 @@ void test_endpoints() {
   CHECK_EQ(jbl["serial"].get<std::string>(), std::string("120"));
   CHECK_EQ(e["sinks"][1]["kind"].get<std::string>(), std::string("loopback"));
   CHECK(!e["sinks"][1]["default"].get<bool>());
-  const json& pix = e["sources"][0];
+  const json& pix = e["sources"][0]["label"] == "Pixel 7" ? e["sources"][0] : e["sources"][1];
   CHECK_EQ(pix["address"].get<std::string>(), std::string("5C:E9:1E:22:40:01"));  // from the node name
   CHECK(pix["default"].get<bool>());  // the metadata value as a string, too
   CHECK(endpoints_from_pw_dump(json::object())["sinks"].empty());

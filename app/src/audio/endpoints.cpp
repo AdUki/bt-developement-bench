@@ -63,11 +63,16 @@ json endpoints_from_pw_dump(const json& dump) {
     if (!o.contains("info") || !o["info"].contains("props")) continue;
     const json& p = o["info"]["props"];
     const std::string cls = prop(p, "media.class");
-    const bool sink = cls == "Audio/Sink";
-    const bool source = cls == "Audio/Source" || cls == "Audio/Source/Virtual";
-    if (!sink && !source) continue;
     const std::string name = prop(p, "node.name");
     if (name.empty()) continue;
+    const bool sink = cls == "Audio/Sink";
+    // What a Bluetooth device sends over A2DP is not an Audio/Source in PipeWire but a stream
+    // (Stream/Output/Audio, bluez_input.<addr>.<n>) that plays into the default sink, the way a
+    // phone's music plays on a desktop's speakers. It is still where that audio is captured from.
+    const bool bt_stream = cls == "Stream/Output/Audio" &&
+                           (prop(p, "device.api") == "bluez5" || starts_with(name, "bluez_input."));
+    const bool source = cls == "Audio/Source" || cls == "Audio/Source/Virtual" || bt_stream;
+    if (!sink && !source) continue;
     std::string label = prop(p, "node.description");
     if (label.empty()) label = prop(p, "node.nick");
     if (label.empty()) label = name;
