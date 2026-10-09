@@ -106,12 +106,12 @@ function renderNowPlaying() {
   $('np').classList.toggle('idle', c.kind === 'none');
   $('np-bar').parentElement.hidden = c.kind === 'none';
   const btn = (a, d, on, cls) => `<button class="np-btn ${cls || ''}" data-np="${a}" title="${a}" aria-label="${a}"${on ? '' : ' disabled'}>${svg(d)}</button>`;
-  // Play and pause both, with the state said in words: a phone reports its status late or not at
-  // all, and a single toggle then offers the wrong one.
+  // Play and pause both, all the buttons alike, and the state said in words: a phone reports its
+  // status late or not at all, and buttons that change with it then offer the wrong one.
   const status = c.kind === 'phone' ? (c.p.status || 'unknown') : c.kind === 'board' ? (c.s.paused ? 'paused' : c.s.state) : '';
   setHTML($('np-ctl'), btn('previous', PL_SVG.previous, can.prev) +
-    btn('play', PL_SVG.play, can.play, playing ? 'on' : '') + btn('pause', PL_SVG.pause, can.play, playing ? '' : 'on') +
-    btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop, 'minor') +
+    btn('play', PL_SVG.play, can.play) + btn('pause', PL_SVG.pause, can.play) +
+    btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop) +
     (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : ''));
   renderTime(pos, dur);
   renderVolume(c);
