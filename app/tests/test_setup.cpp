@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <filesystem>
+#include <set>
 #include <fstream>
 #include <sstream>
 
@@ -60,7 +61,7 @@ void test_args_and_wireplumber() {
   CHECK_EQ(bluetoothd_setup_args({}, "/data/btbench/main.conf"), std::string("--configfile=/data/btbench/main.conf"));
   CHECK_EQ(bluetoothd_setup_args({"hfp"}, "/x"), std::string("--noplugin=hfp --configfile=/x"));
   CHECK_EQ(bluetoothd_setup_args({}, ""), std::string(""));
-  const std::string wp = wireplumber_roles_conf({"a2dp_source", "bap_sink"},
+  const std::string wp = wireplumber_roles_conf({"a2dp_sink", "bap_source", "hfp_hf", "hfp_ag"},
       {{"Monitor.bluez5.codecs", json::array({"sbc", "ldac"})}, {"Monitor.bluez5.enable-hw-volume", false},
        {"Monitor.bluez5.default.rate", "48000"}, {"Device.bluez5.a2dp.ldac.quality", "hq"},
        {"Settings.bluetooth.autoswitch-to-headset-profile", false}, {"LE.ConnectionLatency", 2}});
@@ -110,11 +111,13 @@ void test_setup() {
             [&](const std::string& np) { obex_got = np; });
     json st = s.state();
     // The default: everything on but BlueZ's own HFP.
-    for (const json& p : st["profiles"]) CHECK_EQ(p["on"].get<bool>(), p["id"] != "bluez_hfp" && p["id"] != "hid_remote");
+    // The default: everything on but BlueZ's own HFP, HSP, the broadcast roles and the remote.
+    const std::set<std::string> off = {"bluez_hfp", "hid_remote", "hsp_hs", "hsp_ag", "bap_bcast_sink", "bap_bcast_source"};
+    for (const json& p : st["profiles"]) CHECK_EQ(p["on"].get<bool>(), !off.count(p["id"].get<std::string>()));
     json out;
     std::string err;
     int status = 0;
-    CHECK(s.change(json::parse(R"({"profiles": {"a2dp_source": false, "obex_ftp": false, "le_audio": false, "hid_remote": true},
+    CHECK(s.change(json::parse(R"({"profiles": {"a2dp_source": false, "obex_ftp": false, "le_audio": false, "bap_sink": false, "bap_source": false, "bap_bcast_sink": true, "hid_remote": true},
         "plugins": {"policy": false}, "settings": {"General.ControllerMode": "le", "Monitor.bluez5.enable-msbc": false}})"), &out, &err, &status));
     CHECK(err.empty());
     CHECK(remote);
@@ -125,11 +128,11 @@ void test_setup() {
     CHECK(has(env, "--noplugin=bap,bass,ccp,csip,gmap,hfp,mcp,micp,policy,tmap,vcp"));
     CHECK(has(env, "--configfile=" + (dir / "main.conf").string()));
     CHECK(has(slurp(dir / "main.conf"), "ControllerMode = le"));
-    CHECK(has(slurp(dir / "wp.conf"), "override.bluez5.roles = [ a2dp_sink hfp_hf hfp_ag ]"));
+    CHECK(has(slurp(dir / "wp.conf"), "override.bluez5.roles = [ a2dp_sink bap_bcast_sink hfp_hf hfp_ag ]"));
     CHECK(has(slurp(dir / "wp.conf"), "bluez5.enable-msbc = false"));
     for (const json& p : out["profiles"]) {
-      if (p["id"] == "a2dp_source" || p["id"] == "le_audio") CHECK_EQ(p["on"].get<bool>(), false);
-      if (p["id"] == "a2dp_sink" || p["id"] == "hid_remote") CHECK_EQ(p["on"].get<bool>(), true);
+      if (p["id"] == "a2dp_source" || p["id"] == "le_audio" || p["id"] == "bap_sink") CHECK_EQ(p["on"].get<bool>(), false);
+      if (p["id"] == "a2dp_sink" || p["id"] == "hid_remote" || p["id"] == "bap_bcast_sink") CHECK_EQ(p["on"].get<bool>(), true);
     }
     // Refused as a whole: nothing changes.
     CHECK(!s.change(json::parse(R"({"profiles": {"a2dp_sink": false}, "plugins": {"warp": false}})"), &out, &err, &status));
@@ -144,6 +147,13 @@ void test_setup() {
   for (const json& p : again.state()["profiles"])
     if (p["id"] == "a2dp_source") CHECK_EQ(p["on"].get<bool>(), false);
   CHECK_EQ(again.obex_noplugin(), std::string("ftp,pcsuite"));
+  // A file from before roles_on: its roles off become the roles on, the new roles stay off.
+  std::ofstream(dir / "setup.json") << R"({"plugins_off": ["hfp"], "roles_off": ["hfp_ag"], "obex_off": [], "settings": {}})";
+  Setup old(o, nullptr, nullptr, nullptr);
+  for (const json& p : old.state()["profiles"]) {
+    if (p["id"] == "hfp_ag" || p["id"] == "bap_bcast_source") CHECK_EQ(p["on"].get<bool>(), false);
+    if (p["id"] == "bap_sink") CHECK_EQ(p["on"].get<bool>(), true);
+  }
   fs::remove_all(dir);
 }
 

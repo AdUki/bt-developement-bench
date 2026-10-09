@@ -154,11 +154,15 @@ const std::vector<Plugin>& plugins_table() {
   return t;
 }
 
-// PipeWire's roles as the image lists them (wireplumber 50-btbench.conf).
+// Every Bluetooth role PipeWire's bluez5 monitor implements (bluez5.roles); the image turns on all
+// but HSP and the LE Audio broadcast roles (wireplumber 50-btbench.conf).
 const std::vector<std::string>& roles_table() {
-  static const std::vector<std::string> t = {"a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "hfp_hf", "hfp_ag"};
+  static const std::vector<std::string> t = {"a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "bap_bcast_sink",
+                                             "bap_bcast_source", "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"};
   return t;
 }
+// The roles setup.json files written before it kept roles_on knew (they kept the roles off).
+const std::vector<std::string> kRolesV1 = {"a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "hfp_hf", "hfp_ag"};
 
 struct Profile {
   const char* id;
@@ -175,8 +179,14 @@ const std::vector<Profile>& profiles_table() {
       {"a2dp_source", "A2DP source", "Audio", "Send music to headphones and speakers.", {}, {"a2dp_source"}, {}},
       {"hfp_hf", "Hands-Free (HFP HF)", "Audio", "Be a headset in a phone's calls.", {}, {"hfp_hf"}, {}},
       {"hfp_ag", "Audio Gateway (HFP AG)", "Audio", "Be the phone for headsets.", {}, {"hfp_ag"}, {}},
-      {"le_audio", "LE Audio", "Audio", "BAP unicast both ways, with volume, microphone, media and call control and coordinated sets.",
-       {"bap", "bass", "vcp", "micp", "mcp", "ccp", "csip", "tmap", "gmap"}, {"bap_sink", "bap_source"}, {}},
+      {"hsp_hs", "Headset (HSP HS)", "Audio", "The older headset profile, headset side. Off by default: some headsets misbehave with HSP and HFP offered together.", {}, {"hsp_hs"}, {}},
+      {"hsp_ag", "Headset gateway (HSP AG)", "Audio", "The older headset profile, phone side.", {}, {"hsp_ag"}, {}},
+      {"bap_sink", "LE Audio unicast sink", "LE Audio", "Receive LE Audio (BAP unicast server, sink).", {}, {"bap_sink"}, {}},
+      {"bap_source", "LE Audio unicast source", "LE Audio", "Send LE Audio to earbuds (BAP unicast client, source).", {}, {"bap_source"}, {}},
+      {"bap_bcast_sink", "LE Audio broadcast sink", "LE Audio", "Listen to Auracast broadcasts (BAP broadcast sink). Needs ISO: a controller with LE Audio.", {}, {"bap_bcast_sink"}, {}},
+      {"bap_bcast_source", "LE Audio broadcast source", "LE Audio", "Broadcast audio for anyone to hear (BAP broadcast source). Needs ISO.", {}, {"bap_bcast_source"}, {}},
+      {"le_audio", "LE Audio services in BlueZ", "LE Audio", "BlueZ's side of LE Audio: BAP, broadcast assistant, volume, microphone, media and call control, coordinated sets.",
+       {"bap", "bass", "vcp", "micp", "mcp", "ccp", "csip", "tmap", "gmap"}, {}, {}},
       {"avrcp", "AVRCP", "Control", "Players, track info, absolute volume and cover art.", {"avrcp"}, {}, {}},
       {"hid_host", "HID host (classic)", "Input", "Use classic keyboards, mice and game pads.", {"input"}, {}, {}},
       {"hog_host", "HID over GATT host", "Input", "Use BLE keyboards, mice and remotes.", {"hog", "scanparam"}, {}, {}},
@@ -372,10 +382,10 @@ std::string bluetoothd_setup_args(const std::set<std::string>& plugins_off, cons
   return out;
 }
 
-std::string wireplumber_roles_conf(const std::set<std::string>& roles_off, const std::map<std::string, json>& settings) {
+std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const std::map<std::string, json>& settings) {
   std::string roles;
   for (const std::string& r : roles_table())
-    if (!roles_off.count(r)) roles += r + " ";
+    if (roles_on.count(r)) roles += r + " ";
   std::string monitor, device, wps;
   for (const auto& [k, v] : settings) {
     if (v.is_null()) continue;
@@ -420,7 +430,16 @@ bool Setup::load() {
       if (x.is_string()) out->insert(x.get<std::string>());
   };
   set_of("plugins_off", &st_.plugins_off);
-  set_of("roles_off", &st_.roles_off);
+  if (j.contains("roles_on")) {
+    set_of("roles_on", &st_.roles_on);
+  } else if (j.contains("roles_off")) {
+    // An older file: the roles it knew, less those it had off.
+    std::set<std::string> off;
+    set_of("roles_off", &off);
+    st_.roles_on.clear();
+    for (const std::string& r : kRolesV1)
+      if (!off.count(r)) st_.roles_on.insert(r);
+  }
   set_of("obex_off", &st_.obex_off);
   if (j.contains("settings") && j["settings"].is_object())
     for (const auto& [k, v] : j["settings"].items()) {
@@ -434,7 +453,7 @@ bool Setup::save(std::string* err) const {
   mkdir(opt_.data_dir.c_str(), 0755);
   json settings = json::object();
   for (const auto& [k, v] : st_.settings) settings[k] = v;
-  const json j{{"plugins_off", st_.plugins_off}, {"roles_off", st_.roles_off}, {"obex_off", st_.obex_off}, {"settings", settings}};
+  const json j{{"plugins_off", st_.plugins_off}, {"roles_on", st_.roles_on}, {"obex_off", st_.obex_off}, {"settings", settings}};
   return put_file(opt_.data_dir + "/setup.json", j.dump(2) + "\n", err);
 }
 
@@ -461,7 +480,7 @@ bool Setup::write_files(bool* bt_changed, bool* wp_changed, std::string* err) {
     if (!write_bluetoothd_env(opt_.data_dir, "BLUETOOTHD_NOPLUGIN", args, err)) return false;
     *bt_changed = true;
   }
-  const std::string wp = wireplumber_roles_conf(st_.roles_off, st_.settings);
+  const std::string wp = wireplumber_roles_conf(st_.roles_on, st_.settings);
   if (slurp(opt_.wireplumber_conf) != wp) {
     if (!put_file(opt_.wireplumber_conf, wp, err)) return false;
     *wp_changed = true;
@@ -476,7 +495,7 @@ json Setup::state_locked() const {
   for (json& p : schema["profiles"]) {
     bool on = true;
     for (const json& x : p["plugins"]) on = on && !st_.plugins_off.count(x.get<std::string>());
-    for (const json& x : p["roles"]) on = on && !st_.roles_off.count(x.get<std::string>());
+    for (const json& x : p["roles"]) on = on && st_.roles_on.count(x.get<std::string>());
     for (const json& x : p["obex"]) on = on && !st_.obex_off.count(x.get<std::string>());
     if (p["id"] == "hid_remote") on = remote;
     p["on"] = on;
@@ -527,7 +546,10 @@ bool Setup::change(const json& body, json* out, std::string* err, int* status) {
         }
       };
       apply(p->plugins, &next.plugins_off);
-      apply(p->roles, &next.roles_off);
+      for (const std::string& r : p->roles) {
+        if (on) next.roles_on.insert(r);
+        else next.roles_on.erase(r);
+      }
       apply(p->obex, &next.obex_off);
       if (p->remote) remote_want = on;
     }

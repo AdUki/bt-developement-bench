@@ -37,7 +37,9 @@ struct SetupOptions {
 // What is switched, as kept in /data/btbench/setup.json.
 struct SetupState {
   std::set<std::string> plugins_off = {"hfp"};  // BlueZ's own HFP would fight PipeWire's
-  std::set<std::string> roles_off;              // WirePlumber bluez5.roles
+  // WirePlumber's bluez5.roles that are on: the image's set until changed. Kept as the roles on
+  // (not off), so a role added to the table later starts off, as the image has it.
+  std::set<std::string> roles_on = {"a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "hfp_hf", "hfp_ag"};
   std::set<std::string> obex_off;               // obexd plugins
   std::map<std::string, nlohmann::json> settings;  // "LE.MinConnectionInterval" → 7.5 (in the API's unit)
 };
@@ -53,9 +55,9 @@ bool setup_setting_ok(const std::string& key, const nlohmann::json& v, std::stri
 std::string main_conf_merge(const std::string& base, const std::map<std::string, nlohmann::json>& settings);
 // BLUETOOTHD_NOPLUGIN's value: "--noplugin=a,b --configfile=<path>" (either part may be absent).
 std::string bluetoothd_setup_args(const std::set<std::string>& plugins_off, const std::string& config_file);
-// The WirePlumber fragment: bluez5.roles set to the roles not switched off, and the WirePlumber
+// The WirePlumber fragment: bluez5.roles set to the roles on (in the table's order), and the WirePlumber
 // settings among `settings` (Monitor.*, Device.*, Settings.*).
-std::string wireplumber_roles_conf(const std::set<std::string>& roles_off, const std::map<std::string, nlohmann::json>& settings);
+std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const std::map<std::string, nlohmann::json>& settings);
 // obexd's --noplugin value, "" for none.
 std::string obexd_noplugin(const std::set<std::string>& off);
 
