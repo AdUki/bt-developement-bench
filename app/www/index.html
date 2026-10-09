@@ -28,6 +28,40 @@
 </header>
 
 <main>
+  <!-- ======================================================== Listen (the player) -->
+  <section id="player" class="panel">
+    <div class="np card" id="np">
+      <div class="np-art" id="np-art"></div>
+      <div class="np-main">
+        <div class="np-src" id="np-src"></div>
+        <div class="np-title" id="np-title">Nothing playing</div>
+        <div class="np-sub" id="np-sub"></div>
+        <div class="np-sub2" id="np-sub2"></div>
+        <div class="np-progress"><i id="np-bar"></i></div>
+        <div class="np-time"><span id="np-pos"></span><span id="np-dur"></span></div>
+        <div class="np-ctl" id="np-ctl"></div>
+        <div class="np-foot">
+          <label class="np-vol" id="np-vol-row"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7"/></svg>
+            <input type="range" id="np-vol" min="0" max="100" aria-label="Volume"></label>
+          <label class="np-out" id="np-out-row"><span class="muted">Play to</span> <select id="np-out" aria-label="Output"></select></label>
+          <button class="small-btn" id="np-hear" hidden title="Hear what the phone sends the board, in this browser">Listen in this browser</button>
+        </div>
+      </div>
+    </div>
+    <div class="np-cols">
+      <div class="card">
+        <div class="card-head"><h3>Up next</h3><span id="np-q-note" class="small muted"></span></div>
+        <div id="np-queue" class="tracklist"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Library</h3><div class="segs" id="np-lib-tabs"></div></div>
+        <div class="row" id="np-search-row" hidden><input type="search" id="np-search" class="grow" placeholder="Search the phone"></div>
+        <div id="np-crumbs" class="small crumbs"></div>
+        <div id="np-lib" class="tracklist"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ======================================================== Devices -->
   <section id="devices" class="panel">
     <div class="card toolbar" id="adapter-card">
@@ -79,6 +113,21 @@
       </div>
     </div>
     <div id="dev-list" class="rows"></div>
+  </section>
+
+  <!-- ======================================================== Devices: input devices (HID host) -->
+  <section id="hid" class="panel">
+    <div class="card toolbar">
+      <div class="tb-main">
+        <label class="switch"><input type="checkbox" id="hh-media"><i></i> Media keys control what plays</label>
+        <span id="hh-last" class="grow"></span>
+      </div>
+    </div>
+    <div id="hh-devices" class="rows-cards"></div>
+    <div class="card">
+      <div class="card-head"><h3>Key presses</h3><button class="small-btn" id="hh-clear">Clear</button></div>
+      <pre id="hh-log" class="log tall" data-empty="Press a key on a connected keyboard or remote: it shows here."></pre>
+    </div>
   </section>
 
   <!-- ======================================================== LE -->
@@ -153,6 +202,35 @@
           <div class="card-head"><h3>Events</h3><button class="small-btn" id="gs-log-clear">Clear</button></div>
           <pre id="gs-log" class="log" data-empty="Reads, writes and subscriptions by connected devices show here."></pre>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== LE: the board as a remote (HID device) -->
+  <section id="remote" class="panel">
+    <div class="card toolbar">
+      <div class="tb-main">
+        <div class="tb-id"><b>Remote control</b> <span id="rm-state" class="pill">off</span></div>
+        <label class="inline-label small">Name <input id="rm-name" maxlength="29" placeholder="btbench remote"></label>
+        <label class="switch"><input type="checkbox" id="rm-on"><i></i> On</label>
+      </div>
+      <p class="hint" id="rm-hint"></p>
+      <div id="rm-err" class="small bad-text"></div>
+    </div>
+    <div class="rm-layout">
+      <div class="remote" id="rm-pad" tabindex="0" aria-label="Remote control keys"></div>
+      <div class="rm-side">
+        <div class="card">
+          <h3>Type</h3>
+          <p class="hint">Sent as key presses on the keyboard report: search boxes, TV logins.</p>
+          <div class="row"><input id="rm-type" class="grow" placeholder="Text to type" maxlength="256"><button id="rm-send" class="primary">Type</button></div>
+        </div>
+        <div class="card">
+          <h3>Battery</h3>
+          <p class="hint">The level hosts show for the remote.</p>
+          <div class="row"><input type="range" id="rm-batt" min="0" max="100" class="grow" aria-label="Battery level"><span id="rm-batt-v" class="mono small"></span></div>
+        </div>
+        <p class="hint">While the pad has focus, the arrows, Enter, Escape, Space and + / − on your keyboard press its keys.</p>
       </div>
     </div>
   </section>
@@ -563,6 +641,8 @@
 <script src="monitor.js"></script>
 <script src="graphs.js"></script>
 <script src="obex.js"></script>
+<script src="player.js"></script>
+<script src="hid.js"></script>
 <script src="capture.js"></script>
 <script src="wifi.js"></script>
 <script src="kernel.js"></script>

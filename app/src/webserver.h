@@ -11,6 +11,8 @@
 #include "obex/obex.h"
 #include "bluetooth.h"
 #include "gatt_server.h"
+#include "hid_device.h"
+#include "hid_host.h"
 #include "jobs.h"
 #include "journal.h"
 #include "scripts.h"
@@ -45,6 +47,8 @@ struct Deps {
   WsHub& hub;
   audio::AudioEngine& audio;
   obex::ObexManager& obex;
+  HidRemote& hid_remote;
+  HidHost& hid_host;
 };
 
 // Route installers, one per file (api_*.cpp).
@@ -53,6 +57,7 @@ void install_le_routes(httplib::Server& svr, Deps& d);
 void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt);
 void install_audio_routes(httplib::Server& svr, Deps& d);
 void install_obex_routes(httplib::Server& svr, Deps& d);
+void install_hid_routes(httplib::Server& svr, Deps& d);
 
 class WebServer {
  public:

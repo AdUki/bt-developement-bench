@@ -47,14 +47,16 @@ nlohmann::json gatt_app_example();
 // The little-endian counter value of `width` bytes (1..4).
 std::vector<uint8_t> gatt_counter_bytes(uint32_t count, size_t width);
 
-// Exports the application under /org/btbench/gatt (with an ObjectManager, which is how BlueZ reads
-// it) and registers it with GattManager1. One application at a time: a new definition replaces
-// the old. Registered again when BlueZ comes back.
+// Exports the application under its root (with an ObjectManager, which is how BlueZ reads it) and
+// registers it with GattManager1. One application per instance: a new definition replaces the old.
+// Registered again when BlueZ comes back. The console's GATT server is the instance at
+// /org/btbench/gatt; the HID remote (hid_device.h) is a second one with a fixed definition, which
+// BlueZ merges into the same local database.
 class GattServer : public BusUser {
  public:
   // Reads and writes by remote devices, for the "gatt.server" topic: {op, path, uuid, value, device}.
   using EventFn = std::function<void(const nlohmann::json&)>;
-  GattServer(BtManager& bt, EventFn ev);
+  GattServer(BtManager& bt, EventFn ev, std::string root = "/org/btbench/gatt");
   ~GattServer() override;
 
   // {defined, state:"none|pending|registering|registered|failed", error, app, values:[{path, uuid,
@@ -63,6 +65,10 @@ class GattServer : public BusUser {
   // Replaces the application and waits for BlueZ's answer.
   bool set(const GattAppDef& def, std::string* err);
   void clear();
+  // A characteristic's new value, from any thread; notified if a client subscribed. `path` is
+  // root/svcN/chrM as built from the definition. False when there is no such characteristic.
+  bool set_value(const std::string& path, std::vector<uint8_t> value, bool* notifying = nullptr);
+  const std::string& root() const { return root_; }
 
   void bus_opened(sd_bus* bus) override;
   void bus_closing() override;
@@ -87,6 +93,7 @@ class GattServer : public BusUser {
 
   BtManager& bt_;
   EventFn event_;
+  const std::string root_;
   mutable std::mutex m_;  // guards everything below that a web handler reads
   bool defined_ = false;
   GattAppDef def_;

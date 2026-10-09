@@ -579,3 +579,127 @@ a.btn-link:hover { border-color: var(--accent); color: var(--accent); }
 td.acts { display: table-cell; }
 td.acts > * { margin-right: 0.25rem; }
 .card > h4:first-child { margin-top: 0; }
+
+/* ------------------------------------------------------------------ Listen: the player */
+
+.np { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 1.4rem; padding: 1.2rem; align-items: center; }
+.np-art {
+  width: 220px; height: 220px; border-radius: 10px; overflow: hidden; background: var(--well);
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(10, 20, 30, 0.18);
+}
+.np-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.np-art svg.ph { width: 72px; height: 72px; fill: none; stroke: var(--line); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.np.idle .np-art { box-shadow: none; }
+.np-main { min-width: 0; }
+.np-src { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
+.np-src:empty { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 0.35rem; border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.8rem; }
+.chip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.np-title { font-size: 1.6rem; font-weight: 650; line-height: 1.2; overflow-wrap: anywhere; letter-spacing: -0.01em; }
+.np-sub { font-size: 1rem; margin-top: 0.2rem; overflow-wrap: anywhere; }
+.np-sub2 { font-size: 0.82rem; color: var(--muted); margin-top: 0.15rem; }
+.np-sub:empty, .np-sub2:empty { display: none; }
+.np-progress { height: 5px; background: var(--line-soft); border-radius: 3px; margin-top: 1rem; overflow: hidden; }
+.np-progress i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+/* A radio has no end: the bar is a quiet stripe, not an empty progress. */
+.np-progress.live { background: repeating-linear-gradient(90deg, var(--line-soft) 0 8px, transparent 8px 12px); }
+.np-time { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-top: 0.25rem; min-height: 1.1em; }
+.np-ctl { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+.np-btn { width: 2.8rem; height: 2.8rem; border-radius: 50%; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: transparent; background: transparent; }
+.np-btn svg { width: 22px; height: 22px; fill: currentColor; }
+.np-btn:hover:not(:disabled) { background: var(--well); color: var(--fg); border-color: transparent; }
+.np-btn.main { width: 3.6rem; height: 3.6rem; background: var(--accent); color: var(--on-accent); }
+.np-btn.main svg { width: 26px; height: 26px; }
+.np-btn.main:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
+.np-btn.minor svg { width: 16px; height: 16px; }
+.np-foot { display: flex; align-items: center; gap: 0.6rem 1.4rem; flex-wrap: wrap; margin-top: 0.9rem; }
+.np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 200px; max-width: 320px; }
+.np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.np-vol input { flex: 1; }
+.np-out { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; min-width: 0; }
+.np-out select { max-width: 260px; }
+.np-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0 0.8rem; }
+
+.tracklist { max-height: 26rem; overflow: auto; margin: 0 -0.4rem; }
+.tr { display: flex; align-items: center; gap: 0.7rem; padding: 0.45rem 0.4rem; border-radius: 6px; cursor: pointer; }
+.tr:hover { background: var(--well); }
+.tr.now { color: var(--accent); }
+.tr.now .tr-t { font-weight: 600; }
+.tr-n { width: 1.6rem; flex: none; text-align: center; color: var(--muted); font-size: 0.8rem; display: inline-flex; justify-content: center; }
+.tr-n svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.tr.now .tr-n svg { fill: currentColor; stroke: none; }
+.tr-t { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.tr-t .muted { font-size: 0.8rem; }
+.tr-d { color: var(--muted); font-size: 0.8rem; }
+.tr .chev { flex: none; }
+.icon-btn { width: 2rem; height: 2rem; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border-color: transparent; background: transparent; color: var(--muted); }
+.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.icon-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.empty-line { padding: 1rem 0.4rem; color: var(--muted); }
+.segs { display: inline-flex; background: var(--well); border-radius: 8px; padding: 2px; }
+.seg { border: 0; background: transparent; padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.82rem; color: var(--muted); }
+.seg.on { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+.seg:hover:not(.on) { color: var(--fg); }
+#np-search-row { margin-bottom: 0.5rem; }
+
+/* ------------------------------------------------------------------ the remote control */
+
+.rm-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1.2rem; align-items: start; margin-top: 0.8rem; }
+.rm-side .card:first-child { margin-top: 0; }
+/* The pad is drawn as the object it stands for: a graphite remote, the same in both themes. */
+.remote {
+  --rk: #26313b; --rk-hi: #33414d; --rk-fg: #dbe3ea;
+  background: linear-gradient(#1c252d, #141b21); border-radius: 36px; padding: 1.4rem 1.2rem 1.6rem;
+  display: flex; flex-direction: column; gap: 1.1rem; align-items: center; user-select: none; touch-action: none;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06); outline: none;
+}
+.remote:focus-visible { box-shadow: 0 0 0 3px var(--accent), 0 14px 32px rgba(0, 0, 0, 0.28); }
+.remote.off { opacity: 0.55; }
+.remote.off .rk { cursor: default; }
+.rk {
+  background: var(--rk); color: var(--rk-fg); border: 0; border-radius: 12px; width: 3.2rem; height: 3rem;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 650; font-size: 0.85rem;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4); transition: transform 0.05s;
+}
+.rk svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rk:hover:not(:disabled) { background: var(--rk-hi); color: #fff; border: 0; }
+.rk.down { background: var(--rail-hi); color: #06121f; transform: translateY(1px); box-shadow: none; }
+.rk.round { border-radius: 50%; width: 3rem; }
+.rk.wide { width: 4.4rem; }
+.danger-key svg { stroke: #ff7b72; }
+.rk-row { display: flex; gap: 1rem; justify-content: center; width: 100%; }
+.rk-row > span { flex: 1; }
+.rk-row:first-child { justify-content: space-between; }
+.rk-media .rk svg { fill: currentColor; stroke: none; }
+.dpad {
+  display: grid; grid-template-columns: repeat(3, 3.6rem); grid-template-rows: repeat(3, 3.6rem);
+  background: var(--rk); border-radius: 50%; padding: 0.5rem; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.dpad .rk { width: 100%; height: 100%; background: transparent; box-shadow: none; border-radius: 10px; }
+.dpad .rk.down { background: var(--rail-hi); }
+.d-up { grid-area: 1 / 2; } .d-left { grid-area: 2 / 1; } .d-right { grid-area: 2 / 3; } .d-down { grid-area: 3 / 2; }
+.dpad .d-ok { grid-area: 2 / 2; border-radius: 50%; background: var(--rk-hi); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4); }
+.rk-vol { display: flex; gap: 2.4rem; }
+.rocker { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; background: var(--rk); border-radius: 26px; padding: 0.3rem; }
+.rocker .rk { background: transparent; box-shadow: none; border-radius: 22px; }
+.rocker span { font-size: 0.62rem; color: #8a97a3; letter-spacing: 0.08em; }
+
+/* Input devices */
+.keycap {
+  display: inline-block; min-width: 2.2rem; text-align: center; padding: 0.2rem 0.55rem; border-radius: 6px;
+  border: 1px solid var(--line); border-bottom-width: 3px; background: var(--panel); font: 600 0.85rem ui-monospace, monospace;
+}
+
+@media (max-width: 760px) {
+  .np { grid-template-columns: 1fr; justify-items: center; text-align: center; padding: 1rem; }
+  .np-art { width: min(72vw, 280px); height: min(72vw, 280px); }
+  .np-main { width: 100%; }
+  .np-src, .np-ctl, .np-foot { justify-content: center; }
+  .np-time { text-align: left; }
+  .np-vol { max-width: none; }
+  .np-cols { grid-template-columns: 1fr; }
+  .rm-layout { grid-template-columns: 1fr; justify-items: center; }
+  .rm-layout .remote { width: min(100%, 320px); }
+  .rm-side { width: 100%; }
+}

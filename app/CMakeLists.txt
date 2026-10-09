@@ -91,6 +91,7 @@ add_library(btbench_core STATIC
   src/adv.cpp
   src/api_audio.cpp
   src/api_bluetooth.cpp
+  src/api_hid.cpp
   src/api_le.cpp
   src/api_obex.cpp
   src/api_system.cpp
@@ -98,6 +99,8 @@ add_library(btbench_core STATIC
   src/bluez_model.cpp
   src/dbus_util.cpp
   src/gatt_server.cpp
+  src/hid_device.cpp
+  src/hid_host.cpp
   src/jobs.cpp
   src/obex/obex.cpp
   src/journal.cpp

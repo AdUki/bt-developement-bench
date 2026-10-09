@@ -177,6 +177,23 @@ void test_specs() {
   CHECK_EQ(back["source"]["target"].get<std::string>(), std::string("bluez_input.5C_E9_1E_22_40_01.2"));
   CHECK_EQ(back["rate"].get<int>(), 44100);
 
+  // A URL stream's playlist: its first item is the URL, given or not; a lone URL is a playlist of one.
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"http://r/radio","title":"Radio"}})"), &s, &err));
+  CHECK_EQ(s.source.playlist.size(), size_t(1));
+  CHECK_EQ(s.source.playlist[0].title, std::string("Radio"));
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","playlist":[
+      {"url":"http://u/1.mp3","title":"One"},{"url":"http://u/2.mp3","title":"Two"}]}})"), &s, &err));
+  CHECK_EQ(s.source.url, std::string("http://u/1.mp3"));
+  CHECK_EQ(s.source.title, std::string("One"));
+  CHECK_EQ(s.source.playlist.size(), size_t(2));
+  CHECK_EQ(stream_spec_json(s)["source"]["playlist"][1]["title"].get<std::string>(), std::string("Two"));
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"http://u/0.mp3","playlist":[{"url":"http://u/1.mp3"}]}})"), &s, &err));
+  CHECK_EQ(s.source.playlist.size(), size_t(2));  // the URL goes first
+  CHECK_EQ(s.source.playlist[0].url, std::string("http://u/0.mp3"));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url","playlist":[]}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url","playlist":[{"url":"file:///x"}]}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url"}})"), &s, &err));
+
   CHECK(endpoint_id_ok("bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp"));
   CHECK(endpoint_id_ok("hw:Loopback,0,0"));
   CHECK(!endpoint_id_ok("-D"));

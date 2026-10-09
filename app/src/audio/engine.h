@@ -43,6 +43,11 @@ struct Tools {
   nlohmann::json to_json() const;
 };
 
+struct PlaylistItem {
+  std::string url;
+  std::string title;
+};
+
 struct SourceSpec {
   std::string type = "tone";  // tone | sweep | noise | silence | url | capture
   // tone
@@ -57,6 +62,9 @@ struct SourceSpec {
   std::string url;
   std::string decoder = "auto";  // auto | mpg123 | ffmpeg
   std::string title;             // what the console calls it (a station's name), for the label
+  // url: the tracks to play one after another (UPnP files, a list of URLs); the first is `url`.
+  // One item for a radio. It can grow while the stream runs (PUT {"enqueue": [...]}).
+  std::vector<PlaylistItem> playlist;
   // capture: an endpoint id (GET /api/audio/endpoints), "" for PipeWire's default source
   std::string backend = "pipewire";  // pipewire | alsa
   std::string target;
@@ -117,7 +125,8 @@ class AudioEngine {
   // {streams:[...], max}
   nlohmann::json list() const;
   nlohmann::json get(int id) const;  // null when there is no such stream
-  // PUT: gain_db at any time; a tone's freq/freq_right/level_db and a noise's level_db live.
+  // PUT: gain_db at any time; a tone's freq/freq_right/level_db and a noise's level_db live; for a
+  // URL stream, its playlist: {"next": true}, {"previous": true}, {"track": n}, {"enqueue": [...]}.
   bool update(int id, const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
   bool remove(int id);  // stops it if it runs, and forgets it
   void stop_all();

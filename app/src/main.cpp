@@ -1,6 +1,8 @@
 #include <CLI11.hpp>
+#include <linux/input.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -15,6 +17,8 @@
 #include "bluetooth.h"
 #include "bluez_model.h"
 #include "gatt_server.h"
+#include "hid_device.h"
+#include "hid_host.h"
 #include "jobs.h"
 #include "journal.h"
 #include "scripts.h"
@@ -106,8 +110,13 @@ int main(int argc, char** argv) {
   bt.set_adapter(bt_adapter);
   btb::AdvManager adv(bt);
   btb::GattServer gatt_server(bt, [&publish](const nlohmann::json& ev) { publish("gatt.server", ev); });
+  // The HID remote is a second GATT application with its own root, so the console's GATT server
+  // and the remote can be up at the same time.
+  btb::GattServer hid_gatt(bt, [&publish](const nlohmann::json& ev) { publish("gatt.server", ev); }, "/org/btbench/hid");
+  btb::HidRemote hid_remote(bt, adv, hid_gatt);
   bt.add_user(&adv);
   bt.add_user(&gatt_server);
+  bt.add_user(&hid_gatt);
   // A characteristic's value changes (notifications, indications, reads) go out on gatt.notify,
   // with what a console needs to place them: the device, the handle and the UUID.
   bt.on_notify([&bt, &hub](const std::string& path, const std::vector<uint8_t>& value) {
@@ -155,9 +164,51 @@ int main(int argc, char** argv) {
   oopt.root = data_dir + "/obex";
   btb::obex::ObexManager obex(oopt, publish, [&hub](const std::string& t) { return hub.has_subscribers(t); });
 
-  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, obex};
+  // The HID host side: Bluetooth input devices, their events, and their media keys driving the
+  // board's media — the connected phone's AVRCP player (the playing one first) and the volume of
+  // its transport, as a remote paired with a speaker would.
+  btb::HidHostOptions hhopt;
+  hhopt.state_file = data_dir + "/hid.json";
+  btb::HidHost hid_host(hhopt, publish, [&hub](const std::string& t) { return hub.has_subscribers(t); },
+                        [&bt](const std::string& address, int code, int value) {
+    if (value == 0) return;  // presses and auto-repeat; releases do nothing
+    const nlohmann::json m = btb::model_media(*bt.objects());
+    const nlohmann::json* player = nullptr;
+    for (const auto& p : m["players"])
+      if (!player || p.value("status", std::string{}) == "playing") player = &p;
+    if (!player) return;
+    const std::string path = player->value("path", std::string{});
+    std::string method;
+    switch (code) {
+      case KEY_PLAYPAUSE: method = player->value("status", std::string{}) == "playing" ? "Pause" : "Play"; break;
+      case KEY_PLAYCD: case KEY_PLAY: method = "Play"; break;
+      case KEY_PAUSECD: method = "Pause"; break;
+      case KEY_STOPCD: method = "Stop"; break;
+      case KEY_NEXTSONG: method = "Next"; break;
+      case KEY_PREVIOUSSONG: method = "Previous"; break;
+      case KEY_VOLUMEUP: case KEY_VOLUMEDOWN: {
+        const std::string tp = player->value("transport", std::string{});
+        for (const auto& t : m["transports"]) {
+          if (t.value("path", std::string{}) != tp || !t.contains("volume") || t["volume"].is_null()) continue;
+          // AVRCP absolute volume is 0..127: sixteen presses from silent to full.
+          const int v = std::clamp(t["volume"].get<int>() + (code == KEY_VOLUMEUP ? 8 : -8), 0, 127);
+          bt.set_property(tp, "org.bluez.MediaTransport1", "Volume", btb::DVar::u16(static_cast<uint16_t>(v)), 3000);
+        }
+        return;
+      }
+      default: return;
+    }
+    if (value == 2) return;  // a held play key does not toggle again
+    LOG_INFO("hid host: {} from {} → {} {}", btb::evdev_key_name(code), address, method, path);
+    bt.call(path, "org.bluez.MediaPlayer1", method, nullptr, 3000);
+  });
+
+  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, obex, hid_remote, hid_host};
   btb::WebServer server(deps, wopt);
-  bt.on_change([&server](bool request) { server.publish_bt(request); });
+  bt.on_change([&server, &hid_host](bool request) {
+    server.publish_bt(request);
+    hid_host.poke();
+  });
 
 #ifdef BTB_HAVE_HCI
   btb::hci::Options hopt;

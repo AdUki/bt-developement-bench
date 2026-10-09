@@ -144,6 +144,19 @@ json Tools::to_json() const {
 
 // ---- specs --------------------------------------------------------------------------------------
 
+namespace {
+
+constexpr size_t kMaxPlaylist = 500;
+
+PlaylistItem playlist_item(const json& it) {
+  if (!it.is_object()) throw std::invalid_argument("a playlist item is {url, title}");
+  PlaylistItem p{trim(it.value("url", std::string{})), it.value("title", std::string{}).substr(0, 120)};
+  if (!url_ok(p.url)) throw std::invalid_argument("a playlist url must be an http:// or https:// URL");
+  return p;
+}
+
+}  // namespace
+
 bool stream_spec_from_json(const json& j, StreamSpec* out, std::string* err) {
   try {
     if (!j.is_object()) throw std::invalid_argument("the body must be an object");
@@ -183,11 +196,22 @@ bool stream_spec_from_json(const json& j, StreamSpec* out, std::string* err) {
     } else if (src.type == "silence") {
     } else if (src.type == "url") {
       src.url = trim(str(sj, "url", ""));
-      if (!url_ok(src.url)) throw std::invalid_argument("url must be an http:// or https:// URL");
+      if (!src.url.empty() && !url_ok(src.url)) throw std::invalid_argument("url must be an http:// or https:// URL");
       src.decoder = str(sj, "decoder", "auto");
       if (src.decoder != "auto" && src.decoder != "mpg123" && src.decoder != "ffmpeg")
         throw std::invalid_argument("decoder is auto, mpg123 or ffmpeg");
       src.title = str(sj, "title", "").substr(0, 120);
+      // A playlist: its first item is the stream's URL (given or not).
+      if (sj.contains("playlist")) {
+        if (!sj["playlist"].is_array() || sj["playlist"].empty() || sj["playlist"].size() > kMaxPlaylist)
+          throw std::invalid_argument("playlist is an array of 1.." + std::to_string(kMaxPlaylist) + " {url, title}");
+        for (const json& it : sj["playlist"]) src.playlist.push_back(playlist_item(it));
+        if (src.url.empty()) src.url = src.playlist.front().url;
+        else if (src.playlist.front().url != src.url) src.playlist.insert(src.playlist.begin(), PlaylistItem{src.url, src.title});
+        if (src.title.empty()) src.title = src.playlist.front().title;
+      }
+      if (!url_ok(src.url)) throw std::invalid_argument("url must be an http:// or https:// URL");
+      if (src.playlist.empty()) src.playlist.push_back(PlaylistItem{src.url, src.title});
     } else if (src.type == "capture") {
       src.backend = str(sj, "backend", "pipewire");
       if (src.backend != "pipewire" && src.backend != "alsa") throw std::invalid_argument("source backend is pipewire or alsa");
@@ -233,7 +257,9 @@ json stream_spec_json(const StreamSpec& s) {
   } else if (src.type == "noise") {
     sj.update(json{{"color", src.color}, {"level_db", src.level_db}});
   } else if (src.type == "url") {
-    sj.update(json{{"url", src.url}, {"decoder", src.decoder}, {"title", src.title}});
+    json pl = json::array();
+    for (const PlaylistItem& it : src.playlist) pl.push_back(json{{"url", it.url}, {"title", it.title}});
+    sj.update(json{{"url", src.url}, {"decoder", src.decoder}, {"title", src.title}, {"playlist", pl}});
   } else if (src.type == "capture") {
     sj.update(json{{"backend", src.backend}, {"target", src.target}, {"monitor", src.monitor},
                    {"title", src.title}});
@@ -534,6 +560,10 @@ struct AudioEngine::Stream {
   int64_t started_ms = 0, ended_ms = 0;
   uint64_t frames = 0;
   bool params_dirty = false;
+  int track = 0;     // a URL stream's playlist position
+  uint64_t track_frames = 0;  // frames played of the current track
+  bool paused = false;  // a URL stream: silence goes out, and the decoder waits on its pipe
+  int jump_to = -1;  // a track asked for (next, previous, a row), taken by the pump
   LevelMeter::Reading level;
   std::vector<ListenerPtr> listeners;
 
@@ -554,6 +584,9 @@ struct AudioEngine::Stream {
                   {"ended_ms", ended_ms ? json(ended_ms) : json(nullptr)},
                   {"seconds", std::round(static_cast<double>(frames) / spec.rate * 10) / 10},
                   {"listeners", listeners.size()},
+                  {"track", track},
+                  {"track_seconds", std::round(static_cast<double>(track_frames) / spec.rate * 10) / 10},
+                  {"paused", paused},
                   {"level", lv},
                   {"meta", json{{"name", meta_name}, {"title", meta_title}, {"url", resolved_url}}}});
     return j;
@@ -687,11 +720,13 @@ void AudioEngine::Stream::run() {
       {
         std::lock_guard<std::mutex> lk(m);
         resolved_url = url;
+        if (sp.source.playlist.size() > 1) meta_title = sp.source.playlist.front().title;
       }
       ok = decoder_argv(sp.source, url, rate, ch, *tools, &argv, &err);
       // ffmpeg does not report title changes, and mpg123 may not (its https helper): ask the
-      // server every 15 s, unless the decoder has reported a title within the last 30 s.
-      if (ok && !tools->curl.empty() && lower(url).find(".m3u8") == std::string::npos) {
+      // server every 15 s, unless the decoder has reported a title within the last 30 s. A
+      // playlist's tracks are files with their titles known: no polling.
+      if (ok && !tools->curl.empty() && sp.source.playlist.size() <= 1 && lower(url).find(".m3u8") == std::string::npos) {
         titles = std::thread([this, url] {
           for (int64_t next = mono_ms() + 2000; !stop.load(); std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs))) {
             if (mono_ms() < next) continue;
@@ -751,7 +786,47 @@ void AudioEngine::Stream::run() {
   bool ended = false;
   std::string fail;
 
+  // A URL stream's next decoder: track `to` of the playlist (which may have grown since the
+  // start), the sink and the listeners carrying on. False past the end; *fail set if it did not
+  // start.
+  auto start_track = [&](int to, std::string* failed) -> bool {
+    PlaylistItem it;
+    {
+      std::lock_guard<std::mutex> lk(m);
+      if (to < 0 || to >= static_cast<int>(spec.source.playlist.size())) return false;
+      it = spec.source.playlist[static_cast<size_t>(to)];
+    }
+    src.stop();
+    pending.clear();
+    strip = WavStripper{};
+    const std::string url = resolve_playlist(it.url);
+    std::vector<std::string> argv;
+    std::string e;
+    if (!decoder_argv(sp.source, url, rate, ch, *tools, &argv, &e) ||
+        !src.start(argv, false, [this](const std::string& l) { on_source_line(l); }, &e)) {
+      *failed = "track " + std::to_string(to + 1) + ": " + e;
+      return true;
+    }
+    std::lock_guard<std::mutex> lk(m);
+    track = to;
+    track_frames = 0;
+    resolved_url = url;
+    meta_title = it.title;
+    meta_name.clear();
+    LOG_INFO("audio: stream {} track {} {}", id, to + 1, it.title);
+    return true;
+  };
+
   while (!stop.load()) {
+    if (type == "url") {
+      int to = -1;
+      {
+        std::lock_guard<std::mutex> lk(m);
+        std::swap(to, jump_to);
+      }
+      if (to >= 0 && !start_track(to, &fail)) fail = "no track " + std::to_string(to + 1);
+      if (!fail.empty()) break;
+    }
     // Live changes: the gain, a tone's frequencies and level, a noise's level.
     {
       std::lock_guard<std::mutex> lk(m);
@@ -764,7 +839,16 @@ void AudioEngine::Stream::run() {
       }
     }
     size_t got_frames = frames_per_chunk;
-    if (gen) {
+    bool hold;
+    {
+      std::lock_guard<std::mutex> lk(m);
+      hold = paused;
+    }
+    if (hold) {
+      // Paused: silence keeps the sink (a Bluetooth speaker) open and the clock running; the
+      // decoder, not read, blocks on its full pipe and resumes where it was.
+      std::fill(buf.begin(), buf.end(), 0);
+    } else if (gen) {
       gen->fill(buf.data(), frames_per_chunk);
       if (sweep && sweep->done()) ended = true;
     } else {
@@ -784,13 +868,22 @@ void AudioEngine::Stream::run() {
         const int st = src.stop();
         const std::string why = src.last_line();
         if (type == "url" && st == 0) {
-          ended = true;
+          // The end of a track: the next one, or the end of the stream.
+          int next;
+          {
+            std::lock_guard<std::mutex> lk(m);
+            next = track + 1;
+          }
+          if (!start_track(next, &fail)) ended = true;
         } else {
           fail = src.name() + (type == "url" ? " stopped" : " ended") +
                  (why.empty() ? " (exit " + std::to_string(st) + ")" : ": " + why);
         }
       }
-      if (got_frames == 0) break;
+      if (got_frames == 0) {
+        if (ended || !fail.empty() || src.out_fd() < 0) break;
+        continue;  // the next track's decoder is starting
+      }
     }
 
     apply_gain(buf.data(), got_frames * ch, gain);
@@ -806,6 +899,7 @@ void AudioEngine::Stream::run() {
     {
       std::lock_guard<std::mutex> lk(m);
       frames += got_frames;
+      if (!hold) track_frames += got_frames;
     }
 
     if (sp.sink.type != "none") {
@@ -955,6 +1049,27 @@ bool AudioEngine::update(int id, const json& body, json* out, std::string* err, 
     std::lock_guard<std::mutex> lk(s->m);
     StreamSpec sp = s->spec;
     if (body.contains("gain_db")) sp.gain_db = std::clamp(num(body, "gain_db", 0), -60.0, 20.0);
+    const bool list_op = body.contains("next") || body.contains("previous") || body.contains("track") || body.contains("enqueue");
+    if (list_op && sp.source.type != "url") throw std::invalid_argument("only a URL stream has a playlist");
+    if (body.contains("enqueue")) {
+      if (!body["enqueue"].is_array()) throw std::invalid_argument("enqueue is an array of {url, title}");
+      for (const json& it : body["enqueue"]) {
+        if (sp.source.playlist.size() >= kMaxPlaylist) throw std::invalid_argument("the playlist is full");
+        sp.source.playlist.push_back(playlist_item(it));
+      }
+    }
+    if (body.contains("paused")) {
+      if (sp.source.type != "url") throw std::invalid_argument("only a URL stream pauses");
+      s->paused = body["paused"].get<bool>();
+    }
+    const int n = static_cast<int>(sp.source.playlist.size());
+    if (body.value("next", false)) s->jump_to = std::min(s->track + 1, n - 1);
+    if (body.value("previous", false)) s->jump_to = std::max(s->track - 1, 0);
+    if (body.contains("track")) {
+      const int t = body["track"].get<int>();
+      if (t < 0 || t >= n) throw std::invalid_argument("track is 0.." + std::to_string(n - 1));
+      s->jump_to = t;
+    }
     if (body.contains("source")) {
       const json& sj = body["source"];
       const double nyquist = sp.rate / 2.0;

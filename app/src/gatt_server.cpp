@@ -18,7 +18,6 @@ namespace btb {
 
 namespace {
 
-constexpr const char* kRoot = "/org/btbench/gatt";
 constexpr const char* kServiceIface = "org.bluez.GattService1";
 constexpr const char* kCharIface = "org.bluez.GattCharacteristic1";
 constexpr const char* kDescIface = "org.bluez.GattDescriptor1";
@@ -326,7 +325,8 @@ int app_registered(sd_bus_message* m, void* data, sd_bus_error*) {
 
 }  // namespace
 
-GattServer::GattServer(BtManager& bt, EventFn ev) : bt_(bt), event_(std::move(ev)) {}
+GattServer::GattServer(BtManager& bt, EventFn ev, std::string root)
+    : bt_(bt), event_(std::move(ev)), root_(std::move(root)) {}
 GattServer::~GattServer() = default;
 
 void GattServer::emit_value(Obj& o) {
@@ -354,7 +354,7 @@ void GattServer::build(sd_bus* bus) {
     const GattServiceDef& s = def.services[si];
     auto so = std::make_unique<Obj>();
     so->srv = this;
-    so->path = std::string(kRoot) + "/svc" + std::to_string(si);
+    so->path = root_ + "/svc" + std::to_string(si);
     so->iface = kServiceIface;
     so->uuid = s.uuid;
     so->primary = s.primary;
@@ -433,7 +433,7 @@ void GattServer::register_app(sd_bus* bus) {
   sd_bus_message* m = nullptr;
   int r = sd_bus_message_new_method_call(bus, &m, "org.bluez", adapter_path_.c_str(), kGattMgrIface,
                                          "RegisterApplication");
-  if (r >= 0) r = sd_bus_message_append(m, "o", kRoot);
+  if (r >= 0) r = sd_bus_message_append(m, "o", root_.c_str());
   if (r >= 0) r = append_dict(m, {});
   if (r >= 0) r = sd_bus_call_async(bus, nullptr, m, app_registered, this, 15 * 1000000ull);
   sd_bus_message_unref(m);
@@ -467,14 +467,14 @@ void GattServer::unregister_app(sd_bus* bus) {
   if (!registered_ || adapter_path_.empty() || !bus) return;
   sd_bus_error e = SD_BUS_ERROR_NULL;
   sd_bus_call_method(bus, "org.bluez", adapter_path_.c_str(), kGattMgrIface, "UnregisterApplication",
-                     &e, nullptr, "o", kRoot);
+                     &e, nullptr, "o", root_.c_str());
   sd_bus_error_free(&e);
   registered_ = false;
 }
 
 void GattServer::bus_opened(sd_bus* bus) {
   bus_ = bus;
-  sd_bus_add_object_manager(bus, &om_slot_, kRoot);
+  sd_bus_add_object_manager(bus, &om_slot_, root_.c_str());
   build(bus);
 }
 
@@ -527,7 +527,7 @@ json GattServer::state() const {
   return json{{"defined", defined_},
               {"state", state_},
               {"error", error_},
-              {"path", kRoot},
+              {"path", root_},
               {"app", defined_ ? gatt_app_json(def_) : json(nullptr)},
               {"values", values}};
 }
@@ -569,6 +569,31 @@ bool GattServer::set(const GattAppDef& def, std::string* err) {
     *err = error_;
     return false;
   }
+  return true;
+}
+
+bool GattServer::set_value(const std::string& path, std::vector<uint8_t> value, bool* notifying) {
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    auto it = std::find_if(objs_.begin(), objs_.end(), [&](const auto& o) { return o->path == path && o->iface == kCharIface; });
+    if (it == objs_.end()) return false;
+    if (notifying) *notifying = (*it)->notifying;
+  }
+  // Set and emitted together on the bus thread, in order: BlueZ reads the value when the
+  // PropertiesChanged goes out, so a key's press and release set from here back to back would
+  // otherwise both be sent as the release.
+  bt_.post([this, path, value = std::move(value)](sd_bus* bus) {
+    bool notify = false;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      for (auto& o : objs_) {
+        if (o->path != path || o->iface != kCharIface) continue;
+        o->value = value;
+        notify = o->notifying;
+      }
+    }
+    if (notify && bus) sd_bus_emit_properties_changed(bus, path.c_str(), kCharIface, "Value", nullptr);
+  });
   return true;
 }
 

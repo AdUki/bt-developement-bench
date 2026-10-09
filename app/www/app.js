@@ -137,7 +137,10 @@ function registerTab(name, def) { tabs[name] = def; }
 // panes of one tab costs the board nothing, while a tab of its own (packets) starts and stops its
 // stream with it. The hash names the view, "#audio/play".
 const NAV = [
-  {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [{tab: 'devices', label: 'Devices'}]},
+  {id: 'listen', label: 'Listen', icon: 'M12 21a9 9 0 100-18 9 9 0 000 18zM10 8.5v7l6-3.5z', views: [{tab: 'player', label: 'Now playing'}]},
+  {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [
+    {tab: 'devices', label: 'Devices'},
+    {tab: 'hid', label: 'Input devices'}]},
   {id: 'audio', label: 'Audio', icon: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z', views: [
     {tab: 'audio', pane: 'players', label: 'Players'},
     {tab: 'audio', pane: 'play', label: 'Play and listen'},
@@ -145,7 +148,8 @@ const NAV = [
   {id: 'le', label: 'LE', icon: 'M12 13a1 1 0 100-2 1 1 0 000 2zM8.5 8.5a5 5 0 000 7M15.5 8.5a5 5 0 010 7M5.6 5.6a9 9 0 000 12.8M18.4 5.6a9 9 0 010 12.8', views: [
     {tab: 'le', pane: 'explore', label: 'GATT explorer'},
     {tab: 'le', pane: 'adv', label: 'Advertise'},
-    {tab: 'le', pane: 'server', label: 'GATT server'}]},
+    {tab: 'le', pane: 'server', label: 'GATT server'},
+    {tab: 'remote', label: 'Remote control'}]},
   {id: 'files', label: 'Files', icon: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2zM12 10v6M9 13l3 3 3-3', views: [
     {tab: 'obex', pane: 'sessions', label: 'Sessions'},
     {tab: 'obex', pane: 'files', label: 'On the board'}]},
@@ -214,7 +218,7 @@ function showPane(name, pane) {
 }
 
 function showTab(name, pane) {
-  if (!tabs[name] && !$(name)) name = 'devices';
+  if (!tabs[name] && !$(name)) name = 'player';
   showPane(name, pane);
   if (currentTab !== name) {
     const old = tabs[currentTab];
@@ -427,7 +431,7 @@ function startConsole() {
   api('/bluetooth').then(renderBtPill).catch(() => {});
   refreshRequest();
   buildNav();
-  const t = lsGet('btbench.tab') || 'devices';
+  const t = lsGet('btbench.tab') || 'player';
   go(location.hash.slice(1) || (panes[t] ? t + '/' + panes[t] : t));
   connectWs();
 }

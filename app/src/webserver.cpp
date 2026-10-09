@@ -167,6 +167,7 @@ void WebServer::install_routes() {
   install_system_routes(svr, d_, opt_);
   install_audio_routes(svr, d_);
   install_obex_routes(svr, d_);
+  install_hid_routes(svr, d_);
 
   // /api/ws?topics=bt,hci.stats — no topics parameter subscribes to everything.
   svr.WebSocket("/api/ws", [this](const httplib::Request& req, httplib::ws::WebSocket& ws) {
