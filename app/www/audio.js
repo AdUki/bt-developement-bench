@@ -92,11 +92,12 @@ function sourceFromForm() {
   }
 }
 
-function startStream(source, sink, listen, extra) {
+function startStream(source, sink, listen, extra, ctxGiven) {
   const body = Object.assign({source, sink, rate: parseInt($('st-rate').value, 10),
     channels: parseInt($('st-ch').value, 10), gain_db: parseFloat($('st-gain').value) || 0}, extra || {});
-  // The AudioContext must come from the click itself, before any await.
-  const ctx = listen ? newAudioContext() : null;
+  // The AudioContext must come from the click itself, before any await (a caller that waits
+  // first makes it in its click and passes it).
+  const ctx = listen ? (ctxGiven || newAudioContext()) : null;
   setText($('st-msg'), 'starting…');
   return post('/audio/streams', body).then(s => {
     setText($('st-msg'), '');
@@ -585,17 +586,41 @@ function playerAction(path, action) {
   return post('/media/players/control', {path, action}).catch(fail);
 }
 
-// Hear what a phone plays into the board: its capture endpoint, by address.
+// Hear what a phone plays into the board: its capture endpoint, by address. A phone that is
+// connected but not streaming (its transport idle — it fell back to its own speaker after a
+// reconnect, say) has no capture node: it is asked over AVRCP to play again, which makes it open
+// the stream, and the node is waited for (a few seconds) before giving up.
 function listenToDevice(address) {
-  const ep = au.endpoints;
-  const src = ep && ep.sources.find(e => e.address && e.address.toUpperCase() === address.toUpperCase());
-  if (!src) {
-    toast(`No capture endpoint for ${address}: is it streaming to the board (A2DP source → the board as sink)?`);
-    refreshEndpoints(true);
+  const find = ep => ep && ep.sources.find(e => e.address && e.address.toUpperCase() === address.toUpperCase());
+  // The AudioContext comes from the click itself, before any wait.
+  const ctx = newAudioContext();
+  if (!ctx) return;
+  const go = src => startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, true,
+    {rate: src.rate || 48000}, ctx).catch(() => {});
+  const src = find(au.endpoints);
+  if (src) return go(src);
+  const m = au.media || (typeof pl !== 'undefined' ? pl.media : null);
+  const player = m && m.players.find(p => p.address.toUpperCase() === address.toUpperCase());
+  const transport = m && m.transports.find(t => t.address.toUpperCase() === address.toUpperCase());
+  if (!transport) {
+    ctx.close();
+    toast('The phone sends no audio to the board: connect it with the board as its speaker (A2DP).');
     return;
   }
-  startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, true,
-    {rate: src.rate || 48000}).catch(() => {});
+  toast('Asking the phone to stream to the board…');
+  const nudge = player ? (player.status === 'playing'
+    ? post('/media/players/control', {path: player.path, action: 'pause'}).then(() => new Promise(r => setTimeout(r, 800)))
+    : Promise.resolve()).then(() => post('/media/players/control', {path: player.path, action: 'play'})) : Promise.resolve();
+  const deadline = Date.now() + 7000;
+  const poll = () => api('/audio/endpoints?fresh=1').then(ep => {
+    renderEndpoints(ep);
+    const s = find(ep);
+    if (s) return go(s);
+    if (Date.now() < deadline) return new Promise(r => setTimeout(r, 800)).then(poll);
+    ctx.close();
+    toast('The phone did not start streaming to the board. On the phone, choose btbench as the audio output.');
+  });
+  nudge.catch(() => {}).then(poll).catch(e => { ctx.close(); fail(e); });
 }
 
 // ---------------------------------------------------------------- media (BlueZ)
