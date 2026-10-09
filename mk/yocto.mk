@@ -100,7 +100,8 @@ check-sdk:
 # Install a recipe's packages on the running board without a reflash: bitbake builds them, this PC
 # serves the ipk feed, and the board reaches it through an ssh reverse tunnel (127.0.0.1:8000 on the
 # board is this PC), so it works over the gadget link and Wi-Fi alike. The image's opkg config
-# already points there.
+# already points there. A rebuilt package keeps its version, so the board's download cache is
+# emptied first: opkg would otherwise reuse the old file and refuse it for its size.
 #   make pkg ARGS=iperf3
 #   make pkg ARGS=bluez5 PKGS="bluez5 bluez5-noinst-tools"
 FEED_PORT ?= 8000
@@ -114,7 +115,7 @@ pkg: check-host check-devconf $(BUILD_CONF) ## Build recipe(s) ARGS=... and opkg
 	python3 -m http.server -b 127.0.0.1 -d $$feed $(FEED_PORT) >/dev/null 2>&1 & srv=$$!; \
 	trap "kill $$srv 2>/dev/null" EXIT; sleep 0.5; \
 	ssh -o ControlPath=none $(SSH_OPTS) -R 8000:127.0.0.1:$(FEED_PORT) $(TARGET) \
-	  "opkg update >/dev/null && opkg install --force-reinstall $(PKGS)"
+	  "rm -f /var/cache/opkg/*.ipk; opkg update >/dev/null && opkg install --force-reinstall $(PKGS)"
 
 ## ─── configure ───────────────────────────────────────────────────────────────
 
