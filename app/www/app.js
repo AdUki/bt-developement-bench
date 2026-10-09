@@ -158,11 +158,16 @@ const NAV = [
     {tab: 'packets', label: 'Packets'},
     {tab: 'graphs', label: 'Graphs'},
     {tab: 'capture', label: 'Captures'}]},
-  {id: 'system', label: 'System', icon: 'M4 5h16v10H4zM9 19h6M12 15v4', views: [
-    {tab: 'system', pane: 'overview', label: 'Overview'},
-    {tab: 'system', pane: 'logs', label: 'Logs and tools'},
+  {id: 'setup', label: 'Setup', icon: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4', views: [
+    {tab: 'setup', pane: 'profiles', label: 'Profiles'},
+    {tab: 'setup', pane: 'bluetooth', label: 'Bluetooth'},
+    {tab: 'setup', pane: 'audio', label: 'Audio'},
+    {tab: 'setup', pane: 'plugins', label: 'Plugins'},
     {tab: 'wifi', label: 'Wi-Fi'},
     {tab: 'kernel', label: 'Kernel'}]},
+  {id: 'system', label: 'System', icon: 'M4 5h16v10H4zM9 19h6M12 15v4', views: [
+    {tab: 'system', pane: 'overview', label: 'Overview'},
+    {tab: 'system', pane: 'logs', label: 'Logs and tools'}]},
 ];
 const viewKey = v => v.tab + (v.pane ? '/' + v.pane : '');
 const areaOf = tab => NAV.find(a => a.views.some(v => v.tab === tab)) || NAV[0];

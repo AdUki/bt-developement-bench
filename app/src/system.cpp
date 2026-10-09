@@ -113,28 +113,28 @@ std::string read_bluetoothd_args(const std::string& data_dir) {
   return it == env.end() ? std::string{} : it->second;
 }
 
-bool write_bluetoothd_args(const std::string& data_dir, const std::string& args, std::string* err) {
+bool write_bluetoothd_env(const std::string& data_dir, const std::string& key, const std::string& value, std::string* err) {
   mkdir(data_dir.c_str(), 0755);
   const std::string path = data_dir + "/bluetoothd.env";
   const std::string tmp = path + ".new";
-  // Only BLUETOOTHD_ARGS is ours: the file also holds BLUETOOTHD_NOPLUGIN (which keeps BlueZ's own
-  // HFP plugin out of the audio stack's way) and whatever else the image put there, all kept.
+  // One variable replaced, every other line kept: BLUETOOTHD_ARGS is the System page's, and
+  // BLUETOOTHD_NOPLUGIN the profiles' (profiles.h), and whatever else the image put there stays.
   std::string out;
   bool replaced = false;
   std::istringstream in(read_file(path));
   for (std::string line; std::getline(in, line);) {
     std::string t = trim(line);
     if (starts_with(t, "export ")) t = trim(t.substr(7));
-    if (starts_with(t, "BLUETOOTHD_ARGS=")) {
-      if (!replaced) out += "BLUETOOTHD_ARGS=" + env_quote(args) + "\n";
+    if (starts_with(t, key + "=")) {
+      if (!replaced) out += key + "=" + env_quote(value) + "\n";
       replaced = true;
       continue;
     }
     out += line + "\n";
   }
   if (!replaced) {
-    if (out.empty()) out = "# bluetoothd's arguments, read by bluetooth.service (btbenchd: PUT /api/system/bluetoothd-args).\n";
-    out += "BLUETOOTHD_ARGS=" + env_quote(args) + "\n";
+    if (out.empty()) out = "# bluetoothd's arguments, read by bluetooth.service (written by btbenchd).\n";
+    out += key + "=" + env_quote(value) + "\n";
   }
   {
     std::ofstream f(tmp, std::ios::trunc);
@@ -157,6 +157,10 @@ bool write_bluetoothd_args(const std::string& data_dir, const std::string& args,
   }
   sync();
   return true;
+}
+
+bool write_bluetoothd_args(const std::string& data_dir, const std::string& args, std::string* err) {
+  return write_bluetoothd_env(data_dir, "BLUETOOTHD_ARGS", args, err);
 }
 
 std::string read_bluetoothd_noplugin(const std::string& data_dir) {

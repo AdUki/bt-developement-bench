@@ -94,6 +94,7 @@ add_library(btbench_core STATIC
   src/api_hid.cpp
   src/api_le.cpp
   src/api_obex.cpp
+  src/api_setup.cpp
   src/api_system.cpp
   src/bluetooth.cpp
   src/bluez_model.cpp
@@ -105,6 +106,7 @@ add_library(btbench_core STATIC
   src/obex/obex.cpp
   src/journal.cpp
   src/scripts.cpp
+  src/setup.cpp
   src/system.cpp
   src/util/exec.cpp
   src/util/log.cpp

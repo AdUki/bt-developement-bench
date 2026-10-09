@@ -22,6 +22,7 @@
 #include "jobs.h"
 #include "journal.h"
 #include "scripts.h"
+#include "setup.h"
 #include "system.h"
 #include "util/log.h"
 #include "util/strings.h"
@@ -203,7 +204,24 @@ int main(int argc, char** argv) {
     bt.call(path, "org.bluez.MediaPlayer1", method, nullptr, 3000);
   });
 
-  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, obex, hid_remote, hid_host};
+  // Setup: profiles, plugins, main.conf and WirePlumber settings. On a PC its files go to the
+  // data directory and nothing is restarted: the desktop's stack is not the bench's.
+  btb::SetupOptions sopt;
+  sopt.data_dir = data_dir;
+  sopt.apply = !pc;
+  if (pc) sopt.wireplumber_conf = data_dir + "/wireplumber-profiles.conf";
+  btb::Setup setup(sopt, [&hid_remote] { return hid_remote.state().value("enabled", false); },
+                   [&hid_remote](bool on, std::string* err) {
+                     if (!on) {
+                       hid_remote.disable();
+                       return true;
+                     }
+                     return hid_remote.enable(hid_remote.state().value("name", std::string{}), err);
+                   },
+                   [&obex](const std::string& noplugin) { obex.set_noplugin(noplugin); });
+  obex.set_noplugin(setup.obex_noplugin());
+
+  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, obex, hid_remote, hid_host, setup};
   btb::WebServer server(deps, wopt);
   bt.on_change([&server, &hid_host](bool request) {
     server.publish_bt(request);

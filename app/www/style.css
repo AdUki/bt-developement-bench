@@ -702,3 +702,28 @@ td.acts > * { margin-right: 0.25rem; }
   .rm-layout .remote { width: min(100%, 320px); }
   .rm-side { width: 100%; }
 }
+
+/* ------------------------------------------------------------------ Setup */
+
+.set-row { display: flex; align-items: center; gap: 0.6rem 1.2rem; padding: 0.6rem 0; border-top: 1px solid var(--line-soft); cursor: default; }
+.card > h3 + .set-row, .card > .hint + .set-row { border-top: 0; }
+label.set-row { cursor: pointer; }
+.set-row.changed { box-shadow: inset 3px 0 0 var(--accent); padding-left: 0.6rem; margin-left: -0.6rem; }
+.set-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.set-t .hint { margin: 0; }
+.set-row select { max-width: 15rem; }
+.set-row .num { display: inline-flex; align-items: center; gap: 0.35rem; }
+.set-row .num input { width: 6.5rem; }
+.codec-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.25rem 0.8rem; }
+.codec-pick .small-btn { grid-column: 1 / -1; justify-self: start; margin-top: 0.4rem; }
+.apply-bar {
+  position: sticky; bottom: 1rem; z-index: 12; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 0.6rem 0.8rem;
+  box-shadow: 0 8px 24px rgba(10, 20, 30, 0.18); margin-top: 1rem;
+}
+.apply-bar span { flex: 1 1 14rem; }
+@media (max-width: 760px) {
+  .apply-bar { bottom: 4.8rem; }
+  .set-row { flex-wrap: wrap; }
+  .set-row select { max-width: 100%; }
+}

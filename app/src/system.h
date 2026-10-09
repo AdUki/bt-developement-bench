@@ -28,6 +28,8 @@ std::string read_bluetoothd_args(const std::string& data_dir);
 // Replaces BLUETOOTHD_ARGS only; every other line (BLUETOOTHD_NOPLUGIN) is kept.
 bool write_bluetoothd_args(const std::string& data_dir, const std::string& args, std::string* err);
 std::string read_bluetoothd_noplugin(const std::string& data_dir);
+// Replaces one variable of bluetoothd.env, keeping the other lines.
+bool write_bluetoothd_env(const std::string& data_dir, const std::string& key, const std::string& value, std::string* err);
 
 // What the System page and `bench sys` show.
 class SystemInfo {

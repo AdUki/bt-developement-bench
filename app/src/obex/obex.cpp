@@ -368,6 +368,25 @@ bool ObexManager::wait_for_owner(int timeout_ms) {
   return owner_cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [this] { return !owner_.empty(); });
 }
 
+void ObexManager::set_noplugin(const std::string& list) {
+  bool restart;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    restart = noplugin_ != list && managed_ && !owner_.empty();
+    noplugin_ = list;
+  }
+  if (!restart) return;
+  LOG_INFO("obex: restarting obexd without plugins \"{}\"", list);
+  stop();
+  // The old obexd's name has to be gone from the bus first, or start() would take it for running.
+  {
+    std::unique_lock<std::mutex> lk(m_);
+    owner_cv_.wait_for(lk, std::chrono::seconds(3), [this] { return owner_.empty(); });
+  }
+  std::string err;
+  if (!start(&err)) LOG_WARN("obex: obexd did not come back: {}", err);
+}
+
 bool ObexManager::start(std::string* err) { return ensure_running(err); }
 
 bool ObexManager::ensure_running(std::string* err) {
@@ -387,7 +406,12 @@ bool ObexManager::ensure_running(std::string* err) {
   // FTP sees in/, out/ and shared/.
   Spawned p;
   std::string e;
-  if (!spawn({exe, "-n", "-s", "-r", opt_.root}, &p, &e)) {
+  std::vector<std::string> argv{exe, "-n", "-s", "-r", opt_.root};
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    if (!noplugin_.empty()) argv.insert(argv.end(), {"-P", noplugin_});
+  }
+  if (!spawn(argv, &p, &e)) {
     *err = "cannot start obexd: " + e;
     return false;
   }

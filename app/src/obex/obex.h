@@ -85,6 +85,9 @@ class ObexManager {
   // Starts obexd (or adopts the one on the bus). Blocks up to a few seconds.
   bool start(std::string* err);
   void stop();  // stops obexd if btbenchd started it
+  // obexd's --noplugin list (Setup's OBEX server profiles: "opp,ftp"); obexd started by btbenchd
+  // and running is restarted with it.
+  void set_noplugin(const std::string& list);
 
   // ---- client sessions ----
   // target: opp | ftp | pbap | map | bip-avrcp; opts: channel, psm (bip-avrcp needs the
@@ -138,6 +141,7 @@ class ObexManager {
   nlohmann::json files_json() const;
 
   const Options opt_;
+  std::string noplugin_;  // under m_
   const Publish publish_;
   const HasSubscribers has_subscribers_;
 

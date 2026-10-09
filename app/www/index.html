@@ -603,6 +603,20 @@
     </div>
   </section>
 
+  <!-- ======================================================== Setup -->
+  <section id="setup" class="panel">
+    <p class="hint" id="su-note"></p>
+    <div class="pane" data-pane="profiles" id="su-profiles"></div>
+    <div class="pane" data-pane="bluetooth"><p class="hint">BlueZ's main.conf, as btbenchd writes it for bluetoothd. Default leaves a key as the image has it.</p><div id="su-bluetooth"></div></div>
+    <div class="pane" data-pane="audio"><p class="hint">WirePlumber's Bluetooth settings (PipeWire). Default leaves a setting as the image has it.</p><div id="su-audio"></div></div>
+    <div class="pane" data-pane="plugins" id="su-plugins"></div>
+    <div class="apply-bar" id="su-bar" hidden>
+      <span id="su-bar-text" class="small"></span>
+      <button id="su-discard" class="ghost">Discard</button>
+      <button id="su-apply" class="primary">Apply</button>
+    </div>
+  </section>
+
   <!-- ======================================================== Wi-Fi -->
   <section id="wifi" class="panel">
     <div id="wifi-root"></div>
@@ -643,6 +657,7 @@
 <script src="obex.js"></script>
 <script src="player.js"></script>
 <script src="hid.js"></script>
+<script src="setup.js"></script>
 <script src="capture.js"></script>
 <script src="wifi.js"></script>
 <script src="kernel.js"></script>
