@@ -17,7 +17,7 @@ btbench-audio set bluealsa             # switch; remembered across reboots
 btbench-audio set none --restart-bt    # switch and restart bluetoothd too
 ```
 
-`bench audio <mode>` and the web UI's Audio tab call the same script.
+`bench audio <mode>` and the console's Audio → Stack view call the same script.
 
 ## How the modes switch
 
@@ -163,8 +163,8 @@ bluealsa-aplay AA:BB:CC:DD:EE:FF                      # phone → hw:Loopback (p
 
 ## Streams: playing to and listening from devices
 
-btbenchd plays and captures audio itself (`/api/audio/streams`, the console's Audio tab,
-`bench play`): a test signal, an internet radio or UPnP URL, or what one device sends, into any
+btbenchd plays and captures audio itself (`/api/audio/streams`, the console's Audio → Play and
+listen, `bench play`): a test signal, an internet radio or UPnP URL, or what one device sends, into any
 sink the stack has, and/or to a browser that listens in. It uses the stack's own tools, so it
 works in every mode:
 
@@ -192,8 +192,8 @@ as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
   rebuild the image. A board flashed before mpg123 joined the image gets it without a reflash:
   `make pkg ARGS=mpg123` (and `make pkg ARGS=ffmpeg` with the switch set).
 - **CPU.** The Zero W has one core: a decoder plus pw-cat into an SBC sink is the heaviest kind
-  of stream, a generator into a sink the lightest. Watch the header's CPU figure (or the Graphs
-  tab) while one runs. At most four streams run at once, and one that plays nowhere ends after
+  of stream, a generator into a sink the lightest. Watch the console's CPU readout (or Traffic →
+  Graphs) while one runs. At most four streams run at once, and one that plays nowhere ends after
   30 s with nobody listening.
 
 ## bluetoothd

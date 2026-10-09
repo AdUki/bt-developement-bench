@@ -18,18 +18,23 @@
 
   function renderCapture(s) {
     capState = s;
-    setText($('cap-state'), s.running ? 'recording' : s.state || 'stopped');
-    setClass($('cap-state'), 'pill ' + (s.running ? 'good' : ''));
-    setText($('cap-toggle'), s.running ? 'Stop' : 'Start');
-    setText($('cap-dir'), `${s.unit} → ${s.dir}`);
-    setHTML($('cap-files'), s.files.length ? `<tr><th>file</th><th>size</th><th>last written</th><th></th></tr>` +
+    // The unit's state is one word on the pill; a long reason (no systemd here) goes under it.
+    const st = s.running ? 'recording' : s.state || 'stopped';
+    const word = /^[a-z-]+$/.test(st);
+    setText($('cap-state'), word ? st : 'unavailable');
+    setClass($('cap-state'), 'pill ' + (s.running ? 'good' : word ? '' : 'bad'));
+    $('cap-state').title = word ? '' : st;
+    setText($('cap-toggle'), s.running ? 'Stop recording' : 'Start recording');
+    setText($('cap-dir'), s.running ? 'btmon writes every HCI packet to a ring of files here.' : '');
+    $('cap-dir').title = `${s.unit} → ${s.dir}`;
+    setHTML($('cap-files'), s.files.length ? `<tr><th>File</th><th>Size</th><th>Last written</th><th></th></tr>` +
       s.files.map(f => `<tr${f.name === cv.name ? ' class="sel"' : ''}><td class="mono">${esc(f.name)}${f.active ? ' ' + pill('writing', 'good') : ''}</td>
         <td>${fmtBytes(f.size)}</td><td>${fmtDate(f.mtime)}</td>
-        <td><button class="small-btn" data-view="${esc(f.name)}">view</button>
-          <a href="/api/capture/files/${encodeURIComponent(f.name)}" download>download</a>
-          <button class="small-btn" data-an="${esc(f.name)}">analyze</button>
-          ${f.active ? '' : `<button class="small-btn danger" data-rm="${esc(f.name)}">${armed['cap' + f.name] ? 'really?' : 'delete'}</button>`}</td></tr>`).join('')
-      : '<tr><td class="muted">No captures.</td></tr>');
+        <td class="acts"><button class="small-btn" data-view="${esc(f.name)}">Open</button>
+          <a class="small-btn btn-link" href="/api/capture/files/${encodeURIComponent(f.name)}" download>Download</a>
+          <button class="small-btn" data-an="${esc(f.name)}" title="btmon -a on the board">Summary</button>
+          ${f.active ? '' : `<button class="small-btn danger" data-rm="${esc(f.name)}">${armed['cap' + f.name] ? 'Really?' : 'Delete'}</button>`}</td></tr>`).join('')
+      : '<tr><td class="muted">No captures yet: start recording, or the ring fills by itself on the board.</td></tr>');
     const open = s.files.find(f => f.name === cv.name);
     if (cv.name && open) {
       cv.active = !!open.active;

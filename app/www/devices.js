@@ -33,67 +33,109 @@ function renderAdapter(b) {
   const d = b.discovery || {};
   setText($('sc-toggle'), d.on ? 'Stop' : 'Scan');
   setText($('sc-state'), d.on
-    ? `scanning (${d.filter ? d.filter.transport : 'auto'})${d.until_s != null ? ', ' + d.until_s + ' s left' : ''}${d.ours ? '' : ' — started elsewhere'}`
+    ? `Scanning${d.until_s != null ? ', ' + d.until_s + ' s left' : ''}${d.ours ? '' : ' (started elsewhere)'}`
     : '');
+  setClass($('sc-toggle'), d.on ? '' : 'primary');
 }
 
 const short = u => u.length > 8 ? u.slice(0, 8) + '…' : u;
+const tag = (text, cls) => `<span class="tag ${cls || ''}">${esc(text)}</span>`;
 
-function deviceCard(d) {
+// One row a device: a state LED, its name with what it is, and the one action its state calls for
+// (pair, connect or disconnect). The rest — trust, remove, profiles, a PIN, where else to take it —
+// waits behind a click on the row, since it is wanted for one device at a time.
+function deviceRow(d) {
   const a = d.address;
   const busy = !!d.busy;
   const dis = busy ? ' disabled' : '';
+  const open = devOpen.has(a);
   const btn = (act, label, cls) => `<button data-act="${act}" data-addr="${a}" class="${cls || ''}"${dis}>${label}</button>`;
-  const pills = [
-    d.connected ? pill('connected', 'good') : '',
-    d.paired ? pill(d.bonded ? 'bonded' : 'paired', 'good') : pill('not paired'),
-    d.trusted ? pill('trusted') : '',
-    d.blocked ? pill('blocked', 'bad') : '',
-    d.address_type === 'random' ? pill('LE random') : '',
-    d.rssi != null ? pill(d.rssi + ' dBm') : '',
+  let main;
+  if (busy && d.busy === 'pairing') main = `<button data-act="cancel-pairing" data-addr="${a}">Cancel pairing</button>`;
+  else if (d.connected) main = btn('disconnect', 'Disconnect');
+  else if (!d.paired) main = btn('pair', 'Pair', 'primary');
+  else main = btn('connect', 'Connect', 'primary');
+  const kind = d.appearance_name || d.class_major || '';
+  const led = busy ? 'busy' : d.connected ? 'on' : d.paired ? 'paired' : '';
+  const sub = [
+    `<span class="mono">${a}</span>`,
+    kind ? `<span>${esc(kind)}</span>` : '',
+    d.connected ? '<span class="good-text">connected</span>' : d.paired ? `<span>${d.bonded ? 'bonded' : 'paired'}</span>` : '',
+    d.rssi != null ? `<span>${d.rssi} dBm</span>` : '',
   ].join('');
-  const acts = [];
-  if (busy && d.busy === 'pairing') acts.push(`<button data-act="cancel-pairing" data-addr="${a}">Cancel pairing</button>`);
-  if (!d.paired) acts.push(btn('pair', 'Pair', 'primary'));
-  acts.push(d.connected ? btn('disconnect', 'Disconnect') : btn('connect', 'Connect'));
-  acts.push(d.trusted ? btn('untrust', 'Untrust') : btn('trust', 'Trust'));
-  acts.push(`<button data-act="remove" data-addr="${a}" class="danger">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button>`);
-  let details = '';
-  if (devOpen.has(a)) {
-    const uuids = d.uuids.map(u => `<div><span class="mono">${esc(short(u.uuid))}</span> ${esc(u.name)}</div>`).join('') || '—';
-    const md = Object.entries(d.manufacturer_data).map(([k, v]) => `<div class="mono">${esc(k)}: ${esc(v)}</div>`).join('') || '—';
-    const sd = Object.entries(d.service_data).map(([k, v]) => `<div class="mono">${esc(short(k))}: ${esc(v)}</div>`).join('') || '—';
-    details = `<div class="details">
-      <div class="kv">
-        <span>Name</span><span>${esc(d.name || '—')}</span>
-        <span>Adapter</span><span>${esc(d.adapter)}</span>
-        <span>Class</span><span>${d.class ? esc(d.class + ' ' + d.class_major) : '—'}</span>
-        <span>Appearance</span><span>${d.appearance ? esc(d.appearance + ' ' + d.appearance_name) : '—'}</span>
-        <span>TX power</span><span>${d.tx_power != null ? d.tx_power + ' dBm' : '—'}</span>
-        <span>Adv flags</span><span class="mono">${esc(d.advertising_flags || '—')}</span>
-        <span>Legacy pairing</span><span>${d.legacy_pairing ? 'yes' : 'no'}</span>
-        <span>Services resolved</span><span>${d.services_resolved ? 'yes' : 'no'}</span>
-        <span>UUIDs</span><span>${uuids}</span>
-        <span>Manufacturer data</span><span>${md}</span>
-        <span>Service data</span><span>${sd}</span>
+  let body = '';
+  if (open) {
+    const uuids = d.uuids.map(u => `<div>${esc(u.name)} <span class="mono muted">${esc(short(u.uuid))}</span></div>`).join('');
+    const md = Object.entries(d.manufacturer_data).map(([k, v]) => `<div class="mono">${esc(k)}: ${esc(v)}</div>`).join('');
+    const sd = Object.entries(d.service_data).map(([k, v]) => `<div class="mono">${esc(short(k))}: ${esc(v)}</div>`).join('');
+    // Only what the device actually reported: a column of dashes says nothing.
+    const kv = [
+      ['Name', d.name && d.name !== d.alias ? esc(d.name) : ''],
+      ['Class', d.class ? esc(d.class_major || '') + ` <span class="mono muted">${esc(d.class)}</span>` : ''],
+      ['Appearance', d.appearance ? esc(d.appearance_name || '') + ` <span class="mono muted">${esc(d.appearance)}</span>` : ''],
+      ['TX power', d.tx_power != null ? d.tx_power + ' dBm' : ''],
+      ['Advertising flags', d.advertising_flags ? `<span class="mono">${esc(d.advertising_flags)}</span>` : ''],
+      ['Services', uuids],
+      ['Manufacturer data', md],
+      ['Service data', sd],
+      ['Adapter', esc(d.adapter)],
+    ].filter(r => r[1]).map(r => `<span>${r[0]}</span><span>${r[1]}</span>`).join('');
+    const tags = [
+      d.trusted ? tag('trusted', 'good') : '',
+      d.blocked ? tag('blocked', 'bad') : '',
+      d.address_type === 'random' ? tag('LE random address') : '',
+      d.legacy_pairing ? tag('legacy pairing') : '',
+      d.connected && !d.services_resolved ? tag('resolving services', 'warn') : '',
+    ].join(' ');
+    const dl = 'dev-uuids-' + a.replace(/:/g, '');
+    body = `<div class="rw-body">
+      ${tags ? `<div class="row wrap" style="margin-bottom:.5rem">${tags}</div>` : ''}
+      <div class="kv">${kv}</div>
+      <div class="acts">
+        ${d.trusted ? btn('untrust', 'Untrust') : btn('trust', 'Trust')}
+        <button data-act="remove" data-addr="${a}" class="danger">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button>
+        <span class="spacer"></span>
+        <button class="small-btn" data-act="goto-gatt" data-addr="${a}">GATT explorer</button>
+        <button class="small-btn" data-act="goto-obex" data-addr="${a}">Send files</button>
+        <button class="small-btn" data-act="goto-avdtp" data-addr="${a}">AVDTP probe</button>
       </div>
-      <div class="row wrap" style="margin-top:.5rem">
-        <input class="prof-uuid mono" data-addr="${a}" placeholder="profile UUID, e.g. 110b" list="dev-uuids-${a.replace(/:/g, '')}">
-        <datalist id="dev-uuids-${a.replace(/:/g, '')}">${d.uuids.map(u => `<option value="${esc(u.uuid)}">${esc(u.name)}</option>`).join('')}</datalist>
-        ${btn('connect-profile', 'Connect profile')}${btn('disconnect-profile', 'Disconnect profile')}
-        <input class="pair-pin" data-addr="${a}" placeholder="PIN for a legacy pair" maxlength="16">
-      </div>
+      <details class="more-fields">
+        <summary>One profile, or a legacy PIN</summary>
+        <div class="row wrap" style="margin-top:.5rem">
+          <input class="prof-uuid mono" data-addr="${a}" placeholder="profile UUID, e.g. 110b" list="${dl}">
+          <datalist id="${dl}">${d.uuids.map(u => `<option value="${esc(u.uuid)}">${esc(u.name)}</option>`).join('')}</datalist>
+          ${btn('connect-profile', 'Connect')}${btn('disconnect-profile', 'Disconnect')}
+          <input class="pair-pin" data-addr="${a}" placeholder="PIN for a legacy pair" maxlength="16">
+          ${btn('pair', 'Pair with PIN')}
+        </div>
+      </details>
     </div>`;
   }
-  return `<div class="card dev">
-    <div class="head"><span class="name" data-act="toggle" data-addr="${a}">${devOpen.has(a) ? '▾' : '▸'} ${esc(d.alias || d.address)}</span>
-      <span class="mono small muted">${a}</span></div>
-    <div class="meta">${pills}</div>
-    ${busy ? `<div class="small warn-text">${esc(d.busy)}…</div>` : ''}
-    ${d.error ? `<div class="small bad-text">${esc(d.error)}</div>` : ''}
-    <div class="acts">${acts.join('')}</div>
-    ${details}
+  return `<div class="rw click${open ? ' open' : ''}">
+    <div class="rw-main" data-act="toggle" data-addr="${a}">
+      <span class="rw-led ${led}"></span>
+      <div class="rw-title"><b>${esc(d.alias || d.address)}</b><span class="rw-sub">${sub}</span></div>
+      <div class="rw-acts">${main}<span class="chev"></span></div>
+    </div>
+    ${busy ? `<div class="rw-note warn-text">${esc(d.busy)}…</div>` : ''}
+    ${d.error ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
+    ${body}
   </div>`;
+}
+
+// Opens another view on this device: its select is filled from the next "bt" frame, so wait for
+// the option to exist, then choose it the way a person would (its change handler runs).
+function openOnDevice(view, selId, addr) {
+  go(view);
+  let tries = 0;
+  const pick = () => {
+    const sel = $(selId);
+    if ([...sel.options].some(o => o.value === addr)) {
+      sel.value = addr;
+      sel.dispatchEvent(new Event('change'));
+    } else if (++tries < 20) setTimeout(pick, 150);
+  };
+  pick();
 }
 
 function renderDevices() {
@@ -105,8 +147,9 @@ function renderDevices() {
   if (ae && (ae.classList.contains('prof-uuid') || ae.classList.contains('pair-pin'))) return;
   const f = $('dev-filter').value.trim().toLowerCase();
   const list = b.devices.filter(d => !f || (d.alias + ' ' + d.address).toLowerCase().includes(f));
-  setHTML($('dev-list'), list.length ? list.map(deviceCard).join('')
-    : `<div class="muted small">${b.available ? 'No devices yet: scan.' : esc(b.error || 'Bluetooth is not available.')}</div>`);
+  setHTML($('dev-list'), list.length ? list.map(deviceRow).join('')
+    : `<div class="empty">${b.available ? (f ? 'No device matches the filter.' : 'No devices yet. Press Scan to find some, or make the board visible and pair from the other side.')
+      : esc(b.error || 'Bluetooth is not available.')}</div>`);
 }
 
 function refreshBt() { return api('/bluetooth').then(btApply).catch(fail); }
@@ -118,6 +161,9 @@ function deviceAction(addr, act) {
     return i ? i.value.trim() : '';
   };
   let req;
+  if (act === 'goto-gatt') return openOnDevice('le/explore', 'gx-dev', addr);
+  if (act === 'goto-obex') return openOnDevice('obex/sessions', 'ob-dev', addr);
+  if (act === 'goto-avdtp') return openOnDevice('audio/stack', 'av-dev', addr);
   if (act === 'toggle') {
     if (devOpen.has(addr)) devOpen.delete(addr); else devOpen.add(addr);
     renderDevices();

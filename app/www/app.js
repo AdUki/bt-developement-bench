@@ -1,6 +1,6 @@
 'use strict';
-// The console's core: API helpers, the tabs, the one WebSocket and the pairing modal. Each tab
-// lives in its own file and registers itself with registerTab(); only the tab on screen gets its
+// The console's core: API helpers, the navigation, the one WebSocket and the pairing modal. Each
+// tab lives in its own file and registers itself with registerTab(); only the tab on screen gets its
 // topics and runs its polls, because the board is a single-core Zero W and a console left open in
 // a background tab must cost it nothing.
 
@@ -124,7 +124,7 @@ function logClear(el) {
   el.textContent = '';
 }
 
-// ---------------------------------------------------------------- tabs
+// ---------------------------------------------------------------- tabs and navigation
 
 const tabs = {};
 let currentTab = null;
@@ -132,25 +132,105 @@ let currentTab = null;
 // def: {topics(): [...], show(), hide(), onMessage(topic, data)}; all optional.
 function registerTab(name, def) { tabs[name] = def; }
 
-function showTab(name) {
-  if (!tabs[name] && !$(name)) name = 'devices';
-  if (currentTab === name) return;
-  const old = tabs[currentTab];
-  if (old && old.hide) old.hide();
-  currentTab = name;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === name));
-  lsSet('btbench.tab', name);
-  const t = tabs[name];
-  if (t && t.show) t.show();
-  updateTopics();
+// The areas in the rail and the views in each. A view is a tab (what owns topics and polls) and
+// optionally one pane of its panel: panes only change what is on screen, so moving between the
+// panes of one tab costs the board nothing, while a tab of its own (packets) starts and stops its
+// stream with it. The hash names the view, "#audio/play".
+const NAV = [
+  {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [{tab: 'devices', label: 'Devices'}]},
+  {id: 'audio', label: 'Audio', icon: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z', views: [
+    {tab: 'audio', pane: 'players', label: 'Players'},
+    {tab: 'audio', pane: 'play', label: 'Play and listen'},
+    {tab: 'audio', pane: 'stack', label: 'Stack'}]},
+  {id: 'le', label: 'LE', icon: 'M12 13a1 1 0 100-2 1 1 0 000 2zM8.5 8.5a5 5 0 000 7M15.5 8.5a5 5 0 010 7M5.6 5.6a9 9 0 000 12.8M18.4 5.6a9 9 0 010 12.8', views: [
+    {tab: 'le', pane: 'explore', label: 'GATT explorer'},
+    {tab: 'le', pane: 'adv', label: 'Advertise'},
+    {tab: 'le', pane: 'server', label: 'GATT server'}]},
+  {id: 'files', label: 'Files', icon: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2zM12 10v6M9 13l3 3 3-3', views: [
+    {tab: 'obex', pane: 'sessions', label: 'Sessions'},
+    {tab: 'obex', pane: 'files', label: 'On the board'}]},
+  {id: 'traffic', label: 'Traffic', icon: 'M3 12h4l3-8 4 16 3-8h4', views: [
+    {tab: 'monitor', label: 'Links'},
+    {tab: 'packets', label: 'Packets'},
+    {tab: 'graphs', label: 'Graphs'},
+    {tab: 'capture', label: 'Captures'}]},
+  {id: 'system', label: 'System', icon: 'M4 5h16v10H4zM9 19h6M12 15v4', views: [
+    {tab: 'system', pane: 'overview', label: 'Overview'},
+    {tab: 'system', pane: 'logs', label: 'Logs and tools'},
+    {tab: 'wifi', label: 'Wi-Fi'},
+    {tab: 'kernel', label: 'Kernel'}]},
+];
+const viewKey = v => v.tab + (v.pane ? '/' + v.pane : '');
+const areaOf = tab => NAV.find(a => a.views.some(v => v.tab === tab)) || NAV[0];
+const panes = {};  // tab → the pane on screen
+
+const icon = d => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+
+function buildNav() {
+  $('areas').innerHTML = NAV.map(a => `<a href="#${viewKey(a.views[0])}" class="area" data-area="${a.id}">${icon(a.icon)}<span>${a.label}</span></a>`).join('');
+  $('areas').onclick = e => {
+    const el = e.target.closest('[data-area]');
+    if (!el) return;
+    e.preventDefault();
+    // An area opens on the view last used in it.
+    const a = NAV.find(x => x.id === el.dataset.area);
+    go(lsGet('btbench.area.' + a.id) || viewKey(a.views[0]));
+  };
+  $('views').onclick = e => {
+    const el = e.target.closest('[data-view]');
+    if (!el) return;
+    e.preventDefault();
+    go(el.dataset.view);
+  };
 }
 
-document.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', e => {
-  e.preventDefault();
-  history.replaceState(null, '', '#' + el.dataset.tab);
-  showTab(el.dataset.tab);
-}));
+function renderNav() {
+  const area = areaOf(currentTab);
+  const here = viewKey({tab: currentTab, pane: panes[currentTab]});
+  document.querySelectorAll('#areas .area').forEach(el => el.classList.toggle('active', el.dataset.area === area.id));
+  setText($('area-title'), area.label);
+  setHTML($('views'), area.views.length > 1 ? area.views.map(v =>
+    `<a href="#${viewKey(v)}" class="view" data-view="${viewKey(v)}">${esc(v.label)}</a>`).join('') : '');
+  $('views').querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.dataset.view === here));
+  lsSet('btbench.area.' + area.id, here);
+}
+
+// Shows a view by its key ("audio/play", "capture"), keeping the hash in step.
+function go(key) {
+  const [tab, pane] = key.split('/');
+  history.replaceState(null, '', '#' + key);
+  showTab(tab, pane);
+}
+
+function showPane(name, pane) {
+  const panel = $(name);
+  const all = panel ? [...panel.querySelectorAll(':scope > .pane')] : [];
+  if (!all.length) return;
+  if (!all.some(p => p.dataset.pane === pane)) pane = panes[name] || lsGet('btbench.pane.' + name) || all[0].dataset.pane;
+  if (!all.some(p => p.dataset.pane === pane)) pane = all[0].dataset.pane;
+  panes[name] = pane;
+  lsSet('btbench.pane.' + name, pane);
+  all.forEach(p => { p.hidden = p.dataset.pane !== pane; });
+}
+
+function showTab(name, pane) {
+  if (!tabs[name] && !$(name)) name = 'devices';
+  showPane(name, pane);
+  if (currentTab !== name) {
+    const old = tabs[currentTab];
+    if (old && old.hide) old.hide();
+    currentTab = name;
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === name));
+    lsSet('btbench.tab', name);
+    const t = tabs[name];
+    if (t && t.show) t.show();
+    updateTopics();
+    window.scrollTo(0, 0);
+  }
+  renderNav();
+}
+
+window.addEventListener('hashchange', () => { if (location.hash.length > 1) go(location.hash.slice(1)); });
 
 // ---------------------------------------------------------------- the WebSocket
 
@@ -346,7 +426,8 @@ function startConsole() {
   api('/system/health').then(renderHealthPills).catch(() => {});
   api('/bluetooth').then(renderBtPill).catch(() => {});
   refreshRequest();
-  const want = location.hash.slice(1) || lsGet('btbench.tab') || 'devices';
-  showTab(want);
+  buildNav();
+  const t = lsGet('btbench.tab') || 'devices';
+  go(location.hash.slice(1) || (panes[t] ? t + '/' + panes[t] : t));
   connectWs();
 }

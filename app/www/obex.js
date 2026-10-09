@@ -9,19 +9,20 @@ const ob = {state: null, sessions: {}, results: {}};
 const obFolder = (name, files, del) => files.length ? files.map(f => `<div class="file-row">
     <span><a href="/api/obex/files/${name}/${encodeURIComponent(f.name)}" download="${esc(f.name)}">${esc(f.name)}</a>
       <span class="muted">${fmtBytes(f.size)}</span></span>
-    ${del ? `<button class="small-btn danger" data-del="${name}/${esc(f.name)}">${armed['ob' + name + f.name] ? 'really?' : 'delete'}</button>` : ''}</div>`).join('')
-  : '<span class="muted">empty</span>';
+    ${del ? `<button class="small-btn danger" data-del="${name}/${esc(f.name)}">${armed['ob' + name + f.name] ? 'Really?' : 'Delete'}</button>` : ''}</div>`).join('')
+  : '<span class="muted">Empty</span>';
 
 function renderObex(s) {
   ob.state = s;
-  setText($('ob-state'), s.running ? (s.managed ? 'running (started by btbenchd)' : 'running') : 'stopped');
+  setText($('ob-state'), s.running ? 'running' : 'stopped');
+  $('ob-state').title = s.running ? (s.managed ? 'Started by btbenchd' : 'Started by something else') : '';
   setClass($('ob-state'), 'pill ' + (s.running ? 'good' : ''));
   setText($('ob-toggle'), s.running ? (s.managed ? 'Stop' : 'Stop (not ours)') : 'Start');
   $('ob-toggle').disabled = s.running && !s.managed;
   if (idle($('ob-policy'))) $('ob-policy').value = s.agent.policy;
-  setText($('ob-info'), s.running ? `agent ${s.agent.registered ? 'registered' : 'not registered'} · root ${s.root}` +
-    ' · while obexd runs the board offers OPP, FTP, PBAP and MAP to devices'
-    : 'Not running: it starts with the first session (or Start). Running it adds the board\'s OBEX server records.');
+  setText($('ob-info'), s.running ? (s.agent.registered ? 'Devices can push files to the board and browse it over FTP.' : 'The agent is not registered: pushes to the board are refused.')
+    : 'Starts by itself with the first session. While it runs, devices can push files to the board.');
+  $('ob-info').title = s.root ? 'Files live in ' + s.root : '';
   const r = s.request;
   $('ob-request').hidden = !r;
   if (r && $('ob-request').dataset.id !== String(r.id)) {
@@ -35,19 +36,19 @@ function renderObex(s) {
   const ids = new Set(s.sessions.map(x => x.id));
   for (const id of Object.keys(ob.sessions)) if (!ids.has(id)) { ob.sessions[id].remove(); delete ob.sessions[id]; }
   for (const x of s.sessions) if (!ob.sessions[x.id]) $('ob-sessions').prepend(ob.sessions[x.id] = sessionCard(x));
-  setHTML($('ob-transfers'), s.transfers.length ? `<tr><th>transfer</th><th>name</th><th>status</th><th>progress</th><th>size</th><th></th></tr>` +
+  setHTML($('ob-transfers'), s.transfers.length ? `<tr><th>File</th><th>Status</th><th>Progress</th><th>Size</th><th></th></tr>` +
     s.transfers.map(t => {
       const pct = t.size ? Math.min(100, t.transferred / t.size * 100) : (t.status === 'complete' ? 100 : 0);
       const live = t.status === 'active' || t.status === 'queued' || t.status === 'suspended';
       const file = t.filename ? t.filename.split('/').pop() : '';
       const where = t.filename && t.filename.includes('/obex/in/') ? `<a href="/api/obex/files/in/${encodeURIComponent(file)}" download>${esc(file)}</a>` : esc(file);
-      return `<tr><td class="mono small">${esc(t.id)}</td><td>${esc(t.name || file)}${t.direction === 'in' ? ' ' + pill('incoming', 'warn') : ''}<div class="small muted">${where}</div></td>
+      return `<tr title="${esc(t.id)}"><td>${esc(t.name || file)}${t.direction === 'in' ? ' ' + pill('incoming', 'warn') : ''}<div class="small muted">${where}</div></td>
         <td>${pill(t.status, t.status === 'complete' ? 'good' : t.status === 'error' ? 'bad' : 'warn')}</td>
         <td><div class="progress"><i style="width:${pct.toFixed(0)}%"></i></div></td>
         <td>${t.size != null ? fmtBytes(t.size) : '—'}</td>
-        <td>${live ? `<button class="small-btn" data-tr="${esc(t.id)}" data-act="${t.status === 'suspended' ? 'resume' : 'suspend'}">${t.status === 'suspended' ? 'resume' : 'pause'}</button>
-          <button class="small-btn danger" data-tr="${esc(t.id)}" data-act="cancel">cancel</button>` : ''}</td></tr>`;
-    }).join('') : '<tr><td class="muted">No transfers yet.</td></tr>');
+        <td>${live ? `<button class="small-btn" data-tr="${esc(t.id)}" data-act="${t.status === 'suspended' ? 'resume' : 'suspend'}">${t.status === 'suspended' ? 'Resume' : 'Pause'}</button>
+          <button class="small-btn danger" data-tr="${esc(t.id)}" data-act="cancel">Cancel</button>` : ''}</td></tr>`;
+    }).join('') : '<tr><td class="muted">No transfers yet: they show here as sessions send and pull files.</td></tr>');
   setHTML($('ob-f-out'), obFolder('out', s.files.out, true));
   setHTML($('ob-f-in'), obFolder('in', s.files.in, true));
   setHTML($('ob-f-shared'), obFolder('shared', s.files.shared, true));
@@ -62,23 +63,23 @@ const refreshObex = () => api('/obex').then(renderObex).catch(e => setText($('ob
 // ---------------------------------------------------------------- session cards
 
 const OPS = {
-  opp: `<select class="ob-outfile"></select><button data-op="send">send file</button>
-        <button data-op="pull_card">pull business card</button><button data-op="exchange">exchange cards</button>`,
-  ftp: `<button data-op="list">list</button><button data-op="cd" data-name="..">up</button><button data-op="cd" data-name="/">root</button>
-        <input class="ob-arg narrow" placeholder="folder"><button data-op="mkdir">mkdir</button>
-        <select class="ob-outfile"></select><button data-op="put">put file</button>`,
+  opp: `<select class="ob-outfile"></select><button data-op="send">Send file</button>
+        <button data-op="pull_card">Pull business card</button><button data-op="exchange">Exchange cards</button>`,
+  ftp: `<button data-op="list">List</button><button data-op="cd" data-name="..">Up a folder</button><button data-op="cd" data-name="/">Root</button>
+        <input class="ob-arg narrow" placeholder="folder"><button data-op="mkdir">New folder</button>
+        <select class="ob-outfile"></select><button data-op="put">Put file</button>`,
   pbap: `<select class="ob-loc"><option value="int">phone</option><option value="sim1">SIM</option></select>
          <select class="ob-pb"><option value="pb">contacts</option><option value="ich">incoming calls</option>
            <option value="och">outgoing calls</option><option value="mch">missed calls</option><option value="cch">all calls</option>
            <option value="fav">favourites</option><option value="spd">speed dial</option></select>
-         <button data-op="select">select</button><button data-op="size">size</button><button data-op="list">list</button>
-         <button data-op="pull_all">pull all (vCard 3.0)</button>
-         <input class="ob-arg narrow" placeholder="name"><button data-op="search">search</button>`,
-  map: `<button data-op="folder" data-name="">root</button><button data-op="folder" data-name="telecom/msg">telecom/msg</button>
-        <button data-op="list_folders">folders</button>
-        <input class="ob-arg narrow" placeholder="inbox"><button data-op="list">messages</button>`,
+         <button data-op="select">Select</button><button data-op="size">Size</button><button data-op="list">List</button>
+         <button data-op="pull_all">Pull all (vCard 3.0)</button>
+         <input class="ob-arg narrow" placeholder="name"><button data-op="search">Search</button>`,
+  map: `<button data-op="folder" data-name="">Root</button><button data-op="folder" data-name="telecom/msg">telecom/msg</button>
+        <button data-op="list_folders">Folders</button>
+        <input class="ob-arg narrow" placeholder="inbox"><button data-op="list">Messages</button>`,
   'bip-avrcp': `<input class="ob-arg narrow" placeholder="image handle">
-        <button data-op="properties">properties</button><button data-op="thumbnail">thumbnail</button><button data-op="get">image</button>`,
+        <button data-op="properties">Properties</button><button data-op="thumbnail">Thumbnail</button><button data-op="get">Image</button>`,
 };
 
 const TARGET_NAMES = {opp: 'Object Push', ftp: 'File Transfer', pbap: 'Phonebook', map: 'Messages', 'bip-avrcp': 'Cover art (BIP)'};
@@ -94,12 +95,13 @@ function prefillHandle(el, address) {
 
 function sessionCard(x) {
   const el = document.createElement('div');
-  el.className = 'card dev ob-session';
+  el.className = 'card ob-session';
   el.dataset.id = x.id;
   el.dataset.target = x.target;
-  el.innerHTML = `<div class="head"><span><b>${esc(TARGET_NAMES[x.target] || x.target)}</b> with <span class="mono">${esc(x.destination)}</span>
-      <span class="small muted mono">${esc(x.id)}${x.channel != null ? ' · channel ' + x.channel : ''}${x.psm != null ? ' · PSM ' + x.psm : ''}</span></span>
-      <button class="small-btn danger" data-close="1">close</button></div>
+  const via = x.channel != null ? 'channel ' + x.channel : x.psm != null ? 'PSM ' + x.psm : '';
+  el.innerHTML = `<div class="card-head"><h3>${esc(TARGET_NAMES[x.target] || x.target)}
+      <span class="small muted" title="${esc(x.id + (via ? ' · ' + via : ''))}">with ${esc(typeof devName === 'function' ? devName(x.destination) : x.destination)}</span></h3>
+      <button class="small-btn danger" data-close="1">Close</button></div>
     <div class="ops">${OPS[x.target] || ''}</div>
     <div class="ob-path small muted"></div>
     <div class="result small"></div>`;
@@ -197,7 +199,7 @@ function setupObex() {
   };
   $('ob-connect').onclick = () => {
     const address = $('ob-dev').value;
-    if (!address) return toast('Pair a device first (Devices tab)');
+    if (!address) return toast('Pair a device first (Devices)');
     const target = $('ob-target').value;
     const body = {address, target};
     const ch = parseInt($('ob-chan').value, 10);

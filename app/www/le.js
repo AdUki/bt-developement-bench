@@ -1,7 +1,7 @@
 'use strict';
 // LE: what advertisers in range say, a GATT explorer over the BlueZ client, LE advertising from a
 // form, and a local GATT server from JSON. The device list comes from the same "bt" frames the
-// Devices tab uses; notifications and the server's events have topics of their own.
+// Devices view uses; notifications and the server's events have topics of their own.
 
 // LE devices are the ones that advertise something: a random address, data, or flags.
 const isLe = d => d.address_type === 'random' || d.advertising_flags != null ||
@@ -10,18 +10,24 @@ const isLe = d => d.address_type === 'random' || d.advertising_flags != null ||
 function leOnBt(b) {
   if (currentTab !== 'le' || !b) return;
   const les = b.devices.filter(isLe);
-  setHTML($('le-adv-view'), les.length ? les.map(d => `<div class="card dev">
-      <div class="head"><span class="name">${esc(d.alias || d.address)}</span>
-        <span class="mono small muted">${d.address} ${esc(d.address_type)}</span></div>
-      <div class="kv">
-        <span>RSSI</span><span>${d.rssi != null ? d.rssi + ' dBm' : '—'}${d.tx_power != null ? ' · tx ' + d.tx_power + ' dBm' : ''}</span>
-        <span>Flags</span><span class="mono">${esc(d.advertising_flags || '—')}</span>
-        <span>Appearance</span><span>${d.appearance ? esc(d.appearance + ' ' + d.appearance_name) : '—'}</span>
-        <span>UUIDs</span><span>${d.uuids.map(u => `${esc(u.uuid)} ${esc(u.name)}`).join(', ') || '—'}</span>
-        ${Object.entries(d.manufacturer_data).map(([k, v]) => `<span>Mfr ${esc(k)}</span><span class="mono">${esc(v)}</span>`).join('')}
-        ${Object.entries(d.service_data).map(([k, v]) => `<span>Svc ${esc(k)}</span><span class="mono">${esc(v)}</span>`).join('')}
-      </div></div>`).join('')
-    : '<div class="muted small">None seen: scan with transport le or auto on the Devices tab.</div>');
+  // A row an advertiser: name, signal and what it advertises in words; the raw bytes below.
+  setHTML($('le-adv-view'), les.length ? les.slice().sort((x, y) => (y.rssi == null ? -999 : y.rssi) - (x.rssi == null ? -999 : x.rssi)).map(d => {
+    const raw = Object.entries(d.manufacturer_data).map(([k, v]) => `<span>Manufacturer ${esc(k)}</span><span class="mono">${esc(v)}</span>`).join('') +
+      Object.entries(d.service_data).map(([k, v]) => `<span>Service ${esc(k)}</span><span class="mono">${esc(v)}</span>`).join('') +
+      (d.advertising_flags ? `<span>Flags</span><span class="mono">${esc(d.advertising_flags)}</span>` : '');
+    return `<div class="rw">
+      <div class="rw-main">
+        <span class="rw-led${d.connected ? ' on' : ''}"></span>
+        <div class="rw-title"><b>${esc(d.alias || d.address)}</b><span class="rw-sub">
+          <span class="mono">${d.address}</span>
+          ${d.appearance_name ? `<span>${esc(d.appearance_name)}</span>` : ''}
+          ${d.uuids.length ? `<span>${esc(d.uuids.map(u => u.name || u.uuid).join(', '))}</span>` : ''}</span></div>
+        <div class="rw-acts small">${d.rssi != null ? `<span class="mono">${d.rssi} dBm</span>` : ''}${d.tx_power != null ? `<span class="muted">tx ${d.tx_power}</span>` : ''}</div>
+      </div>
+      ${raw ? `<div class="rw-body"><div class="kv">${raw}</div></div>` : ''}
+    </div>`;
+  }).join('')
+    : '<div class="empty">No advertisers seen. Scan from Devices (LE, or LE and classic) and they show here.</div>');
 
   // The explorer offers every device, connected ones first.
   const sel = $('gx-dev');
@@ -35,8 +41,8 @@ function leOnBt(b) {
   // The first time, the explorer follows the selection by itself (a connected device first).
   if (!gx.addr && sel.value) gx.addr = sel.value;
   const cur = b.devices.find(d => d.address === sel.value);
-  setText($('gx-state'), cur ? (cur.connected ? (cur.services_resolved ? 'connected, services resolved' : 'connected, resolving…')
-    : 'not connected') + (cur.busy ? ' · ' + cur.busy : '') + (cur.error ? ' · ' + cur.error : '') : '');
+  setText($('gx-state'), cur ? (cur.connected ? (cur.services_resolved ? '' : 'Connected, resolving services…')
+    : 'Not connected: Connect to read its services.') + (cur.busy ? ' · ' + cur.busy : '') + (cur.error ? ' · ' + cur.error : '') : '');
   setText($('gx-connect'), cur && cur.connected ? 'Disconnect' : 'Connect');
   // A device that just resolved its services gets its tree without another click.
   if (cur && cur.services_resolved && gx.addr === cur.address && !gx.loaded) loadGatt();
@@ -79,7 +85,7 @@ function renderGatt() {
       <div class="title"><span class="mono">0x${s.handle.toString(16).padStart(4, '0')}</span> ${esc(s.name || 'Service')}
         <span class="mono small muted">${esc(s.uuid)}</span>${s.primary ? '' : ' <span class="small muted">secondary</span>'}</div>
       ${s.characteristics.map(charRow).join('')}</div>`).join('')
-    : `<div class="small muted">${t.connected ? 'No services (yet).' : 'Connect the device to resolve its services.'}</div>`);
+    : `<div class="small muted">${t.connected ? 'No GATT services on this device yet.' : 'Connect the device to resolve its services.'}</div>`);
 }
 
 function loadGatt() {
@@ -151,17 +157,19 @@ function advBody(form) {
 function refreshAdv() {
   return api('/le/adv').then(r => {
     const m = r.manager;
-    setText($('adv-mgr'), m ? `controller: ${m.active_instances} active, ${m.supported_instances} free · includes ${m.supported_includes.join(', ')}` : 'no LE advertising manager on this adapter');
+    setText($('adv-mgr'), m ? `${m.supported_instances} of ${m.active_instances + m.supported_instances} controller slots free` : 'This adapter cannot advertise');
+    $('adv-mgr').title = m ? 'Includes the controller supports: ' + m.supported_includes.join(', ') : '';
     setHTML($('adv-list'), r.instances.map(i => {
       const s = i.spec;
-      const what = [s.type, s.local_name && `“${s.local_name}”`, s.service_uuids.length && s.service_uuids.join(' '),
+      const what = [s.type, s.service_uuids.length && s.service_uuids.join(' '),
         Object.keys(s.manufacturer_data).length && 'mfr ' + Object.entries(s.manufacturer_data).map(e => e.join(':')).join(' '),
         s.timeout_s && `timeout ${s.timeout_s} s`].filter(Boolean).join(' · ');
       const cls = i.state === 'active' ? 'good' : i.state === 'failed' ? 'bad' : 'warn';
-      return `<div class="card dev"><div class="head"><span>#${i.id} ${esc(what)}</span>${pill(i.state, cls)}</div>
-        ${i.error ? `<div class="small bad-text">${esc(i.error)}</div>` : ''}
-        <div class="acts"><button data-adv="${i.id}" class="danger">Remove</button></div></div>`;
-    }).join('') || '<div class="small muted">Not advertising.</div>');
+      return `<div class="rw"><div class="rw-main"><span class="rw-led${i.state === 'active' ? ' on' : i.state === 'failed' ? '' : ' busy'}"></span>
+          <div class="rw-title"><b>${esc(s.local_name || 'Advertisement ' + i.id)}</b><span class="rw-sub"><span>${esc(what)}</span><span>${esc(i.state)}</span></span></div>
+          <div class="rw-acts"><button data-adv="${i.id}" class="danger">Stop</button></div></div>
+        ${i.error ? `<div class="rw-note bad-text">${esc(i.error)}</div>` : ''}</div>`;
+    }).join('') || '<div class="empty">Not advertising. Fill in the form above and press Advertise.</div>');
   }).catch(e => setText($('adv-mgr'), e.message));
 }
 
@@ -173,7 +181,7 @@ function renderServer(s) {
   setText($('gs-err'), s.error || '');
   setHTML($('gs-values'), s.values.length ? `<div class="kv">${s.values.map(v =>
     `<span class="mono">${esc(v.uuid)}</span><span class="mono">${esc(v.value || '(empty)')}${v.text ? ' “' + esc(v.text) + '”' : ''}${v.notifying ? ' · notifying' : ''}</span>`).join('')}</div>`
-    : '<div class="small muted">No application.</div>');
+    : '<div class="muted">Nothing registered: Apply a service definition.</div>');
   if (s.app && !$('gs-json').value.trim()) $('gs-json').value = JSON.stringify(s.app, null, 2);
 }
 const refreshServer = () => api('/le/gatt-server').then(renderServer).catch(fail);

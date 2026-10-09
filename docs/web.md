@@ -5,100 +5,119 @@ or `http://localhost:8080/` with `make run`. Plain HTML/JS/CSS from `app/www/`, 
 `make deploy-www` copies it to the board and a reload shows it. Light or dark follows the system.
 The REST and WebSocket API behind every button is in [api.md](api.md) (also served at `/api`).
 
-The header shows the board's name, the adapter (on / visible / scanning), the WebSocket (live /
-offline; it reconnects by itself), temperature, CPU and — in red — undervoltage, which on a Zero W
-corrupts the Bluetooth UART long before anything else notices.
+The console is six areas — **Devices**, **Audio**, **LE**, **Files**, **Traffic**, **System** —
+in a rail on the left (a bar at the bottom on a phone). Each area has a few views in the bar at
+the top of the page; an area reopens on the view last used in it, and the address names the view
+(`#audio/play`, `#packets`), so it can be bookmarked. Settings that are set once (the adapter's
+name and agent, scan options, an advertisement's intervals, a stream's rate) sit behind a
+*Settings*, *Options* or *More fields* disclosure, and raw values (configuration bytes, object
+paths, capability hex) behind *Details* or in a tooltip.
 
-The console keeps one WebSocket and subscribes only to what the visible tab shows, plus the pairing
-question (`bt.request`) and the header's health line (`system`). A tab in the background, or a
+The foot of the rail (the top bar on a phone) shows the board's name, the adapter (on / visible /
+scanning), the WebSocket (live / offline; it reconnects by itself), temperature, CPU and — in red
+— undervoltage, which on a Zero W corrupts the Bluetooth UART long before anything else notices.
+
+The console keeps one WebSocket and subscribes only to what the view on screen shows, plus the
+pairing question (`bt.request`) and the health readout (`system`). A view in the background, or a
 console nobody looks at, costs the board nothing.
 
 ## Pairing questions
 
 When BlueZ asks the agent something (numeric comparison, a PIN, a passkey, a just-works or
-profile authorization), a dialog comes up on whichever tab is open, with the time left before
-BlueZ gives up. With the agent on **auto** (Devices tab) only a passkey to type is asked; on
-**ask** every question is. `bench agent` answers the same questions from a terminal.
+profile authorization), a dialog comes up on whichever view is open, with the time left before
+BlueZ gives up. With *Pairing questions* on **answer automatically** (Devices → Settings) only a
+passkey to type is asked; on **ask me here** every question is. `bench agent` answers the same
+questions from a terminal.
 
-## Tabs
+## Areas and views
 
-**Devices** — the adapter (powered, discoverable and its timeout, pairable, alias), the agent's
-policy and IO capability (which decides the pairing method a peer gets), discovery with a
-transport (auto / le / bredr), an RSSI floor and a duration. Each device shows its state and
-actions: pair (a PIN field in its details for legacy devices), cancel pairing, connect, disconnect,
-trust, remove (click twice). Its name opens the details: UUIDs with names, class, appearance, TX
-power, manufacturer and service data, advertising flags, and connect/disconnect of one profile by
-UUID.
+**Devices** — the adapter bar: powered, visible, pairable, and under *Settings* the name others
+see, how long it stays visible, how pairing questions are answered (automatically, or asked here)
+and the IO capability (which decides the pairing method a peer gets). *Scan* finds devices; its
+*Options* are the transport (LE and classic / LE / classic), the weakest signal shown and when to
+stop. A device is one row: a light (green connected, pale paired, amber busy), its name, address,
+kind and signal, and the one action its state calls for — pair, connect, disconnect, or cancel a
+pairing. A click on the row opens the rest: class, appearance, TX power, services by name,
+manufacturer and service data, advertising flags; trust and remove (click twice); connect or
+disconnect one profile by UUID, and pair with a PIN for legacy devices; and shortcuts that open
+the GATT explorer, a file session or the AVDTP probe on that device.
 
-**LE** — *Advertisers in range*: what each LE device's advertisement carried. *GATT explorer*:
-pick a device, connect, and its services, characteristics and descriptors appear by handle with
+**LE** — *GATT explorer*: pick a device, connect, and its services, characteristics and descriptors appear by handle with
 read, write (hex, or `text:…`; request / command / reliable as the flags allow) and notify; every
-value change lands in the notification log. *Advertising*: a form for `LEAdvertisingManager1`
-(name, UUIDs, manufacturer and service data as `id:hex`, appearance, intervals, TX power, timeout,
-includes); several at once, each with its state (an advertisement whose timeout ran out shows
-"released"). *Local GATT server*: an application as JSON (the Example button loads one with a
+value change lands in the notification log; below it, the *advertisers in range*, strongest first,
+with what each advertisement carried. *Advertise*: a form for `LEAdvertisingManager1`
+(type, name, UUIDs, discoverable; under *More fields* manufacturer and service data as `id:hex`,
+appearance, includes, intervals, TX power, timeout); several at once, each with its state (an advertisement whose timeout ran out shows
+"released"). *GATT server*: an application as JSON (the Example button loads one with a
 heart-rate counter, a battery level and an echo characteristic), its live values, and a log of
 what remote devices read, wrote and subscribed to.
 
-**Audio** — the audio stack (PipeWire / BlueALSA / none) with a confirmation, optionally
-restarting bluetoothd. *Bluetooth codecs*: per connected device, the PipeWire profile —
+**Audio** — three views. *Players*: each connected phone's AVRCP player, then the *Codec*: per
+connected device, the PipeWire profile —
 which is the codec — to use: send with SBC, SBC-XQ, AAC, aptX, LDAC, Opus (what the build has),
-both ways (duplex), receive, or HFP with CVSD/mSBC; the link renegotiates on a change. *Players*: each connected phone's AVRCP player with its track (title,
+both ways (duplex), receive, or HFP with CVSD/mSBC; the link renegotiates on a change. A player shows its track (title,
 artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
 its cover art (AVRCP 1.6, pulled over BIP) when the phone offers it, previous / rewind /
 play–pause / stop / fast forward / next (the seeks run while the button is
-held), repeat and shuffle when the player offers them, the transport's absolute volume, *listen*
-(hear what the phone sends the board, in this browser) and, for a browsable player, a browser: the now-playing list, its files (folders open, back),
+held), the transport's absolute volume, *Listen here* (hear what the phone sends the board, in
+this browser) and, folded under one disclosure, repeat and shuffle when the player offers them and,
+for a browsable player, a browser: the now-playing list, its files (folders open, back),
 search, and *play* or *add* (to now playing) per item. *Play and listen*: a new stream from a tone (its own
 frequency on the right channel if wanted), a sweep, white/pink/brown noise, silence, a URL
 (internet radio, a playlist, a file), a device's audio (capture — with a speaker as the sink,
 that is a tunnel from one device to another) or what a sink plays (its monitor), into any sink
-the stack has (`Play to`) or nowhere, and/or *listen in this browser*. Each running stream shows
+the stack has (`Play to`) or nowhere, and/or *also listen in this browser*; rate, channels, gain and
+the decoder are under *Format and gain*. Each running stream shows
 its level meters (RMS bar, peak mark, per channel), the radio title, a live gain slider and, for a
 tone, its frequency and level; listening adds the buffered time, a volume and a spectrum. The
-console keeps listening when you change tabs. *Internet radio*: the station list (edit it as
+console keeps listening when you change views. *Internet radio*: the station list (edit it as
 `name | url` lines), play to the chosen sink or listen. *UPnP media servers*: search the LAN,
-browse a server's folders and play or listen to its tracks. Then BlueZ's view, the same in every
-mode: transports (codec decoded, raw configuration, state, delay, an AVRCP absolute-volume
-slider) and the remote stream endpoints with their capabilities, and the *AVDTP probe*: a device's own
+browse a server's folders and play or listen to its tracks. *Stack*: the audio stack (PipeWire /
+BlueALSA / none) with a confirmation, optionally restarting bluetoothd, then BlueZ's view, the
+same in every mode: transports (codec decoded, state, delay, an AVRCP absolute-volume slider; the
+raw configuration and path under *Details*) and the remote stream endpoints with their capabilities, and the *AVDTP probe*: a device's own
 DISCOVER / GET_ALL_CAPABILITIES answer, every stream endpoint with its role, codec and other
 capabilities.
 
-**OBEX** — obexd (start/stop; what the board's server does with an incoming push: accept into
+**Files** — OBEX. The obexd bar on both views (start/stop; what the board's server does with an incoming push: accept into
 `in/`, ask, reject — an asked push comes up with its sender, name and size, and a name to save it
-as), a new client session to a paired device (Object Push, File Transfer, Phonebook, Messages,
+as). *Sessions*: a new client session to a paired device (Object Push, File Transfer, Phonebook, Messages,
 cover art) and a card per session with its operations: send a file from `out/`, pull or exchange
 a business card; browse the device's folders, get, put, mkdir, delete; select a phonebook, list,
 search, pull one or all; list message folders and messages, fetch one; an image's properties,
-thumbnail or full image. Transfers with progress (pause, resume, cancel), and the files on the
-board — `out/` (upload what to send), `in/` (download what arrived), `shared/`.
+thumbnail or full image, and the transfers with progress (pause, resume, cancel). *On the board*:
+the files — `out/` (upload what to send), `in/` (download what arrived), `shared/`.
 
-**Graphs** — live, scrolling graphs on one time axis (30 s, 2 min or 5 min): per connection the
+**Traffic** — four views, in the order of looking closer: *Links*, *Packets*, *Graphs*, *Captures*.
+
+*Links*: the HCI monitor's connections: throughput, TX latency p50/p95/max (HCI send to
+Number Of Completed Packets), packets in flight against the controller's credits, RTP loss. Click
+one for two minutes of throughput and latency graphs and, under a disclosure, the latency
+histogram since it connected and its L2CAP channels with the AVDTP stream's state, codec and RTP
+loss/jitter. Below: the event log (connections, channels, AVDTP signalling) and **Mark**, which
+writes a note into btmon, the btsnoop ring and live captures.
+
+*Packets*: the packets as they happen, filtered on the
+board with the Capture viewer's filter box and quick filters (the same syntax). The table follows
+the newest rows unless you scroll up, keeps the last 1000, and marks where the board dropped
+packets (the page fell behind) or skipped matches (more than it sends: the newest are kept).
+Changing the filter re-filters the 2048 packets the board still holds. Click a row for its decoded
+fields and hex dump; *Pause* stops the stream (the rows stay clickable while the board still holds
+them), *Open as capture* opens the file btmon is writing in the capture viewer with the same
+filter. The stream runs only while this view is on screen and the browser tab is visible. Under
+the table, the command for a live capture in Wireshark on your PC.
+
+*Graphs*: live, scrolling graphs on one time axis (30 s, 2 min or 5 min): per connection the
 throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the
 controller's free credits, and for an AVDTP media stream its RTP packets, losses and jitter;
 the audio streams' levels; the board's CPU and temperature. Each connection (stream, the board)
 has one colour; click it in the legend to hide it, or pick one connection. Hovering shows the
 values at that instant on every chart. Pause freezes the picture (the data keeps coming), CSV
 downloads the samples. The last five minutes of a connection come from the monitor's history when
-the tab opens; everything else is collected while the tab is open.
+the view opens; everything else is collected while it is open.
 
-**Monitor** — the HCI monitor's connections: throughput, TX latency p50/p95/max (HCI send to
-Number Of Completed Packets), packets in flight against the controller's credits, RTP loss. Click
-one for two minutes of throughput and latency graphs, the latency histogram since it connected, and
-its L2CAP channels with the AVDTP stream's state, codec and RTP loss/jitter. Below: the event log
-(connections, channels, AVDTP signalling), a **Mark** button that writes a note into btmon, the
-btsnoop ring and live captures, then **Live packets**: the packets as they happen, filtered on the
-board with the Capture viewer's filter box and quick filters (the same syntax). The table follows
-the newest rows unless you scroll up, keeps the last 1000, and marks where the board dropped
-packets (the page fell behind) or skipped matches (more than it sends: the newest are kept).
-Changing the filter re-filters the 2048 packets the board still holds. Click a row for its decoded
-fields and hex dump; *Pause* stops the stream (the rows stay clickable while the board still holds
-them), *open in capture* opens the file btmon is writing in the Capture viewer with the same
-filter. The stream runs only while the tab is on screen and the browser tab is visible. Last, the
-command for a live capture in Wireshark on your PC.
-
-**Capture** — the always-on btsnoop ring: start/stop, the files (the newest is being written),
-view, download, delete, and `btmon -a` analysis on the board. *View* opens a file in the packet
+*Captures*: the always-on btsnoop ring: start/stop recording, the files (the newest is being
+written), open, download, delete, and *Summary* (`btmon -a` on the board). *Open* opens a file in the packet
 viewer:
 - a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
   [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
@@ -118,21 +137,22 @@ On the board a big file is indexed, and a text filter searched, a slice at a tim
 shows the progress and the totals grow until done. For the file btmon is writing, *follow* keeps
 reading what is appended (and scrolls with it while the table is at the bottom).
 
-**Wi-Fi** — state (client, setup AP, connecting, off), networks in range, add a network, the saved
+**System** — four views. *Overview*: health, versions of BlueZ, PipeWire, WirePlumber, BlueALSA
+and the kernel, the stack's services with restart buttons, bluetoothd's command line under a
+disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
+bluetooth), and reboot. *Logs and tools*: the journal of a unit (the last 200 lines, and live with
+*follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted
+tools, with live output and kill).
+
+*Wi-Fi*: state (client, setup AP, connecting, off), networks in range, add a network, the saved
 ones, and the mode (auto / client / setup AP / off). The same page is served alone at `/wifi`:
 when the board has no network it runs its setup AP, and a phone that joins it is sent there.
 Adding a network over the setup AP drops that link; the page says so, and the board falls back to
 the AP if joining fails.
 
-**Kernel** — the good / test / previous kernel slots, and *try* (one trial boot of the test kernel,
+*Kernel*: the good / test / previous kernel slots, and *try* (one trial boot of the test kernel,
 falling back to the good one on a panic, hang or power cycle), *commit* and *roll back*, each
 behind a confirmation.
-
-**System** — health, versions of BlueZ, PipeWire, WirePlumber, BlueALSA and the kernel, the stack's
-services with restart buttons, bluetoothd's command line (e.g. `-d -E`; saved to
-`/data/btbench/bluetoothd.env` and applied by restarting bluetooth), the journal of a unit (the
-last 200 lines, and live with *follow*), the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl
-and the other allowlisted tools, with live output and kill), and reboot.
 
 On a PC (`make run`, `make pc`) the board-only parts — audio mode, Wi-Fi, kernel, reboot — say
 that they run on the board only.

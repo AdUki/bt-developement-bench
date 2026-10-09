@@ -214,7 +214,7 @@ const livePkts = (() => {
     hexSpans: [], retry: null, connected: false, held: [],
   };
 
-  const want = () => currentTab === 'monitor' && !document.hidden && !lp.paused;
+  const want = () => currentTab === 'packets' && !document.hidden && !lp.paused;
 
   function renderStatus() {
     const bits = [];
@@ -466,8 +466,7 @@ const livePkts = (() => {
       const f = (s.files || []).find(x => x.active) || (s.files || [])[0];
       if (!f) return toast('No capture file: the btsnoop ring is not recording');
       $('cv-filter').value = lp.filter;
-      history.replaceState(null, '', '#capture');
-      showTab('capture');
+      go('capture');
       const open = tries => {
         const b = Array.from(document.querySelectorAll('#cap-files button[data-view]')).find(x => x.dataset.view === f.name);
         if (b) b.click();
@@ -533,13 +532,11 @@ registerTab('monitor', {
     mon.poll = setInterval(pollHistory, 1000);
     mon.latPoll = setInterval(pollLatency, 5000);
     setTimeout(() => { pollHistory(); pollLatency(); }, 300);
-    livePkts.show();
   },
   hide() {
     clearInterval(mon.poll);
     clearInterval(mon.latPoll);
     mon.poll = mon.latPoll = null;
-    livePkts.hide();
   },
   onMessage(topic, d) {
     if (currentTab !== 'monitor') return;
@@ -550,5 +547,7 @@ registerTab('monitor', {
     }
   },
 });
+// Live packets are a view of their own: the stream runs only while it is on screen.
+registerTab('packets', {show: livePkts.show, hide: livePkts.hide});
 setupMonitor();
 livePkts.setup();

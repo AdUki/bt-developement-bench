@@ -7,343 +7,369 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1><span id="hostname">btbench</span></h1>
-  <div class="status">
+<!-- The shell: six areas in a rail (a bottom bar on a phone), each with its views in the bar above
+     the content. app.js builds both from NAV; a view is a registered tab, optionally one pane of
+     it (#audio/play). Every element id the tab scripts use is kept from the flat-tab layout. -->
+<aside id="rail">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span id="hostname">btbench</span></div>
+  <nav id="areas" aria-label="Areas"></nav>
+  <div class="status" aria-label="Status">
     <span id="pill-bt" class="pill">bluetooth …</span>
     <span id="pill-ws" class="pill">connecting</span>
     <span id="pill-power" class="pill" hidden></span>
-    <a class="pill link" href="/api" target="_blank" rel="noopener">API</a>
+    <a class="pill link" href="/api" target="_blank" rel="noopener">API reference</a>
   </div>
-</header>
+</aside>
 
-<nav id="tabs">
-  <a href="#devices" class="tab" data-tab="devices">Devices</a>
-  <a href="#le" class="tab" data-tab="le">LE</a>
-  <a href="#audio" class="tab" data-tab="audio">Audio</a>
-  <a href="#obex" class="tab" data-tab="obex">OBEX</a>
-  <a href="#graphs" class="tab" data-tab="graphs">Graphs</a>
-  <a href="#monitor" class="tab" data-tab="monitor">Monitor</a>
-  <a href="#capture" class="tab" data-tab="capture">Capture</a>
-  <a href="#wifi" class="tab" data-tab="wifi">Wi-Fi</a>
-  <a href="#kernel" class="tab" data-tab="kernel">Kernel</a>
-  <a href="#system" class="tab" data-tab="system">System</a>
-</nav>
+<div id="page">
+<header id="viewbar">
+  <h1 id="area-title">Devices</h1>
+  <nav id="views" aria-label="Views"></nav>
+</header>
 
 <main>
   <!-- ======================================================== Devices -->
   <section id="devices" class="panel">
-    <div class="card" id="adapter-card">
-      <div class="row between">
-        <h3>Adapter <span id="ad-name" class="mono muted small"></span></h3>
-        <span id="ad-msg" class="small bad-text"></span>
+    <div class="card toolbar" id="adapter-card">
+      <div class="tb-main">
+        <div class="tb-id">
+          <b>Adapter</b> <span id="ad-name" class="mono muted small"></span>
+        </div>
+        <div class="switches">
+          <label class="switch"><input type="checkbox" id="ad-powered"><i></i> Powered</label>
+          <label class="switch" title="Other devices can find the board while this is on"><input type="checkbox" id="ad-discoverable"><i></i> Visible</label>
+          <label class="switch"><input type="checkbox" id="ad-pairable"><i></i> Pairable</label>
+        </div>
+        <details class="more">
+          <summary>Settings</summary>
+          <div class="pop grid">
+            <label>Name others see <input type="text" id="ad-alias" maxlength="248"></label>
+            <label>Stay visible for (s, 0 = always) <input type="number" id="ad-disc-timeout" min="0" max="65535"></label>
+            <label>Pairing questions
+              <select id="ag-policy">
+                <option value="auto">answer automatically</option>
+                <option value="ask">ask me here</option>
+              </select>
+            </label>
+            <label>IO capability
+              <select id="ag-cap">
+                <option>KeyboardDisplay</option><option>DisplayYesNo</option><option>DisplayOnly</option>
+                <option>KeyboardOnly</option><option>NoInputNoOutput</option>
+              </select>
+            </label>
+          </div>
+        </details>
       </div>
-      <div class="grid">
-        <label class="check"><input type="checkbox" id="ad-powered"> Powered</label>
-        <label class="check"><input type="checkbox" id="ad-discoverable"> Discoverable</label>
-        <label class="check"><input type="checkbox" id="ad-pairable"> Pairable</label>
-        <label>Discoverable timeout (s) <input type="number" id="ad-disc-timeout" min="0" max="65535"></label>
-        <label>Alias <input type="text" id="ad-alias" maxlength="248"></label>
-        <label>Agent
-          <select id="ag-policy">
-            <option value="auto">auto (accept everything but passkey entry)</option>
-            <option value="ask">ask (every question comes here)</option>
-          </select>
-        </label>
-        <label>IO capability
-          <select id="ag-cap">
-            <option>KeyboardDisplay</option><option>DisplayYesNo</option><option>DisplayOnly</option>
-            <option>KeyboardOnly</option><option>NoInputNoOutput</option>
-          </select>
-        </label>
-      </div>
+      <div id="ad-msg" class="small bad-text"></div>
     </div>
 
-    <div class="card">
-      <div class="row wrap">
-        <h3>Discovery</h3>
-        <label>Transport <select id="sc-transport"><option>auto</option><option>le</option><option>bredr</option></select></label>
-        <label>RSSI ≥ <input type="number" id="sc-rssi" placeholder="any" min="-127" max="20" class="narrow"></label>
-        <label>Seconds <input type="number" id="sc-secs" value="30" min="0" max="3600" class="narrow"></label>
-        <button id="sc-toggle" class="primary">Scan</button>
+    <div class="list-head">
+      <input type="search" id="dev-filter" placeholder="Filter by name or address">
+      <div class="scan">
         <span id="sc-state" class="small muted"></span>
+        <details class="more right">
+          <summary title="Scan options">Options</summary>
+          <div class="pop grid">
+            <label>Transport <select id="sc-transport"><option value="auto">LE and classic</option><option value="le">LE only</option><option value="bredr">Classic only</option></select></label>
+            <label>Weakest signal (dBm) <input type="number" id="sc-rssi" placeholder="any" min="-127" max="20"></label>
+            <label>Stop after (s, 0 = never) <input type="number" id="sc-secs" value="30" min="0" max="3600"></label>
+          </div>
+        </details>
+        <button id="sc-toggle" class="primary">Scan</button>
       </div>
     </div>
-
-    <div class="row between"><h2>Devices</h2><input type="search" id="dev-filter" placeholder="filter name/address"></div>
-    <div id="dev-list" class="list"></div>
+    <div id="dev-list" class="rows"></div>
   </section>
 
   <!-- ======================================================== LE -->
   <section id="le" class="panel">
-    <h2>Advertisers in range</h2>
-    <div id="le-adv-view" class="list"></div>
-
-    <h2>GATT explorer</h2>
-    <div class="card">
-      <div class="row wrap">
-        <label>Device <select id="gx-dev"></select></label>
-        <button id="gx-load">Load</button>
-        <button id="gx-connect">Connect</button>
-        <span id="gx-state" class="small muted"></span>
+    <div class="pane" data-pane="explore">
+      <div class="card">
+        <div class="card-head">
+          <h3>GATT explorer</h3>
+          <div class="acts">
+            <select id="gx-dev" aria-label="Device"></select>
+            <button id="gx-connect">Connect</button>
+            <button id="gx-load" title="Read the services again">Reload</button>
+          </div>
+        </div>
+        <div id="gx-state" class="small muted"></div>
+        <div id="gx-tree"></div>
+        <details class="log-box">
+          <summary>Notifications <button class="small-btn" id="gx-clear">Clear</button></summary>
+          <pre id="gx-log" class="log"></pre>
+        </details>
       </div>
-      <div id="gx-tree"></div>
-      <h4>Notifications <button class="small-btn" id="gx-clear">clear</button></h4>
-      <pre id="gx-log" class="log"></pre>
+      <h2>Advertisers in range</h2>
+      <div id="le-adv-view" class="rows"></div>
     </div>
 
-    <h2>Advertising</h2>
-    <div class="card">
-      <form id="adv-form" class="grid">
-        <label>Type <select name="type"><option>peripheral</option><option>broadcast</option></select></label>
-        <label>Local name <input name="local_name" maxlength="29" placeholder="btbench"></label>
-        <label>Service UUIDs <input name="service_uuids" placeholder="180d, 180f"></label>
-        <label>Manufacturer data <input name="manufacturer_data" placeholder="0xffff:0102 (id:hex, …)"></label>
-        <label>Service data <input name="service_data" placeholder="fe2c:00 (uuid:hex, …)"></label>
-        <label>Appearance <input name="appearance" placeholder="0x0341"></label>
-        <label>Min interval (ms) <input name="min_interval_ms" type="number" min="20" max="10240"></label>
-        <label>Max interval (ms) <input name="max_interval_ms" type="number" min="20" max="10240"></label>
-        <label>TX power (dBm) <input name="tx_power" type="number" min="-127" max="20"></label>
-        <label>Timeout (s) <input name="timeout_s" type="number" min="0" max="65535"></label>
-        <label>Includes <input name="includes" placeholder="tx-power, appearance, local-name"></label>
-        <label class="check"><input name="discoverable" type="checkbox" checked> Discoverable</label>
-        <div class="row"><button type="submit" class="primary">Advertise</button></div>
-      </form>
-      <div id="adv-mgr" class="small muted"></div>
-      <div id="adv-list" class="list"></div>
+    <div class="pane" data-pane="adv">
+      <div class="card">
+        <div class="card-head"><h3>New advertisement</h3><span id="adv-mgr" class="small muted"></span></div>
+        <form id="adv-form">
+          <div class="grid">
+            <label>Type <select name="type"><option value="peripheral">Connectable (peripheral)</option><option value="broadcast">Broadcast only</option></select></label>
+            <label>Local name <input name="local_name" maxlength="29" placeholder="btbench"></label>
+            <label>Service UUIDs <input name="service_uuids" placeholder="180d, 180f"></label>
+            <label class="switch inline"><input name="discoverable" type="checkbox" checked><i></i> Discoverable</label>
+          </div>
+          <details class="more-fields">
+            <summary>More fields</summary>
+            <div class="grid">
+              <label>Manufacturer data <input name="manufacturer_data" placeholder="0xffff:0102 (id:hex, …)"></label>
+              <label>Service data <input name="service_data" placeholder="fe2c:00 (uuid:hex, …)"></label>
+              <label>Appearance <input name="appearance" placeholder="0x0341"></label>
+              <label>Includes <input name="includes" placeholder="tx-power, appearance, local-name"></label>
+              <label>Min interval (ms) <input name="min_interval_ms" type="number" min="20" max="10240"></label>
+              <label>Max interval (ms) <input name="max_interval_ms" type="number" min="20" max="10240"></label>
+              <label>TX power (dBm) <input name="tx_power" type="number" min="-127" max="20"></label>
+              <label>Stop after (s) <input name="timeout_s" type="number" min="0" max="65535"></label>
+            </div>
+          </details>
+          <div class="form-acts"><button type="submit" class="primary">Advertise</button></div>
+        </form>
+      </div>
+      <h2>Advertising now</h2>
+      <div id="adv-list" class="rows"></div>
     </div>
 
-    <h2>Local GATT server</h2>
-    <div class="card">
-      <div class="row wrap">
-        <span id="gs-state" class="pill">none</span>
-        <button id="gs-apply" class="primary">Apply</button>
-        <button id="gs-example">Example</button>
-        <button id="gs-clear" class="danger">Remove</button>
-        <span id="gs-err" class="small bad-text"></span>
+    <div class="pane" data-pane="server">
+      <div class="card">
+        <div class="card-head">
+          <h3>Local GATT server <span id="gs-state" class="pill">none</span></h3>
+          <div class="acts">
+            <button id="gs-example">Load example</button>
+            <button id="gs-clear" class="danger">Remove</button>
+            <button id="gs-apply" class="primary">Apply</button>
+          </div>
+        </div>
+        <div id="gs-err" class="small bad-text"></div>
+        <textarea id="gs-json" rows="14" spellcheck="false" class="mono" aria-label="Services as JSON"></textarea>
       </div>
-      <textarea id="gs-json" rows="14" spellcheck="false" class="mono"></textarea>
-      <h4>Values</h4>
-      <div id="gs-values"></div>
-      <h4>Events <button class="small-btn" id="gs-log-clear">clear</button></h4>
-      <pre id="gs-log" class="log"></pre>
+      <div class="cols">
+        <div class="card"><h3>Values</h3><div id="gs-values" class="small"></div></div>
+        <div class="card">
+          <div class="card-head"><h3>Events</h3><button class="small-btn" id="gs-log-clear">Clear</button></div>
+          <pre id="gs-log" class="log" data-empty="Reads, writes and subscriptions by connected devices show here."></pre>
+        </div>
+      </div>
     </div>
   </section>
 
   <!-- ======================================================== Audio -->
   <section id="audio" class="panel">
-    <div class="card">
-      <div class="row wrap">
-        <h3>Audio stack</h3>
-        <span id="au-mode" class="pill">…</span>
-        <span id="au-buttons"></span>
-        <label class="check"><input type="checkbox" id="au-restart-bt"> restart bluetoothd too</label>
-      </div>
-      <div id="au-services" class="small muted"></div>
-      <div id="au-msg" class="small"></div>
-    </div>
-
-    <h2>Bluetooth codecs</h2>
-    <div class="card">
-      <div class="row between"><span class="small muted">PipeWire picks the codec with the profile: choose one per device. The link renegotiates (a second or two of silence).</span>
-        <button class="small-btn" id="cd-refresh">refresh</button></div>
-      <div id="cd-list" class="list"></div>
-    </div>
-
-    <h2>Players (AVRCP)</h2>
-    <div id="au-players" class="list"></div>
-
-    <h2>Play and listen</h2>
-    <div class="card" id="st-new">
-      <div class="row between">
-        <h3>New stream</h3>
-        <span id="st-backend" class="small muted"></span>
-      </div>
-      <div class="grid">
-        <label>Source
-          <select id="st-src">
-            <option value="tone">Tone (sine)</option>
-            <option value="sweep">Sweep</option>
-            <option value="noise">Noise</option>
-            <option value="silence">Silence</option>
-            <option value="url">Internet radio / URL</option>
-            <option value="capture">A device's audio (capture)</option>
-            <option value="monitor">What a sink plays (monitor)</option>
-          </select>
-        </label>
-        <label data-for="tone">Frequency (Hz) <input type="number" id="st-freq" value="1000" min="1" max="48000"></label>
-        <label data-for="tone">Right channel (Hz, empty = same) <input type="number" id="st-freq-r" min="1" max="48000" placeholder="same"></label>
-        <label data-for="sweep">From (Hz) <input type="number" id="st-from" value="20" min="1"></label>
-        <label data-for="sweep">To (Hz) <input type="number" id="st-to" value="20000" min="1"></label>
-        <label data-for="sweep">Seconds <input type="number" id="st-secs" value="10" min="0.5" max="600" step="0.5"></label>
-        <label data-for="sweep" class="check"><input type="checkbox" id="st-log" checked> logarithmic</label>
-        <label data-for="sweep" class="check"><input type="checkbox" id="st-repeat" checked> repeat</label>
-        <label data-for="noise">Colour
-          <select id="st-color"><option>pink</option><option>white</option><option>brown</option></select>
-        </label>
-        <label data-for="tone sweep noise"><span id="st-level-kind">Level (dBFS, peak)</span> <input type="number" id="st-level" value="-12" min="-96" max="0"></label>
-        <label data-for="url" class="wide">URL (stream, .pls/.m3u, or a UPnP item) <input type="url" id="st-url" placeholder="https://ice1.somafm.com/groovesalad-128-mp3"></label>
-        <label data-for="url">Decoder
-          <select id="st-decoder"><option value="auto">auto</option><option>mpg123</option><option>ffmpeg</option></select>
-        </label>
-        <label data-for="capture">Capture from <select id="st-capture"></select></label>
-        <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
-        <label>Play to <select id="st-sink"></select></label>
-        <label>Rate
-          <select id="st-rate"><option>48000</option><option>44100</option><option>32000</option><option>16000</option><option>8000</option></select>
-        </label>
-        <label>Channels <select id="st-ch"><option value="2">stereo</option><option value="1">mono</option></select></label>
-        <label>Gain (dB) <input type="number" id="st-gain" value="0" min="-60" max="20" step="0.5"></label>
-        <label class="check"><input type="checkbox" id="st-listen"> listen in this browser</label>
-      </div>
-      <div class="row wrap" style="margin-top:0.6rem">
-        <button class="primary" id="st-start">Start</button>
-        <button id="st-refresh" title="Read PipeWire's nodes / the BlueALSA PCMs again">Refresh endpoints</button>
-        <span id="st-msg" class="small"></span>
-      </div>
-    </div>
-    <div id="st-list" class="list"></div>
-
-    <div class="cols">
+    <div class="pane" data-pane="players">
+      <div id="au-players" class="rows-cards"></div>
       <div class="card">
-        <div class="row between"><h3>Internet radio</h3>
-          <span><button class="small-btn" id="rd-edit">edit</button></span></div>
-        <div id="rd-list" class="small"></div>
-        <div id="rd-editor" hidden>
-          <textarea id="rd-text" class="mono" rows="8" placeholder="Name | https://url"></textarea>
-          <div class="row"><button id="rd-save">Save</button><button id="rd-cancel">Cancel</button>
-            <span class="small muted">one station a line: <span class="mono">name | url</span></span></div>
+        <div class="card-head">
+          <h3>Codec</h3>
+          <button class="small-btn" id="cd-refresh">Refresh</button>
         </div>
-        <div class="small muted">Plays to the sink chosen above. MP3 needs mpg123 on the board, anything else ffmpeg.</div>
-      </div>
-      <div class="card">
-        <div class="row between"><h3>UPnP media servers</h3><button class="small-btn" id="up-search">search the LAN</button></div>
-        <div id="up-servers" class="small"></div>
-        <div id="up-path" class="small mono"></div>
-        <div id="up-items" class="small"></div>
+        <p class="hint">The link renegotiates on a change: a second or two of silence.</p>
+        <div id="cd-list"></div>
       </div>
     </div>
 
-    <h2>Transports</h2>
-    <div id="au-transports" class="list"></div>
-    <h2>Remote endpoints</h2>
-    <div id="au-endpoints" class="list"></div>
-    <div class="card">
-      <div class="row wrap"><h3>AVDTP probe</h3>
-        <select id="av-dev"></select><button id="av-probe">discover + capabilities</button>
-        <span class="small muted">the device's own answer to DISCOVER / GET_ALL_CAPABILITIES; refused while A2DP is up</span></div>
-      <div id="av-result" class="small"></div>
+    <div class="pane" data-pane="play">
+      <div class="card" id="st-new">
+        <div class="card-head">
+          <h3>New stream</h3>
+          <span id="st-backend" class="small muted"></span>
+        </div>
+        <div class="grid">
+          <label>Source
+            <select id="st-src">
+              <option value="tone">Tone (sine)</option>
+              <option value="sweep">Sweep</option>
+              <option value="noise">Noise</option>
+              <option value="silence">Silence</option>
+              <option value="url">Internet radio / URL</option>
+              <option value="capture">A device's audio (capture)</option>
+              <option value="monitor">What a sink plays (monitor)</option>
+            </select>
+          </label>
+          <label>Play to <select id="st-sink"></select></label>
+          <label data-for="tone">Frequency (Hz) <input type="number" id="st-freq" value="1000" min="1" max="48000"></label>
+          <label data-for="tone">Right channel (Hz) <input type="number" id="st-freq-r" min="1" max="48000" placeholder="same as left"></label>
+          <label data-for="sweep">From (Hz) <input type="number" id="st-from" value="20" min="1"></label>
+          <label data-for="sweep">To (Hz) <input type="number" id="st-to" value="20000" min="1"></label>
+          <label data-for="sweep">Seconds <input type="number" id="st-secs" value="10" min="0.5" max="600" step="0.5"></label>
+          <label data-for="noise">Colour
+            <select id="st-color"><option>pink</option><option>white</option><option>brown</option></select>
+          </label>
+          <label data-for="tone sweep noise"><span id="st-level-kind">Level (dBFS, peak)</span> <input type="number" id="st-level" value="-12" min="-96" max="0"></label>
+          <label data-for="url" class="wide">URL (stream, .pls/.m3u, or a UPnP item) <input type="url" id="st-url" placeholder="https://ice1.somafm.com/groovesalad-128-mp3"></label>
+          <label data-for="capture">Capture from <select id="st-capture"></select></label>
+          <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
+        </div>
+        <details class="more-fields">
+          <summary>Format and gain</summary>
+          <div class="grid">
+            <label>Rate
+              <select id="st-rate"><option>48000</option><option>44100</option><option>32000</option><option>16000</option><option>8000</option></select>
+            </label>
+            <label>Channels <select id="st-ch"><option value="2">stereo</option><option value="1">mono</option></select></label>
+            <label>Gain (dB) <input type="number" id="st-gain" value="0" min="-60" max="20" step="0.5"></label>
+            <label data-for="url">Decoder
+              <select id="st-decoder"><option value="auto">auto</option><option>mpg123</option><option>ffmpeg</option></select>
+            </label>
+            <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-log" checked><i></i> Logarithmic</label>
+            <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-repeat" checked><i></i> Repeat</label>
+          </div>
+        </details>
+        <div class="form-acts">
+          <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
+          <span id="st-msg" class="small"></span>
+          <button id="st-refresh" class="ghost" title="Read PipeWire's nodes / the BlueALSA PCMs again">Refresh outputs</button>
+          <button class="primary" id="st-start">Start</button>
+        </div>
+      </div>
+      <div id="st-list" class="rows-cards"></div>
+
+      <div class="cols">
+        <div class="card">
+          <div class="card-head"><h3>Internet radio</h3><button class="small-btn" id="rd-edit">Edit</button></div>
+          <div id="rd-list" class="small"></div>
+          <div id="rd-editor" hidden>
+            <textarea id="rd-text" class="mono" rows="8" placeholder="Name | https://url"></textarea>
+            <div class="form-acts"><span class="small muted">One station a line: <span class="mono">name | url</span></span>
+              <button id="rd-cancel">Cancel</button><button id="rd-save" class="primary">Save</button></div>
+          </div>
+          <p class="hint">Plays to the output chosen above.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>UPnP media servers</h3><button class="small-btn" id="up-search">Search the LAN</button></div>
+          <div id="up-servers" class="small"></div>
+          <div id="up-path" class="small crumbs"></div>
+          <div id="up-items" class="small"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" data-pane="stack">
+      <div class="card">
+        <div class="card-head">
+          <h3>Audio stack <span id="au-mode" class="pill">…</span></h3>
+          <div class="acts"><span id="au-buttons" class="seg-buttons"></span></div>
+        </div>
+        <label class="switch inline small"><input type="checkbox" id="au-restart-bt"><i></i> Restart bluetoothd with the switch</label>
+        <div id="au-services" class="small muted"></div>
+        <div id="au-msg" class="small muted"></div>
+      </div>
+      <h2>Transports</h2>
+      <div id="au-transports" class="rows-cards"></div>
+      <h2>Remote endpoints</h2>
+      <div id="au-endpoints"></div>
+      <div class="card">
+        <div class="card-head">
+          <h3>AVDTP probe</h3>
+          <div class="acts"><select id="av-dev" aria-label="Device"></select><button id="av-probe">Probe</button></div>
+        </div>
+        <p class="hint">Asks the device itself for its stream endpoints (DISCOVER, GET_ALL_CAPABILITIES). Refused while A2DP is streaming.</p>
+        <div id="av-result" class="small"></div>
+      </div>
     </div>
   </section>
 
   <!-- ======================================================== OBEX -->
   <section id="obex" class="panel">
-    <div class="card">
-      <div class="row wrap">
-        <h3>obexd</h3>
-        <span id="ob-state" class="pill">…</span>
-        <button id="ob-toggle">Start</button>
-        <label class="row small">incoming pushes
-          <select id="ob-policy"><option value="auto">accept into in/</option><option value="ask">ask here</option><option value="reject">reject</option></select></label>
+    <div class="card toolbar">
+      <div class="tb-main">
+        <div class="tb-id"><b>obexd</b> <span id="ob-state" class="pill">…</span></div>
+        <label class="small inline-label">Incoming files
+          <select id="ob-policy"><option value="auto">accept into in/</option><option value="ask">ask me here</option><option value="reject">reject</option></select></label>
         <span id="ob-msg" class="small"></span>
+        <button id="ob-toggle">Start</button>
       </div>
       <div id="ob-info" class="small muted"></div>
       <div id="ob-request" class="ob-request" hidden></div>
     </div>
 
-    <div class="card">
-      <h3>New session</h3>
-      <div class="row wrap">
-        <label class="row">Device <select id="ob-dev"></select></label>
-        <label class="row">Profile
-          <select id="ob-target">
-            <option value="opp">OPP: Object Push</option><option value="ftp">FTP: File Transfer</option>
-            <option value="pbap">PBAP: Phonebook</option><option value="map">MAP: Messages</option>
-            <option value="bip-avrcp">BIP: AVRCP cover art</option>
-          </select></label>
-        <label class="row small">channel/PSM <input id="ob-chan" class="narrow" placeholder="auto"></label>
-        <button class="primary" id="ob-connect">Connect</button>
+    <div class="pane" data-pane="sessions">
+      <div class="card">
+        <div class="card-head"><h3>Connect to a device</h3></div>
+        <div class="grid">
+          <label>Device <select id="ob-dev"></select></label>
+          <label>Profile
+            <select id="ob-target">
+              <option value="opp">Object Push (OPP)</option><option value="ftp">File Transfer (FTP)</option>
+              <option value="pbap">Phonebook (PBAP)</option><option value="map">Messages (MAP)</option>
+              <option value="bip-avrcp">Cover art (BIP)</option>
+            </select></label>
+          <label>Channel / PSM <input id="ob-chan" placeholder="from SDP"></label>
+        </div>
+        <div class="form-acts"><button class="primary" id="ob-connect">Connect</button></div>
       </div>
+      <div id="ob-sessions" class="rows-cards"></div>
+      <h2>Transfers</h2>
+      <div class="card flush"><div class="scroll-x"><table id="ob-transfers" class="tbl"></table></div></div>
     </div>
-    <div id="ob-sessions" class="list"></div>
 
-    <h2>Transfers</h2>
-    <div class="card"><div class="scroll-x"><table id="ob-transfers" class="tbl"></table></div></div>
-
-    <h2>Files on the board</h2>
-    <div class="cols">
-      <div class="card"><div class="row between"><h3>out/ <span class="small muted">to send</span></h3>
-        <label class="small-btn upload">upload<input type="file" id="ob-up-out" multiple hidden></label></div><div id="ob-f-out" class="small"></div></div>
-      <div class="card"><div class="row between"><h3>in/ <span class="small muted">received, pulled</span></h3></div><div id="ob-f-in" class="small"></div></div>
-      <div class="card"><div class="row between"><h3>shared/ <span class="small muted">what the board's FTP server offers</span></h3>
-        <label class="small-btn upload">upload<input type="file" id="ob-up-shared" multiple hidden></label></div><div id="ob-f-shared" class="small"></div></div>
+    <div class="pane" data-pane="files">
+      <div class="cols three">
+        <div class="card"><div class="card-head"><h3>out/ <span class="small muted">to send</span></h3>
+          <label class="small-btn upload">Upload<input type="file" id="ob-up-out" multiple hidden></label></div><div id="ob-f-out" class="small"></div></div>
+        <div class="card"><div class="card-head"><h3>in/ <span class="small muted">received and pulled</span></h3></div><div id="ob-f-in" class="small"></div></div>
+        <div class="card"><div class="card-head"><h3>shared/ <span class="small muted">offered over FTP</span></h3>
+          <label class="small-btn upload">Upload<input type="file" id="ob-up-shared" multiple hidden></label></div><div id="ob-f-shared" class="small"></div></div>
+      </div>
     </div>
   </section>
 
-  <!-- ======================================================== Graphs -->
-  <section id="graphs" class="panel">
-    <div class="card">
-      <div class="row wrap">
-        <h3>Live graphs</h3>
-        <label>Window <select id="gr-window"><option value="30">30 s</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></label>
-        <label>Connection <select id="gr-conn"><option value="">all</option></select></label>
-        <button id="gr-pause">Pause</button>
-        <button id="gr-csv" title="The buffered samples as CSV">CSV</button>
-        <span id="gr-msg" class="small muted"></span>
-      </div>
-      <div id="gr-legend" class="small gr-legend"></div>
-    </div>
-    <div id="gr-charts"></div>
-  </section>
-
-  <!-- ======================================================== Monitor -->
+  <!-- ======================================================== Traffic: links -->
   <section id="monitor" class="panel">
     <div id="mon-msg" class="small bad-text"></div>
-    <div class="card">
-      <div class="row wrap">
-        <h3>Connections</h3>
-        <span id="mon-source" class="small muted"></span>
-      </div>
+    <div class="card flush">
+      <div class="card-head pad"><h3>Connections</h3><span id="mon-source" class="small muted"></span></div>
       <div class="scroll-x"><table id="mon-conns" class="tbl"></table></div>
-      <div id="mon-adapters" class="small muted"></div>
+      <div id="mon-adapters" class="small muted pad"></div>
     </div>
     <div class="card" id="mon-detail" hidden>
-      <div class="row between"><h3 id="mon-title"></h3><span id="mon-now" class="small mono"></span></div>
-      <h4>Throughput (kbit/s, last 2 min) <span class="legend"><i class="c-tx"></i>TX <i class="c-rx"></i>RX</span></h4>
+      <div class="card-head"><h3 id="mon-title"></h3><span id="mon-now" class="small muted"></span></div>
+      <h4>Throughput, kbit/s <span class="legend"><i class="c-tx"></i>TX <i class="c-rx"></i>RX</span></h4>
       <canvas id="mon-tput" class="graph"></canvas>
-      <h4>TX latency (ms) <span class="legend"><i class="c-p50"></i>p50 <i class="c-p95"></i>p95</span> · in flight <i class="c-fl"></i></h4>
+      <h4>TX latency, ms <span class="legend"><i class="c-p50"></i>p50 <i class="c-p95"></i>p95 <i class="c-fl"></i>in flight</span></h4>
       <canvas id="mon-lat" class="graph"></canvas>
-      <h4>Latency histogram since connect (1 ms buckets)</h4>
-      <canvas id="mon-hist" class="graph short"></canvas>
-      <div id="mon-channels"></div>
+      <details class="more-fields">
+        <summary>Latency histogram and channels</summary>
+        <h4>Latency since connect, 1 ms buckets</h4>
+        <canvas id="mon-hist" class="graph short"></canvas>
+        <div id="mon-channels"></div>
+      </details>
     </div>
     <div class="card">
-      <div class="row wrap">
+      <div class="card-head">
         <h3>Events</h3>
-        <input id="mon-mark-text" placeholder="mark text (lands in btmon/btsnoop/Wireshark)">
-        <button id="mon-mark">Mark</button>
+        <div class="acts mark">
+          <input id="mon-mark-text" placeholder="Mark text (lands in btmon, btsnoop, Wireshark)">
+          <button id="mon-mark">Mark</button>
+        </div>
       </div>
-      <pre id="mon-events" class="log tall"></pre>
+      <pre id="mon-events" class="log"></pre>
     </div>
+  </section>
+
+  <!-- ======================================================== Traffic: packets -->
+  <section id="packets" class="panel">
     <div class="card" id="lp">
-      <div class="row between">
-        <h3>Live packets</h3>
-        <div class="row wrap">
-          <span id="lp-status" class="small muted"></span>
+      <div class="card-head">
+        <span id="lp-status" class="small muted"></span>
+        <div class="acts">
           <button class="small-btn" id="lp-run">Pause</button>
           <button class="small-btn" id="lp-clear">Clear</button>
-          <button class="small-btn" id="lp-cap" title="Open the file btmon is writing in the Capture tab, with this filter">open in capture</button>
+          <button class="small-btn" id="lp-cap" title="Open the file btmon is writing under Captures, with this filter">Open as capture</button>
         </div>
       </div>
       <div class="row cv-filter">
-        <input id="lp-filter" class="mono" spellcheck="false" autocomplete="off"
+        <input id="lp-filter" class="mono" spellcheck="false" autocomplete="off" aria-label="Filter"
                placeholder='proto:att handle:64 dir:tx len>20 !evt:0x13 "read request"'>
         <button id="lp-apply">Filter</button>
       </div>
       <div id="lp-chips" class="cv-chips"></div>
-      <details class="small muted cv-hint">
+      <details class="small muted cv-hint more-fields">
         <summary>Filter syntax</summary>
-        <p>The Capture viewer's: <code>type:</code> <code>dir:</code> <code>proto:</code> <code>handle:</code> <code>cid:</code>
+        <p>The capture viewer's: <code>type:</code> <code>dir:</code> <code>proto:</code> <code>handle:</code> <code>cid:</code>
           <code>psm:</code> <code>opcode:</code> <code>evt:</code> <code>is:err|mark|cont|lat</code> <code>len&gt;100</code>
           <code>lat&gt;20</code> (TX → NOCP, ms; such a filter shows a TX packet once its completion came, up to a second late),
           <code>!term</code>, <code>a|b</code>, and any other word or <code>"quoted phrase"</code> searched in the summaries.
@@ -361,45 +387,59 @@
         </div>
       </div>
     </div>
-    <div class="card small">
-      Live capture in Wireshark, on your PC:
+    <details class="card small">
+      <summary>Watch live in Wireshark on your PC</summary>
       <pre class="mono" id="mon-ws-cmd"></pre>
-    </div>
+    </details>
   </section>
 
-  <!-- ======================================================== Capture -->
+  <!-- ======================================================== Traffic: graphs -->
+  <section id="graphs" class="panel">
+    <div class="card toolbar">
+      <div class="tb-main">
+        <label class="inline-label small">Window <select id="gr-window"><option value="30">30 s</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></label>
+        <label class="inline-label small">Connection <select id="gr-conn"><option value="">all</option></select></label>
+        <span id="gr-msg" class="small muted grow"></span>
+        <button id="gr-pause">Pause</button>
+        <button id="gr-csv" title="The buffered samples as CSV">CSV</button>
+      </div>
+      <div id="gr-legend" class="small gr-legend"></div>
+    </div>
+    <div id="gr-charts"></div>
+  </section>
+
+  <!-- ======================================================== Traffic: captures -->
   <section id="capture" class="panel">
-    <div class="card">
-      <div class="row wrap">
-        <h3>btsnoop ring</h3>
-        <span id="cap-state" class="pill">…</span>
+    <div class="card toolbar">
+      <div class="tb-main">
+        <div class="tb-id"><b>Recording</b> <span id="cap-state" class="pill">…</span></div>
+        <span id="cap-dir" class="small muted mono grow"></span>
         <button id="cap-toggle">…</button>
-        <span id="cap-dir" class="small muted mono"></span>
       </div>
       <div id="cap-msg" class="small bad-text"></div>
     </div>
-    <div class="scroll-x"><table id="cap-files" class="tbl"></table></div>
+    <div class="card flush"><div class="scroll-x"><table id="cap-files" class="tbl"></table></div></div>
     <div class="card" id="cap-analyze" hidden>
-      <div class="row between"><h3 id="cap-an-title"></h3><button class="small-btn" id="cap-an-close">close</button></div>
+      <div class="card-head"><h3 id="cap-an-title"></h3><button class="small-btn" id="cap-an-close">Close</button></div>
       <pre id="cap-an-text" class="log tall"></pre>
     </div>
 
     <div class="card" id="cv" hidden>
-      <div class="row between">
+      <div class="card-head">
         <h3 class="mono" id="cv-title"></h3>
-        <div class="row wrap">
+        <div class="acts">
           <span id="cv-status" class="small muted"></span>
-          <label class="check small" id="cv-follow-wrap" hidden><input type="checkbox" id="cv-follow"> follow</label>
-          <button class="small-btn" id="cv-close">close</button>
+          <label class="switch inline small" id="cv-follow-wrap" hidden><input type="checkbox" id="cv-follow"><i></i> Follow</label>
+          <button class="small-btn" id="cv-close">Close</button>
         </div>
       </div>
       <div class="row cv-filter">
-        <input id="cv-filter" class="mono" spellcheck="false" autocomplete="off"
+        <input id="cv-filter" class="mono" spellcheck="false" autocomplete="off" aria-label="Filter"
                placeholder='proto:att handle:64 dir:tx len>20 t>=12.5 !evt:0x13 "read request"'>
         <button id="cv-apply">Filter</button>
       </div>
       <div id="cv-chips" class="cv-chips"></div>
-      <details class="small muted cv-hint">
+      <details class="small muted cv-hint more-fields">
         <summary>Filter syntax</summary>
         <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value.
           <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
@@ -413,7 +453,7 @@
       </details>
       <div class="cv-graph-wrap">
         <div class="row wrap small">
-          <select id="cv-conn" class="small"></select>
+          <select id="cv-conn" class="small" aria-label="Connection"></select>
           <span class="legend"><i class="c-tx"></i>TX<i class="c-rx"></i>RX<i class="c-p50"></i>lat p50<i class="c-p95"></i>p95</span>
           <span id="cv-gscale" class="muted"></span>
           <span id="cv-readout" class="mono muted grow"></span>
@@ -433,6 +473,58 @@
     </div>
   </section>
 
+  <!-- ======================================================== System -->
+  <section id="system" class="panel">
+    <div class="pane" data-pane="overview">
+      <div class="cols">
+        <div class="card"><h3>Health</h3><div id="sys-health"></div></div>
+        <div class="card"><h3>Versions</h3><div id="sys-versions"></div></div>
+      </div>
+      <div class="card">
+        <h3>Services</h3>
+        <div id="sys-services"></div>
+        <details class="more-fields">
+          <summary>bluetoothd arguments</summary>
+          <div class="row wrap">
+            <input id="sys-btargs" class="mono grow" placeholder="-d -E" aria-label="bluetoothd arguments">
+            <label class="switch inline"><input type="checkbox" id="sys-btargs-restart" checked><i></i> Restart bluetooth</label>
+            <button id="sys-btargs-save" class="primary">Save</button>
+          </div>
+          <div id="sys-btargs-msg" class="small muted"></div>
+        </details>
+      </div>
+      <div class="card danger-zone">
+        <div class="card-head"><div><h3>Power</h3><p class="hint">The console reconnects by itself when the board is back.</p></div>
+          <button id="sys-reboot" class="danger">Reboot the board</button></div>
+      </div>
+    </div>
+
+    <div class="pane" data-pane="logs">
+      <div class="card">
+        <div class="card-head">
+          <h3>Journal</h3>
+          <div class="acts">
+            <select id="sys-j-unit" aria-label="Unit"></select>
+            <button id="sys-j-load">Last 200</button>
+            <label class="switch inline small"><input type="checkbox" id="sys-j-follow"><i></i> Follow</label>
+            <button class="small-btn" id="sys-j-clear">Clear</button>
+          </div>
+        </div>
+        <pre id="sys-journal" class="log tall"></pre>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Run a tool</h3></div>
+        <div class="row wrap">
+          <select id="job-cmd" aria-label="Tool"></select>
+          <input id="job-args" class="mono grow" placeholder="arguments, e.g. -c 5 AA:BB:CC:DD:EE:FF" aria-label="Arguments">
+          <button id="job-start" class="primary">Run</button>
+        </div>
+        <div id="job-list" class="rows"></div>
+        <pre id="job-out" class="log tall"></pre>
+      </div>
+    </div>
+  </section>
+
   <!-- ======================================================== Wi-Fi -->
   <section id="wifi" class="panel">
     <div id="wifi-root"></div>
@@ -442,58 +534,18 @@
   <section id="kernel" class="panel">
     <div class="card" id="k-card"></div>
     <div class="card">
-      <div class="row wrap">
+      <div class="form-acts start">
         <button id="k-try" class="primary">Try the test kernel (reboots)</button>
-        <button id="k-commit">Commit test → good</button>
+        <button id="k-commit">Keep the test kernel</button>
         <button id="k-rollback" class="danger">Roll back</button>
       </div>
-      <div id="k-msg" class="small"></div>
-    </div>
-  </section>
-
-  <!-- ======================================================== System -->
-  <section id="system" class="panel">
-    <div class="cols">
-      <div class="card"><h3>Health</h3><div id="sys-health"></div></div>
-      <div class="card"><h3>Versions</h3><div id="sys-versions"></div></div>
-    </div>
-    <div class="card"><h3>Services</h3><div id="sys-services"></div></div>
-    <div class="card">
-      <h3>bluetoothd arguments</h3>
-      <div class="row wrap">
-        <input id="sys-btargs" class="mono grow" placeholder="-d -E">
-        <label class="check"><input type="checkbox" id="sys-btargs-restart" checked> restart bluetooth</label>
-        <button id="sys-btargs-save" class="primary">Save</button>
-      </div>
-      <div id="sys-btargs-msg" class="small muted"></div>
-    </div>
-    <div class="card">
-      <div class="row wrap">
-        <h3>Journal</h3>
-        <select id="sys-j-unit"></select>
-        <button id="sys-j-load">Last 200</button>
-        <label class="check"><input type="checkbox" id="sys-j-follow"> follow</label>
-        <button class="small-btn" id="sys-j-clear">clear</button>
-      </div>
-      <pre id="sys-journal" class="log tall"></pre>
-    </div>
-    <div class="card">
-      <div class="row wrap">
-        <h3>Jobs</h3>
-        <select id="job-cmd"></select>
-        <input id="job-args" class="mono grow" placeholder="arguments, e.g. -c 5 AA:BB:CC:DD:EE:FF">
-        <button id="job-start" class="primary">Run</button>
-      </div>
-      <div id="job-list" class="list"></div>
-      <pre id="job-out" class="log tall"></pre>
-    </div>
-    <div class="card">
-      <div class="row wrap"><h3>Power</h3><button id="sys-reboot" class="danger">Reboot the board</button></div>
+      <div id="k-msg" class="small muted"></div>
     </div>
   </section>
 </main>
+</div>
 
-<!-- The agent's question, on every tab. -->
+<!-- The agent's question, on every view. -->
 <div id="modal" class="modal" hidden>
   <div class="modal-box">
     <h3 id="modal-title">Pairing</h3>

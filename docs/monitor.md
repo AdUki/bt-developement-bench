@@ -1,9 +1,9 @@
 # HCI monitor
 
 btbenchd watches every HCI packet between the host and the controller and turns them into numbers
-for the Monitor tab and `bench mon`. It shows throughput per link and per L2CAP channel, how long
-the controller holds our packets, controller buffer use, AVDTP stream state with the negotiated
-codec, and RTP loss and jitter. It does this without btmon running and without touching the
+for the console's Traffic area and `bench mon`. It shows throughput per link and per L2CAP channel,
+how long the controller holds our packets, controller buffer use, AVDTP stream state with the
+negotiated codec, and RTP loss and jitter. It does this without btmon running and without touching the
 traffic.
 
 It also gives access to the always-on btmon capture ring (`/data/btsnoop`), shows what is inside
@@ -304,7 +304,7 @@ Note that `analyze` occupies an HTTP worker while btmon runs.
 
 ## Packet view
 
-The Capture tab can open any file of the ring (or any btsnoop file put in `/data/btsnoop`) and
+Traffic → Captures can open any file of the ring (or any btsnoop file put in `/data/btsnoop`) and
 show what is inside: a packet list with a filter, one packet's decoded fields and hex dump, and
 graphs over the whole capture. The code is `packet_view.{h,cpp}` (index, filter, routes' bodies)
 and `dissect.cpp` (summaries and fields). All three datalinks are read: 2001 (btmon), 1002 (H4)
@@ -466,7 +466,7 @@ Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missi
 ## Live packets
 
 The same packet list, live: the monitor's packets as they happen, summarised by the same code and
-filtered with the same [filter syntax](#filter-syntax) as a capture file. The Monitor tab shows it
+filtered with the same [filter syntax](#filter-syntax) as a capture file. Traffic → Packets shows it
 under the events, and `bench mon packets [FILTER]` prints it. The code is `live.{h,cpp}`.
 
 ### How it works

@@ -12,10 +12,11 @@ function renderHealth(h) {
   const m = h.mem || {};
   setHTML($('sys-health'), `<div class="kv">
     <span>Host</span><span>${esc(h.hostname)}</span>
-    <span>Addresses</span><span class="mono">${esc((h.ips || []).join(', ') || '—')}</span>
+    <span>Addresses</span><span>${(h.ips || []).map(ip => `<div class="mono">${esc(ip)}</div>`).join('') || '—'}</span>
     <span>Uptime</span><span>${fmtUptime(h.uptime_s || 0)}</span>
     <span>CPU</span><span>${(h.cpu_pct || 0).toFixed(0)} % · load ${(h.load1 || 0).toFixed(2)}</span>
-    <span>Memory</span><span>${Math.round((m.used_kb || 0) / 1024)} / ${Math.round((m.total_kb || 0) / 1024)} MiB used</span>
+    <span>Memory</span><span>${Math.round((m.used_kb || 0) / 1024)} of ${Math.round((m.total_kb || 0) / 1024)} MiB
+      <div class="bar"><i style="width:${m.total_kb ? (m.used_kb / m.total_kb * 100).toFixed(0) : 0}%"></i></div></span>
     <span>Temperature</span><span>${h.temp_c != null ? h.temp_c.toFixed(1) + ' °C' : '—'}</span>
     <span>Supply</span><span>${!h.power || !h.power.available ? 'not monitored here'
       : h.power.under_voltage ? '<b class="bad-text">UNDERVOLTAGE now</b>'
@@ -42,9 +43,10 @@ function renderSystem(s) {
 
 function renderServices(sv) {
   // btbenchd itself is the one not offered: the request would die with it.
-  setHTML($('sys-services'), `<div class="kv">${Object.entries(sv).map(([u, st]) =>
-    `<span>${esc(u)}</span><span>${pill(st, st === 'active' ? 'good' : st === 'failed' ? 'bad' : '')}
-      ${u !== 'btbenchd.service' ? `<button class="small-btn" data-restart="${esc(u)}">restart</button>` : ''}</span>`).join('')}</div>`);
+  setHTML($('sys-services'), `<div class="svc-list">${Object.entries(sv).map(([u, st]) =>
+    `<div class="svc">${pill(u.replace(/\.service$/, ''), st === 'active' ? 'good' : st === 'failed' ? 'bad' : '')}
+      <span class="small muted">${esc(st)}</span>
+      ${u !== 'btbenchd.service' ? `<button class="small-btn" data-restart="${esc(u)}" title="Restart ${esc(u)}">Restart</button>` : ''}</div>`).join('')}</div>`);
 }
 
 const refreshSystem = () => api('/system').then(renderSystem).catch(fail);

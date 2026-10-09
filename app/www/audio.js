@@ -15,8 +15,9 @@ function renderAudio(s) {
   setText($('au-mode'), s.mode);
   setClass($('au-mode'), 'pill good');
   setHTML($('au-buttons'), (s.modes || AUDIO_MODES).map(m =>
-    `<button data-mode="${esc(m)}"${m === s.mode ? ' disabled' : ''}>${esc(m)}</button>`).join(' '));
-  setText($('au-services'), Object.entries(s.services || {}).map(([k, v]) => `${k}: ${v}`).join(' · '));
+    `<button data-mode="${esc(m)}"${m === s.mode ? ' disabled' : ''}>${esc(m)}</button>`).join(''));
+  setHTML($('au-services'), Object.entries(s.services || {}).map(([k, v]) =>
+    pill(k.replace(/\.service$/, ''), v === 'active' ? 'good' : v === 'failed' ? 'bad' : '')).join(' '));
 }
 
 function refreshAudio() {
@@ -129,7 +130,7 @@ function streamCard(s) {
   el.className = 'card dev stream';
   el.dataset.id = s.id;
   el.innerHTML = `<div class="head"><span><b class="st-label"></b> <span class="pill st-state"></span></span>
-      <span class="acts"><button class="small-btn st-listen">listen</button><button class="small-btn danger st-stop">stop</button></span></div>
+      <span class="acts"><button class="small-btn st-listen">Listen</button><button class="small-btn danger st-stop">Stop</button></span></div>
     <div class="small st-meta"></div>
     <div class="st-meters"></div>
     <div class="row wrap small">
@@ -173,7 +174,7 @@ function upsertStream(s) {
   if (lv && idle(lv)) lv.value = s.source.level_db;
   const live = s.state === 'running' || s.state === 'starting';
   q('.st-listen').hidden = !live;
-  setText(q('.st-listen'), au.listeners[s.id] ? 'mute here' : 'listen');
+  setText(q('.st-listen'), au.listeners[s.id] ? 'Mute here' : 'Listen');
   setText(q('.st-stop'), live ? 'stop' : 'remove');
   if (!live && au.listeners[s.id]) stopListening(s.id);
 }
@@ -333,7 +334,7 @@ function stopListening(id) {
   const el = au.cards[id];
   if (el) {
     el.querySelector('.st-listening').hidden = true;
-    setText(el.querySelector('.st-listen'), 'listen');
+    setText(el.querySelector('.st-listen'), 'Listen');
   }
 }
 
@@ -451,38 +452,60 @@ function selectHTML(cls, path, cur, options) {
     `<option${o === cur ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
 }
 
+// Transport icons, drawn rather than emoji: emoji render in colour and at different sizes on
+// every phone.
+const PL_ICON = {
+  previous: 'M18 6l-8.5 6L18 18zM6 6h2v12H6z', next: 'M6 6l8.5 6L6 18zM16 6h2v12h-2z',
+  rewind: 'M20 6l-8 6 8 6zM12 6l-8 6 8 6z', 'fast-forward': 'M4 6l8 6-8 6zM12 6l8 6-8 6z',
+  play: 'M8 5v14l11-7z', pause: 'M7 5h4v14H7zM13 5h4v14h-4z', stop: 'M6 6h12v12H6z',
+};
+const NOTE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z"/></svg>';
+const devName = addr => {
+  const d = typeof btState !== 'undefined' && btState && btState.devices.find(x => x.address === addr);
+  return d ? d.alias : addr;
+};
+
+// A player as a now-playing screen: cover, track, the transport row and the volume. Repeat,
+// shuffle and the browser are a click away (kept open across the rebuilds every update causes).
 function playerCard(p, transports) {
   const t = p.track || {};
   const tr = p.transport && transports.find(x => x.path === p.transport);
   const d = t.duration_ms || 0;
   const num = t.track_number ? `track ${t.track_number}${t.number_of_tracks ? ' of ' + t.number_of_tracks : ''}` : '';
-  const btn = (a, label, title) => `<button class="pl-btn" data-a="${a}" data-path="${esc(p.path)}" title="${title}">${label}</button>`;
+  const btn = (a, title, cls) => `<button class="pl-btn ${cls || ''}" data-a="${a}" data-path="${esc(p.path)}" title="${title}" aria-label="${title}">
+    <svg viewBox="0 0 24 24"><path d="${PL_ICON[a]}"/></svg></button>`;
   const playing = p.status === 'playing';
-  return `<div class="card dev player" data-path="${esc(p.path)}">
-    <div class="head"><span><b>${esc(p.name || 'Player')}</b> on <span class="mono">${esc(p.address)}</span>
-      ${p.type ? `<span class="small muted">${esc(p.type)}${p.subtype ? ' / ' + esc(p.subtype) : ''}</span>` : ''}</span>
+  const art = p.obex_port != null && t.img_handle
+    ? `<img alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}" onerror="coverRetry(this)">`
+    : (p.obex_port != null ? coverConnect(p) : '') + NOTE_SVG;
+  const extras = p.repeat != null || p.shuffle != null || p.browsable;
+  au.plOpen = au.plOpen || {};
+  return `<div class="card player" data-path="${esc(p.path)}">
+    <div class="pl-art">${art}</div>
+    <div class="head"><span class="pl-who">${esc(p.name || 'Player')} on ${esc(devName(p.address))}${p.type ? ' · ' + esc(p.type) : ''}</span>
       ${pill(p.status || 'unknown', playing ? 'good' : p.status === 'paused' ? 'warn' : '')}</div>
-    <div class="pl-track">
-      ${p.obex_port != null && t.img_handle ? `<img class="cover" alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}"
-        onerror="coverRetry(this)">` : ''}
-      ${p.obex_port != null && !t.img_handle ? coverConnect(p) : ''}
-      <div class="pl-title">${esc(t.title || 'no track')}</div>
-      <div class="small">${esc([t.artist, t.album].filter(Boolean).join(' — '))}</div>
-      <div class="small muted">${esc([t.genre, num].filter(Boolean).join(' · '))}</div>
-    </div>
+    <div class="pl-title">${esc(t.title || 'Nothing playing')}</div>
+    <div class="small">${esc([t.artist, t.album].filter(Boolean).join(' — '))}</div>
+    <div class="small muted">${esc([t.genre, num].filter(Boolean).join(' · '))}</div>
     <div class="pl-progress"><i style="width:${d ? (playerPosition(p) / d * 100).toFixed(2) : 0}%"></i></div>
-    <div class="small mono pl-time">${fmtMs(playerPosition(p))}${d ? ' / ' + fmtMs(d) : ''}</div>
-    <div class="row wrap pl-controls">
-      ${btn('previous', '⏮', 'previous')}${btn('rewind', '⏪', 'rewind (hold)')}
-      ${playing ? btn('pause', '⏸', 'pause') : btn('play', '▶', 'play')}
-      ${btn('stop', '⏹', 'stop')}${btn('fast-forward', '⏩', 'fast forward (hold)')}${btn('next', '⏭', 'next')}
-      ${p.repeat != null ? `<label class="row small">repeat ${selectHTML('pl-repeat', p.path, p.repeat, ['off', 'singletrack', 'alltracks', 'group'])}</label>` : ''}
-      ${p.shuffle != null ? `<label class="row small">shuffle ${selectHTML('pl-shuffle', p.path, p.shuffle, ['off', 'alltracks', 'group'])}</label>` : ''}
-      <button class="small-btn pl-listen" data-address="${esc(p.address)}" title="Hear what this device sends the board">listen</button>
+    <div class="pl-time mono">${fmtMs(playerPosition(p))}${d ? ' / ' + fmtMs(d) : ''}</div>
+    <div class="pl-controls">
+      ${btn('previous', 'Previous')}${btn('rewind', 'Rewind (hold)')}
+      ${playing ? btn('pause', 'Pause', 'main') : btn('play', 'Play', 'main')}
+      ${btn('fast-forward', 'Fast forward (hold)')}${btn('next', 'Next')}${btn('stop', 'Stop')}
+      <span class="spacer"></span>
+      <button class="small-btn pl-listen" data-address="${esc(p.address)}" title="Hear what this device sends the board">Listen here</button>
     </div>
-    ${tr && tr.volume != null ? `<label class="row small">volume <input type="range" min="0" max="127" value="${tr.volume}" data-path="${esc(tr.path)}" class="grow pl-vol">
+    ${tr && tr.volume != null ? `<label class="row small pl-vol-row"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${tr.volume}" data-path="${esc(tr.path)}" class="grow pl-vol">
       <span class="mono">${tr.volume}</span></label>` : ''}
-    ${p.browsable ? browserHTML(p) : ''}
+    ${extras ? `<details class="more-fields pl-more" data-path="${esc(p.path)}"${au.plOpen[p.path] ? ' open' : ''}>
+      <summary>${p.browsable ? 'Browse, repeat and shuffle' : 'Repeat and shuffle'}</summary>
+      <div class="row small" style="margin-top:.5rem">
+        ${p.repeat != null ? `<label class="row">Repeat ${selectHTML('pl-repeat', p.path, p.repeat, ['off', 'singletrack', 'alltracks', 'group'])}</label>` : ''}
+        ${p.shuffle != null ? `<label class="row">Shuffle ${selectHTML('pl-shuffle', p.path, p.shuffle, ['off', 'alltracks', 'group'])}</label>` : ''}
+      </div>
+      ${p.browsable ? browserHTML(p) : ''}
+    </details>` : ''}
   </div>`;
 }
 
@@ -492,10 +515,10 @@ function browserHTML(p) {
   const b = au.browse[p.path];
   const items = b ? b.items : (p.items || []).map(i => Object.assign({title: i.metadata && i.metadata.title, artist: i.metadata && i.metadata.artist}, i));
   const nav = `<div class="row wrap small pl-browser-nav">
-      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/NowPlaying">now playing</button>
-      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/Filesystem">files</button>
-      ${b && b.stack && b.stack.length > 1 ? `<button class="small-btn pl-back" data-path="${esc(p.path)}">back</button>` : ''}
-      ${p.searchable ? `<input class="pl-q narrow" data-path="${esc(p.path)}" placeholder="search"><button class="small-btn pl-search" data-path="${esc(p.path)}">search</button>` : ''}
+      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/NowPlaying">Now playing</button>
+      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/Filesystem">Files</button>
+      ${b && b.stack && b.stack.length > 1 ? `<button class="small-btn pl-back" data-path="${esc(p.path)}">Back</button>` : ''}
+      ${p.searchable ? `<input class="pl-q narrow" data-path="${esc(p.path)}" placeholder="Search"><button class="small-btn pl-search" data-path="${esc(p.path)}">Search</button>` : ''}
       <span class="muted mono">${esc(b ? b.folder : (p.folder ? p.folder.name : ''))}</span></div>`;
   return `<div class="pl-items small">${nav}${items.length ? items.map(i => `<div class="row between">
       <span>${i.type === 'folder' ? '📁 ' : ''}${esc(i.title || i.name)}${i.artist ? ' <span class="muted">— ' + esc(i.artist) + '</span>' : ''}</span>
@@ -538,9 +561,9 @@ function renderPlayers(m) {
   notePlayers(m.players);
   // Not while a select is open or a slider held: the rebuild would close it under the pointer.
   const ae = document.activeElement;
-  if (ae && $('au-players').contains(ae) && (ae.tagName === 'SELECT' || ae.type === 'range')) return;
+  if (ae && $('au-players').contains(ae) && (ae.tagName === 'SELECT' || ae.type === 'range' || ae.classList.contains('pl-q'))) return;
   setHTML($('au-players'), m.players.length ? m.players.map(p => playerCard(p, m.transports)).join('')
-    : '<div class="small muted">No AVRCP players: connect a phone (or anything that plays) to the board as its audio sink.</div>');
+    : '<div class="card empty-card"><h3>No player</h3><p class="hint">Connect a phone, or anything that plays, with the board as its speaker: its AVRCP player shows here with the track, cover art and controls.</p></div>');
 }
 
 // The progress bars move between updates.
@@ -583,40 +606,42 @@ function codecCell(c) {
 function renderMedia(m) {
   au.media = m;
   renderPlayers(m);
-  setHTML($('au-transports'), m.transports.length ? m.transports.map(t => `<div class="card dev">
-      <div class="head"><span><b>${esc(t.profile || t.uuid)}</b> with <span class="mono">${esc(t.address)}</span></span>
+  // The codec in words up front; the raw configuration bytes and the object path, which only a
+  // bug report needs, behind "Details".
+  setHTML($('au-transports'), m.transports.length ? m.transports.map(t => `<div class="card">
+      <div class="card-head"><h3>${esc(t.profile || t.uuid)} <span class="small muted">with ${esc(devName(t.address))}</span></h3>
         ${pill(t.state, t.state === 'active' ? 'good' : t.state === 'pending' ? 'warn' : '')}</div>
-      <div class="small">${codecCell(t.codec)}</div>
-      <div class="kv"><span>Configuration</span><span class="mono">${esc(t.configuration)}</span>
-        <span>Delay</span><span>${t.delay_ms != null ? t.delay_ms.toFixed(1) + ' ms' : '—'}</span>
-        <span>Path</span><span class="mono small">${esc(t.path)}</span></div>
-      ${t.volume != null ? `<label class="row">Volume <input type="range" min="0" max="127" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
+      <div class="small">${codecCell(t.codec)}${t.delay_ms != null ? ` <span class="muted">· delay ${t.delay_ms.toFixed(1)} ms</span>` : ''}</div>
+      ${t.volume != null ? `<label class="row small pl-vol-row"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
         <span class="mono">${t.volume}</span></label>` : ''}
-    </div>`).join('') : '<div class="small muted">No transport: nothing is configured to stream.</div>');
-  setHTML($('au-endpoints'), m.endpoints.length ? `<div class="scroll-x"><table class="tbl">
-      <tr><th>Device</th><th>Role</th><th>Codec</th><th>Capabilities</th><th>Delay rep.</th></tr>
-      ${m.endpoints.map(e => `<tr><td class="mono">${esc(e.address)}</td><td>${esc(e.role || e.uuid)}</td>
-        <td>${esc(e.codec.name)}</td><td class="small">${esc(e.codec.summary)} <span class="mono muted">${esc(e.capabilities)}</span></td>
-        <td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div>`
-    : '<div class="small muted">No remote endpoints (connect an A2DP device).</div>');
+      <details class="more-fields"><summary>Details</summary>
+        <div class="kv" style="margin-top:.4rem"><span>Configuration</span><span class="mono">${esc(t.configuration)}</span>
+          <span>Device</span><span class="mono">${esc(t.address)}</span>
+          <span>Path</span><span class="mono">${esc(t.path)}</span></div></details>
+    </div>`).join('') : '<div class="card"><p class="hint" style="margin:0">No transport: nothing is set up to stream. A2DP devices get one when they connect.</p></div>');
+  setHTML($('au-endpoints'), m.endpoints.length ? `<div class="card flush"><div class="scroll-x"><table class="tbl">
+      <tr><th>Device</th><th>Role</th><th>Codec</th><th>Capabilities</th><th>Delay reports</th></tr>
+      ${m.endpoints.map(e => `<tr><td>${esc(devName(e.address))}</td><td>${esc(e.role || e.uuid)}</td>
+        <td><b>${esc(e.codec.name)}</b></td><td class="wrap small" title="${esc(e.capabilities)}">${esc(e.codec.summary)}</td>
+        <td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div></div>`
+    : '<div class="card"><p class="hint" style="margin:0">No remote endpoints: connect an A2DP device.</p></div>');
 }
 
 // AVDTP browsing: ask a device for its stream endpoints over a signalling channel of our own.
 function probeAvdtp() {
   const addr = $('av-dev').value;
   if (!addr) return;
-  setHTML($('av-result'), '<span class="muted">probing (pages the device)…</span>');
-  post(`/media/avdtp/${addr}`).then(r => setHTML($('av-result'), `<div class="small muted">${r.seps.length} stream endpoints, ${r.took_ms} ms</div>
+  setHTML($('av-result'), '<span class="muted">Probing: paging the device…</span>');
+  post(`/media/avdtp/${addr}`).then(r => setHTML($('av-result'), `<div class="small muted" style="margin-bottom:.4rem">${r.seps.length} stream endpoints in ${r.took_ms} ms</div>
     <div class="scroll-x"><table class="tbl"><tr><th>SEID</th><th>role</th><th>media</th><th>in use</th><th>codec</th><th>capabilities</th></tr>
     ${r.seps.map(sp => `<tr><td>${sp.seid}</td><td>${esc(sp.role)}</td><td>${esc(sp.media_type)}</td><td>${sp.in_use ? pill('in use', 'warn') : ''}</td>
       <td>${sp.codec ? `<b>${esc(sp.codec.name)}</b> <span class="small">${esc(sp.codec.summary || '')}</span>` : esc(sp.error || '—')}</td>
-      <td class="small">${(sp.capabilities || []).filter(c => c.category !== 7).map(c => esc(c.name) + (c.type ? ' (' + esc(c.type) + ')' : '')).join(', ')}
-        <span class="mono muted">${esc(((sp.capabilities || []).find(c => c.category === 7) || {}).hex || '')}</span></td></tr>`).join('')}</table></div>`))
+      <td class="wrap small" title="${esc(((sp.capabilities || []).find(c => c.category === 7) || {}).hex || '')}">${(sp.capabilities || []).filter(c => c.category !== 7).map(c => esc(c.name) + (c.type ? ' (' + esc(c.type) + ')' : '')).join(', ')}</td></tr>`).join('')}</table></div>`))
     .catch(e => setHTML($('av-result'), `<span class="bad-text">${esc(e.message)}</span>`));
 }
 
 function avdtpDevices() {
-  api('/bluetooth').then(b => fillSelect($('av-dev'), b.devices.filter(d => d.paired || d.connected || d.rssi != null)
+  api('/bluetooth').then(b => { if (!btState) btState = b; return b; }).then(b => fillSelect($('av-dev'), b.devices.filter(d => d.paired || d.connected || d.rssi != null)
     .map(d => ({value: d.address, label: `${d.alias} (${d.address})${d.connected ? ' — connected' : ''}`})))).catch(() => {});
 }
 
@@ -627,9 +652,9 @@ function refreshMedia() { return api('/media').then(renderMedia).catch(fail); }
 function renderRadio(r) {
   au.radio = r.stations;
   setHTML($('rd-list'), r.stations.length ? r.stations.map((s, i) => `<div class="row between radio-row">
-      <span>${esc(s.name)} <span class="muted mono">${esc(s.url.replace(/^https?:\/\//, ''))}</span></span>
-      <span><button class="small-btn" data-play="${i}">play</button><button class="small-btn" data-hear="${i}">listen</button></span></div>`).join('')
-    : '<span class="muted">No stations.</span>');
+      <span title="${esc(s.url)}">${esc(s.name)}</span>
+      <span class="acts"><button class="small-btn" data-play="${i}" title="Play to the output chosen above">Play</button><button class="small-btn" data-hear="${i}" title="Listen in this browser">Listen</button></span></div>`).join('')
+    : '<span class="muted">No stations: Edit to add some.</span>');
 }
 
 function playUrl(url, title, listen) {
@@ -641,8 +666,8 @@ function playUrl(url, title, listen) {
 function renderUpnpServers(r) {
   setHTML($('up-servers'), r.servers.length ? r.servers.map(s => `<div class="row between">
       <span><b>${esc(s.name)}</b> <span class="muted">${esc([s.manufacturer, s.model].filter(Boolean).join(' '))}</span></span>
-      <button class="small-btn" data-server="${esc(s.id)}" data-name="${esc(s.name)}">browse</button></div>`).join('')
-    : `<span class="muted">${r.searched_ms ? 'No media servers answered' + (r.error ? ': ' + esc(r.error) : '.') : 'Not searched yet.'}</span>`);
+      <button class="small-btn" data-server="${esc(s.id)}" data-name="${esc(s.name)}">Browse</button></div>`).join('')
+    : `<span class="muted">${r.searched_ms ? 'No media servers answered' + (r.error ? ': ' + esc(r.error) : '.') : 'Search the LAN to find DLNA / UPnP servers.'}</span>`);
 }
 
 function browseUpnp(server, object, title) {
@@ -655,10 +680,10 @@ function browseUpnp(server, object, title) {
   api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(object)}&count=200`).then(r => {
     au.upnp.items = r.items;
     setHTML($('up-items'), (r.containers.map(c => `<div class="row between"><span>📁 ${esc(c.title)}${c.child_count != null ? ` <span class="muted">(${c.child_count})</span>` : ''}</span>
-        <button class="small-btn" data-open="${esc(c.id)}" data-title="${esc(c.title)}">open</button></div>`).join('') +
+        <button class="small-btn" data-open="${esc(c.id)}" data-title="${esc(c.title)}">Open</button></div>`).join('') +
       r.items.map((it, i) => `<div class="row between"><span>${esc(it.title)}${it.artist ? ' <span class="muted">— ' + esc(it.artist) + '</span>' : ''}
           <span class="muted mono">${esc(it.mime || '')}${it.duration_s ? ' ' + fmtMs(it.duration_s * 1000) : ''}</span></span>
-        <span>${it.url ? `<button class="small-btn" data-item="${i}">play</button><button class="small-btn" data-item-hear="${i}">listen</button>` : ''}</span></div>`).join('')) ||
+        <span>${it.url ? `<button class="small-btn" data-item="${i}">Play</button><button class="small-btn" data-item-hear="${i}">Listen</button>` : ''}</span></div>`).join('')) ||
       '<span class="muted">Empty.</span>') + (r.total > r.returned ? `<div class="muted">${r.returned} of ${r.total} shown</div>` : '');
   }).catch(e => setHTML($('up-items'), `<span class="bad-text">${esc(e.message)}</span>`));
 }
@@ -694,6 +719,10 @@ function setupAudio() {
 
   // Players: buttons, hold-to-seek, settings, browsing.
   const pl = $('au-players');
+  // "toggle" does not bubble: caught on the way down, it says which players have their extras open.
+  pl.addEventListener('toggle', e => {
+    if (e.target.classList.contains('pl-more')) au.plOpen[e.target.dataset.path] = e.target.open;
+  }, true);
   pl.onchange = e => {
     volume(e);
     const s = e.target.closest('select[data-path]');
@@ -761,7 +790,7 @@ function setupAudio() {
     const src = sourceFromForm();
     const sink = chosenSink();
     const listen = $('st-listen').checked;
-    if (!sink && !listen) { setText($('st-msg'), 'Choose where to play it, or tick "listen in this browser".'); return; }
+    if (!sink && !listen) { setText($('st-msg'), 'Choose an output in "Play to", or turn on "Also listen in this browser".'); return; }
     startStream(src, sink, listen).catch(() => {});
   };
 
@@ -809,7 +838,7 @@ function setupAudio() {
     if (!b) return;
     const s = au.radio[parseInt(b.dataset.play != null ? b.dataset.play : b.dataset.hear, 10)];
     if (!s) return;
-    if (b.dataset.play != null && !chosenSink()) { toast('Choose a sink in "Play to" above (or use listen).'); return; }
+    if (b.dataset.play != null && !chosenSink()) { toast('Choose an output in "Play to" above first, or use Listen.'); return; }
     playUrl(s.url, s.name, b.dataset.hear != null || $('st-listen').checked);
   };
   $('rd-edit').onclick = () => {
@@ -848,7 +877,7 @@ function setupAudio() {
     if (!p) return;
     const hear = p.dataset.itemHear != null;
     const it = au.upnp.items[parseInt(hear ? p.dataset.itemHear : p.dataset.item, 10)];
-    if (!hear && !chosenSink()) { toast('Choose a sink in "Play to" above (or use listen).'); return; }
+    if (!hear && !chosenSink()) { toast('Choose an output in "Play to" above first, or use Listen.'); return; }
     playUrl(it.url, [it.artist, it.title].filter(Boolean).join(' — '), hear || $('st-listen').checked);
   };
 }
