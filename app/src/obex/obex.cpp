@@ -977,7 +977,7 @@ bool ObexManager::op(const std::string& session_id, const json& body, json* out,
       append = [h](sd_bus_message* m) { return sd_bus_message_append(m, "s", h.c_str()); };
       shape = Shape::Images;
     } else if (op == "thumbnail" || op == "get") {
-      const std::string f = in_file("image-" + safe_name(h) + (op == "thumbnail" ? "-thumb.jpg" : ".img"));
+      const std::string f = in_file("image-" + safe_name(h) + (op == "thumbnail" ? "-thumb.jpg" : ".jpg"));
       if (op == "thumbnail") {
         method = "GetThumbnail";
         append = [f, h](sd_bus_message* m) { return sd_bus_message_append(m, "ss", f.c_str(), h.c_str()); };
@@ -1054,6 +1054,33 @@ bool ObexManager::transfer_action(const std::string& id, const std::string& acti
 
 // ---- cover art ----------------------------------------------------------------------------------
 
+// A device's BIP responder takes one connection: any open bip-avrcp session to it is the one to
+// use — ours from before, or one opened by hand on the OBEX tab — and a second CreateSession
+// would be refused (OBEX 0x53, service unavailable).
+bool ObexManager::cover_session(const std::string& address, uint16_t psm, std::string* sid, std::string* err,
+                                int* status) {
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    for (const auto& [path, p] : sessions_) {
+      const std::string t = session_meta_.count(path) ? str(session_meta_.at(path), "target") : target_name(str(p, "Target"));
+      if (t == "bip-avrcp" && upper(str(p, "Destination")) == upper(address)) {
+        *sid = transfer_id(path);
+        return true;
+      }
+    }
+  }
+  json s;
+  if (!create_session(address, "bip-avrcp", json{{"psm", psm}}, &s, err, status)) return false;
+  *sid = s["id"].get<std::string>();
+  return true;
+}
+
+bool ObexManager::cover_connect(const std::string& address, uint16_t psm, std::string* err, int* status) {
+  std::lock_guard<std::mutex> guard(cover_m_);
+  std::string sid;
+  return cover_session(address, psm, &sid, err, status);
+}
+
 bool ObexManager::cover_art(const std::string& address, uint16_t psm, const std::string& handle, bool thumbnail,
                             std::string* file, std::string* err, int* status) {
   if (handle.empty() || handle.size() > 16 || handle.find_first_not_of("0123456789") != std::string::npos) {
@@ -1071,23 +1098,11 @@ bool ObexManager::cover_art(const std::string& address, uint16_t psm, const std:
   // OBEX connect each time the track changes.
   std::lock_guard<std::mutex> guard(cover_m_);
   std::string sid;
-  auto it = cover_sessions_.find(address);
-  if (it != cover_sessions_.end()) {
-    std::lock_guard<std::mutex> lk(m_);
-    if (sessions_.count("/org/bluez/obex/client/" + it->second)) sid = it->second;
-  }
-  if (sid.empty()) {
-    json s;
-    if (!create_session(address, "bip-avrcp", json{{"psm", psm}}, &s, err, status)) return false;
-    sid = s["id"].get<std::string>();
-    cover_sessions_[address] = sid;
-  }
+  if (!cover_session(address, psm, &sid, err, status)) return false;
   const std::string name = local.substr(local.rfind('/') + 1);
   json t;
-  if (!op(sid, json{{"op", thumbnail ? "thumbnail" : "get"}, {"handle", handle}, {"file", "cover/" + name}}, &t, err, status)) {
-    cover_sessions_.erase(address);
+  if (!op(sid, json{{"op", thumbnail ? "thumbnail" : "get"}, {"handle", handle}, {"file", "cover/" + name}}, &t, err, status))
     return false;
-  }
   // in_file() refused "cover/x" as a name (a separator) and used its fallback; find the file the
   // transfer writes from its Filename instead, and wait for the transfer to end.
   const std::string tid = t.value("id", std::string{});

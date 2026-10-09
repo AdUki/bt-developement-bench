@@ -180,6 +180,10 @@ class AudioEngine {
   std::mutex ep_m_;
   nlohmann::json ep_cache_;
   int64_t ep_at_ms_ = 0;
+  nlohmann::json devices_uncached();
+  std::mutex dev_m_;
+  nlohmann::json dev_cache_;
+  int64_t dev_at_ms_ = 0;
 
   std::atomic<bool> running_{true};
   std::mutex pub_m_;

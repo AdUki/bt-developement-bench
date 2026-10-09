@@ -66,6 +66,10 @@ void reply_error(httplib::Response& res, const BtCallResult& r) {
 // a second, or not at all.
 constexpr int kPlayerTimeoutMs = 5000;
 
+// A listing asks for the first hundred items. Without a range BlueZ asks for everything, and a
+// phone (a Samsung, seen) answers with its now-playing list over and over until the count is met.
+const DDict kListRange{{"Start", DVar::u32(0)}, {"End", DVar::u32(99)}};
+
 bool media_object(const json& objs, const std::string& path, const char* iface) {
   return objs.contains(path) && objs[path].contains(iface);
 }
@@ -375,7 +379,7 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
       if (!r.ok) return reply_error(res, r);
     }
     const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
-      return append_dict(m, DDict{});
+      return append_dict(m, kListRange);
     }, kPlayerTimeoutMs);
     if (!r.ok) return reply_error(res, r);
     d.bt.touch();
@@ -403,10 +407,10 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     const std::string folder = !r.reply.empty() && r.reply[0].is_string() ? r.reply[0].get<std::string>() : path;
     // The results are a folder of their own; some stacks list them through the player instead.
     BtCallResult l = d.bt.call(folder, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
-      return append_dict(m, DDict{});
+      return append_dict(m, kListRange);
     }, kPlayerTimeoutMs);
     if (!l.ok && folder != path)
-      l = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) { return append_dict(m, DDict{}); },
+      l = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) { return append_dict(m, kListRange); },
                     kPlayerTimeoutMs);
     if (!l.ok) return reply_error(res, l);
     d.bt.touch();

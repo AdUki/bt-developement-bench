@@ -464,7 +464,8 @@ function playerCard(p, transports) {
       ${pill(p.status || 'unknown', playing ? 'good' : p.status === 'paused' ? 'warn' : '')}</div>
     <div class="pl-track">
       ${p.obex_port != null && t.img_handle ? `<img class="cover" alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}"
-        onerror="this.hidden=true">` : ''}
+        onerror="coverRetry(this)">` : ''}
+      ${p.obex_port != null && !t.img_handle ? coverConnect(p) : ''}
       <div class="pl-title">${esc(t.title || 'no track')}</div>
       <div class="small">${esc([t.artist, t.album].filter(Boolean).join(' — '))}</div>
       <div class="small muted">${esc([t.genre, num].filter(Boolean).join(' · '))}</div>
@@ -512,6 +513,25 @@ function browse(player, folder, push) {
     b.folder = r.folder || folder || '';
     if (au.media) renderPlayers(au.media);
   }).catch(fail);
+}
+
+// The first image of a player can be asked for while its BIP channel is still opening: try once
+// more a few seconds later before giving up on it.
+function coverRetry(img) {
+  if (img.dataset.retried) { img.hidden = true; return; }
+  img.dataset.retried = '1';
+  setTimeout(() => { img.src = img.src.replace(/&r=\d+$/, '') + '&r=' + Date.now(); }, 3000);
+}
+
+// A player with cover art but no image handle yet: the phone sends handles only while a BIP
+// channel is open, so open one (once per player); the next track info then carries a handle.
+function coverConnect(p) {
+  au.coverAsked = au.coverAsked || {};
+  if (!au.coverAsked[p.path]) {
+    au.coverAsked[p.path] = true;
+    fetch('/api/media/players/cover?path=' + encodeURIComponent(p.path)).catch(() => {});
+  }
+  return '';
 }
 
 function renderPlayers(m) {
@@ -856,8 +876,13 @@ registerTab('audio', {
   onMessage(topic, data) {
     if (currentTab !== 'audio') return;
     if (topic === 'media') {
-      clearTimeout(au.cdTimer);
-      au.cdTimer = setTimeout(refreshCodecs, 1500);
+      // The codec list changes when a device's transports do, not with every track position.
+      const key = data.transports.map(t => t.path + t.state + t.configuration).join();
+      if (key !== au.cdKey) {
+        au.cdKey = key;
+        clearTimeout(au.cdTimer);
+        au.cdTimer = setTimeout(refreshCodecs, 1500);
+      }
       // Not under a volume drag: the rebuild would take the slider from under the pointer.
       const ae = document.activeElement;
       if (!(ae && ae.type === 'range' && !$('au-players').contains(ae))) renderMedia(data);

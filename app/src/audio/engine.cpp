@@ -1102,6 +1102,18 @@ json AudioEngine::endpoints(bool fresh) {
 // ---- codec picker -------------------------------------------------------------------------------
 
 json AudioEngine::devices() {
+  // One pw-dump at a time, and its answer reused for two seconds: every console on the Audio tab
+  // asks on each media update, and on a Zero W a pw-dump per request piles up to the HTTP pool's
+  // size in concurrent ones (seen: load 30, the board unreachable).
+  std::lock_guard<std::mutex> lk(dev_m_);
+  const int64_t now = mono_ms();
+  if (!dev_cache_.is_null() && now - dev_at_ms_ < 2000) return dev_cache_;
+  dev_cache_ = devices_uncached();
+  dev_at_ms_ = mono_ms();
+  return dev_cache_;
+}
+
+json AudioEngine::devices_uncached() {
   if (tools_.pw_dump.empty())
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "codecs are picked through PipeWire, which is not installed"}};
@@ -1126,7 +1138,12 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
     *err = "wpctl is not installed";
     return false;
   }
-  const json all = devices();
+  json all;
+  {
+    std::lock_guard<std::mutex> lk(dev_m_);
+    all = dev_cache_ = devices_uncached();
+    dev_at_ms_ = mono_ms();
+  }
   const json* dev = nullptr;
   for (const json& d : all["devices"])
     if (d["id"] == device_id) dev = &d;
@@ -1168,7 +1185,12 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
   for (int i = 0; i < 20; ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     // Held by name: a range-for over devices()["devices"] would walk a destroyed temporary.
-    const json now = devices();
+    json now;
+    {
+      std::lock_guard<std::mutex> lk(dev_m_);
+      now = dev_cache_ = devices_uncached();
+      dev_at_ms_ = mono_ms();
+    }
     for (const json& d : now["devices"])
       if (d["id"] == device_id) *out = d;
     if (out->is_object() && (*out)["active"].is_object() && (*out)["active"]["name"] == want) return true;

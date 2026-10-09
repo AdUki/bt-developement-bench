@@ -223,9 +223,10 @@ void test_seeded_mid_stream() {
       CHECK_EQ(b.pkts[9]["lat_ms"], 120.0);
       CHECK_EQ(b.pkts[11]["lat_ms"], 118.0);
     } else {
-      // Unseeded, the media channel is just a CID.
-      CHECK_EQ(b.pkts[0]["proto"], "l2cap");
-      CHECK(b.pkts[0]["psm"].is_null());
+      // Unseeded, the channel's setup was never seen; its packets still say RTP, which is
+      // enough to call it AVDTP media.
+      CHECK_EQ(b.pkts[0]["proto"], "rtp");
+      CHECK_EQ(b.pkts[0]["psm"], kPsmAvdtp);
     }
   }
 

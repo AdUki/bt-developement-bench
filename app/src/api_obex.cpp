@@ -152,7 +152,15 @@ void install_obex_routes(httplib::Server& svr, Deps& d) {
       if (p["path"] != path) continue;
       const std::string handle = p["track"].value("img_handle", std::string{});
       if (p["obex_port"].is_null()) return send_error(res, 404, "the player offers no cover art (no ObexPort)");
-      if (handle.empty()) return send_error(res, 404, "the current track has no image");
+      if (handle.empty()) {
+        // No handle yet: the phone sends them only once a BIP channel is open. Open it, so the
+        // next track info carries one (the console asks again on the next media update).
+        std::string err;
+        int status = 502;
+        if (!o.cover_connect(p["address"].get<std::string>(), p["obex_port"].get<uint16_t>(), &err, &status))
+          return send_error(res, status, err);
+        return send_error(res, 404, "no image for this track yet: the cover-art channel is open, the next track info carries a handle");
+      }
       std::string file, err;
       int status = 502;
       if (!o.cover_art(p["address"].get<std::string>(), p["obex_port"].get<uint16_t>(), handle,

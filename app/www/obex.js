@@ -77,11 +77,20 @@ const OPS = {
   map: `<button data-op="folder" data-name="">root</button><button data-op="folder" data-name="telecom/msg">telecom/msg</button>
         <button data-op="list_folders">folders</button>
         <input class="ob-arg narrow" placeholder="inbox"><button data-op="list">messages</button>`,
-  'bip-avrcp': `<input class="ob-arg narrow" placeholder="handle" value="1000001">
+  'bip-avrcp': `<input class="ob-arg narrow" placeholder="image handle">
         <button data-op="properties">properties</button><button data-op="thumbnail">thumbnail</button><button data-op="get">image</button>`,
 };
 
 const TARGET_NAMES = {opp: 'Object Push', ftp: 'File Transfer', pbap: 'Phonebook', map: 'Messages', 'bip-avrcp': 'Cover art (BIP)'};
+
+// A cover-art session's handle box starts with the image of the track the device plays now.
+function prefillHandle(el, address) {
+  api('/media').then(m => {
+    const p = m.players.find(pl => pl.address === address && pl.track && pl.track.img_handle);
+    const box = el.querySelector('.ob-arg');
+    if (p && box && !box.value) box.value = p.track.img_handle;
+  }).catch(() => {});
+}
 
 function sessionCard(x) {
   const el = document.createElement('div');
@@ -94,6 +103,7 @@ function sessionCard(x) {
     <div class="ops">${OPS[x.target] || ''}</div>
     <div class="ob-path small muted"></div>
     <div class="result small"></div>`;
+  if (x.target === 'bip-avrcp') prefillHandle(el, x.destination);
   return el;
 }
 
@@ -127,8 +137,19 @@ function renderOpResult(el, op, r) {
     // A transfer: it shows in Transfers; a finished image is shown here too.
     showResult(el, `started ${esc(r.id)} (${esc(r.name || r.filename.split('/').pop())}) — see Transfers`);
     if (t === 'bip-avrcp') {
+      // Shown once the transfer has finished, or its failure (a handle the phone does not know
+      // ends in an error, not in an image).
       const file = r.filename.split('/').pop();
-      setTimeout(() => showResult(el, `<img class="cover" style="float:none" src="/api/obex/files/in/${encodeURIComponent(file)}?t=${Date.now()}" alt="cover"> ${esc(file)}`), 1500);
+      const started = Date.now();
+      const wait = () => {
+        const tr = ob.state && ob.state.transfers.find(x => x.id === r.id);
+        if (tr && tr.status === 'complete')
+          return showResult(el, `<img class="cover" style="float:none" src="/api/obex/files/in/${encodeURIComponent(file)}?t=${Date.now()}" alt="cover"> ${esc(file)} (${fmtBytes(tr.transferred)})`);
+        if (tr && tr.status === 'error') return showResult(el, `<span class="bad-text">the phone did not send the image (is the handle current?)</span>`);
+        if (Date.now() - started > 20000) return showResult(el, '<span class="bad-text">no image after 20 s</span>');
+        setTimeout(() => refreshObex().then(wait), 700);
+      };
+      wait();
     }
   } else {
     showResult(el, '<span class="good-text">ok</span>');

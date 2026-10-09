@@ -222,7 +222,7 @@ const livePkts = (() => {
     else if (lp.paused) bits.push('paused');
     else if (lp.connected) bits.push('live');
     else bits.push('connecting…');
-    bits.push(`${lp.shown.toLocaleString()} shown`);
+    bits.push(`${lp.shown.toLocaleString()} shown` + (lp.scanned ? ` of ${lp.scanned.toLocaleString()} seen` : ''));
     if (lp.dropped) bits.push(`${lp.dropped.toLocaleString()} dropped`);
     if (lp.skipped) bits.push(`${lp.skipped.toLocaleString()} skipped`);
     if (lp.held.length) bits.push(`${lp.held.length.toLocaleString()} new rows held: scroll to the bottom to follow`);
@@ -297,6 +297,9 @@ const livePkts = (() => {
           lp.skipped += Math.max(0, ns);
         }
         lp.base = {dropped: s.dropped, skipped: s.skipped};
+        // How much went past the filter: "0 shown" then reads as a filter that matches nothing,
+        // not as a stream that is stuck.
+        if (s.scanned != null) lp.scanned = s.scanned;
         continue;
       }
       lp.lastSeq = Math.max(lp.lastSeq, o.seq);
@@ -377,7 +380,7 @@ const livePkts = (() => {
     body.innerHTML = '<div class="cv-empty muted small">Waiting for packets…</div>';
     body._html = null;
     lp.held = [];
-    lp.shown = lp.dropped = lp.skipped = 0;
+    lp.shown = lp.dropped = lp.skipped = lp.scanned = 0;
   }
 
   function applyFilter(f) {

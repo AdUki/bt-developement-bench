@@ -890,12 +890,29 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
           if (std::strcmp(ci.type, "acl") == 0 && ci.peer.empty()) ci.type = "le";
         }
       } else {
+        bool known = false;
         for (const auto& ch : l->chans) {
           if (ch.open && (tx ? ch.rcid : ch.lcid) == cid) {
             e.psm = ch.psm;
             e.proto = ch.proto;
+            known = true;
             break;
           }
+        }
+        // A channel whose setup we never saw (it was open before the capture or the daemon
+        // started): an A2DP media channel still says what it is in every packet — RTP version 2,
+        // no padding/extension/CSRCs, a dynamic payload type. Remembered as AVDTP media for this
+        // direction, so proto:rtp and the media decoding work on links opened earlier.
+        const uint8_t* rq = p + 4;
+        if (!known && !l->le && n >= 4 + 12 && le16(p) >= 12 && rq[0] == 0x80 && (rq[1] & 0x7f) >= 96) {
+          State::Chan ch;
+          (tx ? ch.rcid : ch.lcid) = cid;
+          ch.psm = kPsmAvdtp;
+          ch.proto = kProtoRtp;
+          ch.open = true;
+          if (l->chans.size() < 32) l->chans.push_back(ch);
+          e.psm = ch.psm;
+          e.proto = ch.proto;
         }
       }
       const uint8_t* q = p + 4;
