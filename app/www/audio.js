@@ -590,13 +590,15 @@ function playerAction(path, action) {
 // connected but not streaming (its transport idle — it fell back to its own speaker after a
 // reconnect, say) has no capture node: it is asked over AVRCP to play again, which makes it open
 // the stream, and the node is waited for (a few seconds) before giving up.
-function listenToDevice(address) {
+// `onStream`: the caller plays the stream itself (the Listen view's media element) instead of
+// Web Audio here.
+function listenToDevice(address, onStream) {
   const find = ep => ep && ep.sources.find(e => e.address && e.address.toUpperCase() === address.toUpperCase());
   // The AudioContext comes from the click itself, before any wait.
-  const ctx = newAudioContext();
+  const ctx = onStream ? {close() {}} : newAudioContext();
   if (!ctx) return;
-  const go = src => startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, true,
-    {rate: src.rate || 48000}, ctx).catch(() => {});
+  const go = src => startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, !onStream,
+    {rate: src.rate || 48000}, onStream ? null : ctx).then(s => { if (onStream) onStream(s); }).catch(() => {});
   const src = find(au.endpoints);
   if (src) return go(src);
   const m = au.media || (typeof pl !== 'undefined' ? pl.media : null);

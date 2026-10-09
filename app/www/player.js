@@ -115,6 +115,8 @@ function renderNowPlaying() {
     (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : ''));
   renderTime(pos, dur);
   renderVolume(c);
+  setMediaSession();
+  setText($('np-hear'), pl.hearId ? 'Stop listening here' : 'Listen in this browser');
   // The output only means something for what the board plays.
   $('np-out-row').hidden = c.kind === 'phone';
   $('np-hear').hidden = c.kind !== 'phone';
@@ -138,10 +140,7 @@ function volumeTarget(c) {
   }
   if (c.kind === 'board') {
     const s = c.s;
-    if (!s.sink) {
-      const l = au.listeners[s.id];
-      return l ? {kind: 'browser', id: s.id, value: Math.round(l.gain.gain.value * 100)} : null;
-    }
+    if (!s.sink) return pl.hearId === s.id ? {kind: 'browser', value: Math.round(npAudio.volume * 100)} : null;
     const ep = pl.endpoints && pl.endpoints.sinks.find(e => e.id === s.sink.target);
     const t = ep && ep.address && ts.find(x => x.address && x.address.toUpperCase() === ep.address.toUpperCase() && x.volume != null);
     if (t) return {kind: 'transport', path: t.path, value: Math.round(t.volume / 127 * 100)};
@@ -161,7 +160,7 @@ function setVolume(value) {
   const v = pl.vol;
   if (!v) return;
   if (v.kind === 'transport') put('/media/transport', {path: v.path, volume: Math.round(value / 100 * 127)}).catch(fail);
-  else if (v.kind === 'browser') { const l = au.listeners[v.id]; if (l) l.gain.gain.value = value / 100; }
+  else if (v.kind === 'browser') npAudio.volume = value / 100;
   // 0..100 as -60..0 dB on a square-law curve: the slider's middle is about half as loud.
   else put(`/audio/streams/${v.id}`, {gain_db: value <= 0 ? -60 : Math.max(-60, 40 * Math.log10(value / 100))}).catch(fail);
 }
@@ -172,11 +171,86 @@ function npAction(a) {
   if (c.kind !== 'board') return;
   const s = c.s;
   if (a === 'stop') {
-    stopListening(s.id);
+    hearStop();
     return del(`/audio/streams/${s.id}`).catch(fail);
   }
   const body = a === 'play' ? {paused: false} : a === 'pause' ? {paused: true} : {[a]: true};
+  // Heard here: the element pauses with the board, and plays again from a fresh connection (what
+  // it buffered while paused is stale silence).
+  if (pl.hearId === s.id) {
+    if (a === 'pause') npAudio.pause();
+    if (a === 'play') hearConnect();
+  }
   put(`/audio/streams/${s.id}`, body).catch(fail);
+}
+
+// ---------------------------------------------------------------- hearing it in this browser
+
+// What this view plays in the browser goes through one <audio> element, not Web Audio: a media
+// element keeps playing with the page in the background (Android stops a page's scripts, which
+// feed Web Audio, seconds after the home button), it buffers a few seconds against Wi-Fi hiccups,
+// and with the Media Session it puts title, art and the transport keys on the lock screen. The
+// bench views keep Web Audio, for its low latency and the spectrum.
+const npAudio = new Audio();
+npAudio.preload = 'none';
+pl.hearId = null;
+
+function hear(id) {
+  pl.hearId = id;
+  hearConnect();
+  setMediaSession();
+}
+
+function hearConnect() {
+  if (!pl.hearId) return;
+  pl.heardAt = Date.now();
+  npAudio.src = `/api/audio/streams/${pl.hearId}/listen?c=${Date.now()}`;
+  npAudio.play().catch(e => toast('This browser would not play: ' + e.message + ' (tap play)'));
+}
+
+function hearStop() {
+  pl.hearId = null;
+  npAudio.pause();
+  npAudio.removeAttribute('src');
+  npAudio.load();
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+}
+
+// The connection dropped (the board restarted the stream, Wi-Fi went away) or the page was in the
+// background long enough for the browser to let it go: connect again if the stream still plays.
+function hearCheck() {
+  if (!pl.hearId) return;
+  const s = pl.streams.find(x => x.id === pl.hearId);
+  if (!s || (s.state !== 'running' && s.state !== 'starting')) { hearStop(); renderNowPlaying(); return; }
+  if (s.paused) return;
+  const stuck = npAudio.paused || npAudio.ended || npAudio.error || npAudio.readyState < 2;
+  if (stuck && Date.now() - pl.heardAt > 4000) hearConnect();
+}
+['error', 'ended', 'stalled'].forEach(ev => npAudio.addEventListener(ev, () => setTimeout(hearCheck, 1000)));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { pl.heardAt = 0; hearCheck(); } });
+
+// The lock screen and the notification: what plays, and the keys, which act on the board.
+function setMediaSession() {
+  if (!('mediaSession' in navigator) || !pl.hearId) return;
+  const c = current();
+  const title = $('np-title').textContent, artist = $('np-sub').textContent;
+  const img = $('np-art').querySelector('img');
+  const key = title + '|' + artist + '|' + (img ? img.src : '');
+  if (pl.msKey !== key) {
+    pl.msKey = key;
+    navigator.mediaSession.metadata = new MediaMetadata({title, artist, album: 'btbench',
+      artwork: img ? [{src: img.src, sizes: '512x512'}] : []});
+  }
+  const playing = c.kind === 'board' ? !c.s.paused : c.kind === 'phone' && c.p.status === 'playing';
+  navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+}
+if ('mediaSession' in navigator) {
+  const on = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) { /* not this browser */ } };
+  on('play', () => npAction('play'));
+  on('pause', () => npAction('pause'));
+  on('stop', () => npAction('stop'));
+  on('nexttrack', () => npAction('next'));
+  on('previoustrack', () => npAction('previous'));
 }
 
 // ---------------------------------------------------------------- the queue
@@ -335,20 +409,19 @@ function playOnBoard(items) {
   const sink = listen ? null : out === 'default' ? {type: 'pipewire', target: ''} : {type: out.split(':')[0], target: out.slice(out.indexOf(':') + 1)};
   const old = boardStream();
   const go = () => {
-    const ctx = listen ? newAudioContext() : null;
     return post('/audio/streams', {source: {type: 'url', url: items[0].url, title: items[0].title, playlist: items.map(it => ({url: it.url, title: it.title}))},
       sink, rate: 48000, channels: 2, label: items.length > 1 ? items[0].title + ' and ' + (items.length - 1) + ' more' : items[0].title})
       .then(s => {
         pl.boardId = s.id;
         pl.src = 'board';
         lsSet('btbench.pl.src', 'board');
-        if (listen) startListening(s.id, ctx);
+        if (listen) hear(s.id);
         refreshPlayerStreams();
-      }).catch(e => { if (ctx) ctx.close(); fail(e); });
+      }).catch(fail);
   };
   // One thing at a time from here: what the board played before stops.
   if (old) {
-    stopListening(old.id);
+    hearStop();
     del(`/audio/streams/${old.id}`).catch(() => {}).then(go);
   } else {
     go();
@@ -405,7 +478,10 @@ function setupPlayer() {
   $('np-out').onchange = e => lsSet('btbench.pl.out', e.target.value);
   $('np-hear').onclick = () => {
     const c = current();
-    if (c.kind === 'phone') listenToDevice(c.p.address);
+    if (c.kind !== 'phone') return;
+    // A toggle: the second press stops it.
+    if (pl.hearId) return del(`/audio/streams/${pl.hearId}`).catch(() => {}).then(hearStop);
+    listenToDevice(c.p.address, s => hear(s.id));
   };
   $('np-queue').onclick = e => {
     const r = e.target.closest('.tr');
@@ -461,6 +537,7 @@ registerTab('player', {
     clearInterval(pl.tick);
     // The progress bar moves between the phone's updates.
     pl.tick = setInterval(() => {
+      if (Date.now() % 3000 < 500) hearCheck();
       const c = current();
       if (c.kind === 'phone' && c.p.status === 'playing') renderTime(playerPosition(c.p), (c.p.track || {}).duration_ms || 0);
     }, 500);
