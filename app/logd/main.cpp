@@ -85,11 +85,11 @@ int main(int argc, char** argv) {
   CLI::App app{"btbench-logd: the journal as one native-format text file per program (for clog)"};
   std::string dir = "/tmp/logs";
   long cap_kib = 2048;
-  unsigned backlog = 3000;
+  unsigned backlog = 1000;
   std::vector<std::string> links;
   app.add_option("--dir", dir, "Where the files go (default /tmp/logs)");
   app.add_option("--max-kib", cap_kib, "A file's size before it is rotated to <name>.1 (default 2048)");
-  app.add_option("--backlog", backlog, "Journal entries written at start, before following (default 3000)");
+  app.add_option("--backlog", backlog, "Journal entries written at start, before following (default 1000)");
   app.add_option("--link", links, "NAME=TARGET: a symbolic link in the directory (btsnoop=/data/btsnoop)");
   CLI11_PARSE(app, argc, argv);
 

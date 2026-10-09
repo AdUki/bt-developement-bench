@@ -8,7 +8,9 @@ Wants=systemd-journald.service
 Type=simple
 # /tmp is a tmpfs: the files live in RAM, 2 MiB each before they rotate once (.1). btsnoop links to
 # the capture ring, so everything a bug report needs is in one directory.
-ExecStart=/usr/bin/btbench-logd --dir /tmp/logs --max-kib 2048 --link btsnoop=/data/btsnoop
+# The backlog (what the files start with) is read from the journal on the SD card: 1000 entries
+# cost the Zero W about two seconds of CPU at boot, 3000 about seven.
+ExecStart=/usr/bin/btbench-logd --dir /tmp/logs --max-kib 2048 --backlog 1000 --link btsnoop=/data/btsnoop
 # A burst of BT_DBG (btbench-btdebug) must not take the core from what is being debugged.
 Nice=10
 Restart=always
