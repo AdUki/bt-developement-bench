@@ -55,9 +55,19 @@ bool gatt_find(const nlohmann::json& objs, const std::string& dev_path, uint16_t
 // Remote stream endpoints, transports and AVRCP players: {endpoints:[{path, device, address,
 // uuid, role, codec:{id, name, summary, ...decoded}, capabilities:"hex", delay_reporting}],
 // transports:[{path, device, address, uuid, profile, endpoint, state, codec:{...},
-// configuration:"hex", delay_ms|null, volume|null}], players:[{path, device, address, name,
-// status, track:{title,artist,album,duration_ms}, position_ms}]}.
+// configuration:"hex", delay_ms|null, volume|null}], players:[{path, device, address, name, type,
+// subtype, status, track:{title, artist, album, genre, track_number, number_of_tracks,
+// duration_ms, img_handle}, position_ms, repeat|null, shuffle|null, equalizer|null, scan|null,
+// browsable, searchable, transport|null, folder?:{name, items}, items:[{path, name, type,
+// folder_type, playable, metadata:{...as track}}]}]}.
 nlohmann::json model_media(const nlohmann::json& objs);
+
+// An AVRCP action as the API takes it ("play", "fast-forward", "press:0x44", ...) → the
+// MediaPlayer1 method, and for Press/Hold the key (else -1). False for anything else.
+bool player_method(const std::string& action, std::string* method, int* key);
+// MediaFolder1.ListItems' reply (as read_json gives it) → [{path, name, type, folder_type,
+// playable, title, artist, album, duration_ms}].
+nlohmann::json browse_items(const nlohmann::json& reply);
 
 // Class of Device's major class ("audio/video", "phone", ...), and an appearance in words.
 std::string class_major_name(uint32_t cod);

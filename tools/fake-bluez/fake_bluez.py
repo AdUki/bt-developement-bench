@@ -45,6 +45,8 @@ GATT_DSC = 'org.bluez.GattDescriptor1'
 ENDPOINT = 'org.bluez.MediaEndpoint1'
 TRANSPORT = 'org.bluez.MediaTransport1'
 PLAYER = 'org.bluez.MediaPlayer1'
+FOLDER = 'org.bluez.MediaFolder1'
+ITEM = 'org.bluez.MediaItem1'
 FAKE = 'org.btbench.Fake1'
 
 # The adapter the scripted world is in range of. --adapters 2 moves it to hci1 and puts an
@@ -1263,6 +1265,177 @@ class Transport(PropObject):
         pass
 
 
+# What a phone's AVRCP target looks like through BlueZ (org.bluez.MediaPlayer1, with the browsing
+# of MediaFolder1/MediaItem1): a playlist it plays through, with the methods a controller calls.
+# The position advances while playing and is published every 5 s, about as often as a phone sends
+# PLAYBACK_POS_CHANGED; between those, a console interpolates.
+TRACKS = [
+    ('Test Tone 1 kHz', 'btbench', 'Fakes', 'Test signals', 180000),
+    ('Pink Noise', 'btbench', 'Fakes', 'Test signals', 240000),
+    ('Silence (for the noise floor)', 'btbench', 'Fakes', 'Test signals', 60000),
+    ('Sweep 20 Hz - 20 kHz', 'btbench', 'Fakes', 'Test signals', 30000),
+]
+REPEAT = ('off', 'singletrack', 'alltracks', 'group')
+SHUFFLE = ('off', 'alltracks', 'group')
+
+
+class Player(PropObject):
+    def __init__(self, svc, path, dev):
+        self.index = 0
+        self.position = 42000
+        self.status = 'playing'
+        self.clock_at = time.monotonic()
+        p = {'Name': dbus.String('Music'), 'Type': dbus.String('Audio'), 'Subtype': dbus.String('Audio Book'),
+             'Status': dbus.String('playing'), 'Position': dbus.UInt32(42000),
+             'Device': dbus.ObjectPath(dev.path), 'Track': self.track(),
+             'Repeat': dbus.String('off'), 'Shuffle': dbus.String('off'),
+             'Browsable': dbus.Boolean(True), 'Searchable': dbus.Boolean(False),
+             'Playlist': dbus.ObjectPath(path + '/NowPlaying')}
+        w = {PLAYER + '.Repeat': lambda v: self.set_mode('Repeat', v, REPEAT),
+             PLAYER + '.Shuffle': lambda v: self.set_mode('Shuffle', v, SHUFFLE)}
+        super().__init__(svc, path, {PLAYER: p, FOLDER: {'Name': dbus.String('/NowPlaying'),
+                                                          'NumberOfItems': dbus.UInt32(len(TRACKS))}},
+                         writable=w, extra_ifaces=(INTROSPECT, PROPS))
+        self.items = []
+        for i, t in enumerate(TRACKS):
+            self.items.append(Item(svc, '%s/NowPlaying/item%d' % (path, i + 1), self, i))
+        self.timer = GLib.timeout_add_seconds(5, self.publish_position)
+
+    def track(self):
+        t = TRACKS[self.index]
+        return dbus.Dictionary({'Title': dbus.String(t[0]), 'Artist': dbus.String(t[1]),
+                                'Album': dbus.String(t[2]), 'Genre': dbus.String(t[3]),
+                                'Duration': dbus.UInt32(t[4]), 'TrackNumber': dbus.UInt32(self.index + 1),
+                                'NumberOfTracks': dbus.UInt32(len(TRACKS))}, signature='sv')
+
+    def stop_clock(self):
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+
+    def now_position(self):
+        if self.status == 'playing':
+            return self.position + int((time.monotonic() - self.clock_at) * 1000)
+        if self.status in ('forward-seek', 'reverse-seek'):
+            step = 4 if self.status == 'forward-seek' else -4
+            return max(0, self.position + int((time.monotonic() - self.clock_at) * 1000 * step))
+        return self.position
+
+    def settle(self):
+        self.position = min(self.now_position(), TRACKS[self.index][4])
+        self.clock_at = time.monotonic()
+
+    def publish_position(self):
+        self.settle()
+        if self.position >= TRACKS[self.index][4] and self.status == 'playing':
+            self.go(1 if self.ifaces[PLAYER]['Repeat'] != 'singletrack' else 0)
+        self.update(PLAYER, Position=dbus.UInt32(self.position))
+        return True
+
+    def set_status(self, status):
+        self.settle()
+        self.status = status
+        log('player %s: %s' % (self.path, status))
+        self.update(PLAYER, Status=dbus.String(status), Position=dbus.UInt32(self.position))
+
+    def go(self, step):
+        self.index = (self.index + step) % len(TRACKS)
+        self.position = 0
+        self.clock_at = time.monotonic()
+        log('player %s: track %d %s' % (self.path, self.index + 1, TRACKS[self.index][0]))
+        self.update(PLAYER, Track=self.track(), Position=dbus.UInt32(0))
+
+    def set_mode(self, name, v, allowed):
+        if str(v) not in allowed:
+            raise dbus.DBusException('Invalid arguments in method call',
+                                     name='org.freedesktop.DBus.Error.InvalidArgs')
+        self.update(PLAYER, **{name: dbus.String(str(v))})
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Play(self):
+        self.set_status('playing')
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Pause(self):
+        self.set_status('paused')
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Stop(self):
+        self.set_status('stopped')
+        self.position = 0
+        self.update(PLAYER, Position=dbus.UInt32(0))
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Next(self):
+        self.go(1)
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Previous(self):
+        # As phones do: back to the start of the track unless it has only just begun.
+        self.settle()
+        if self.position > 3000:
+            self.position = 0
+            self.update(PLAYER, Position=dbus.UInt32(0))
+        else:
+            self.go(-1)
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def FastForward(self):
+        self.set_status('forward-seek')
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Rewind(self):
+        self.set_status('reverse-seek')
+
+    @dbus.service.method(PLAYER, in_signature='y', out_signature='')
+    def Press(self, key):
+        # The AV/C operation ids of the keys above (Play 0x44, Stop 0x45, Pause 0x46, ...).
+        keys = {0x44: self.Play, 0x45: self.Stop, 0x46: self.Pause, 0x4b: self.Next, 0x4c: self.Previous}
+        log('player %s: Press 0x%02x' % (self.path, int(key)))
+        if int(key) in keys:
+            keys[int(key)]()
+        elif int(key) not in (0x41, 0x42):  # volume up/down: the transport's business
+            raise err('NotSupported', 'Operation is not supported')
+
+    @dbus.service.method(PLAYER, in_signature='y', out_signature='')
+    def Hold(self, key):
+        log('player %s: Hold 0x%02x' % (self.path, int(key)))
+
+    @dbus.service.method(PLAYER, in_signature='', out_signature='')
+    def Release(self):
+        log('player %s: Release' % self.path)
+        if self.status in ('forward-seek', 'reverse-seek'):
+            self.set_status('playing')
+
+    @dbus.service.method(FOLDER, in_signature='a{sv}', out_signature='a{oa{sv}}')
+    def ListItems(self, flt):
+        return dbus.Dictionary({dbus.ObjectPath(i.path): dbus.Dictionary(i.ifaces[ITEM], signature='sv')
+                                for i in self.items}, signature='oa{sv}')
+
+    @dbus.service.method(FOLDER, in_signature='o', out_signature='')
+    def ChangeFolder(self, folder):
+        if not str(folder).endswith('/NowPlaying'):
+            raise err('InvalidArguments', 'Invalid arguments in method call')
+
+
+class Item(PropObject):
+    def __init__(self, svc, path, player, index):
+        self.player = player
+        self.index = index
+        t = TRACKS[index]
+        super().__init__(svc, path, {ITEM: {
+            'Player': dbus.ObjectPath(player.path), 'Name': dbus.String(t[0]), 'Type': dbus.String('audio'),
+            'Playable': dbus.Boolean(True),
+            'Metadata': dbus.Dictionary({'Title': dbus.String(t[0]), 'Artist': dbus.String(t[1]),
+                                         'Album': dbus.String(t[2]), 'Duration': dbus.UInt32(t[4])},
+                                        signature='sv')}}, extra_ifaces=(INTROSPECT, PROPS))
+
+    @dbus.service.method(ITEM, in_signature='', out_signature='')
+    def Play(self):
+        self.player.go(self.index - self.player.index)
+        self.player.set_status('playing')
+
+
 class Media:
     """What an A2DP connection brings: the device's stream endpoints, a configured transport, and
     for a phone its AVRCP player. No audio behind any of it: Acquire is refused."""
@@ -1295,13 +1468,9 @@ class Media:
                       'idle' if playback else 'pending', 1500 if playback else None)
         objs.append(t)
         if not playback:
-            objs.append(PropObject(s, dev.path + '/player0', {PLAYER: {
-                'Name': dbus.String('Music'), 'Type': dbus.String('Audio'), 'Subtype': dbus.String('Audio Book'),
-                'Status': dbus.String('playing'), 'Position': dbus.UInt32(42000),
-                'Device': dbus.ObjectPath(dev.path),
-                'Track': dbus.Dictionary({'Title': dbus.String('Test Tone 1 kHz'), 'Artist': dbus.String('btbench'),
-                                          'Album': dbus.String('Fakes'), 'Duration': dbus.UInt32(180000)},
-                                         signature='sv')}}, extra_ifaces=(INTROSPECT, PROPS)))
+            player = Player(s, dev.path + '/player0', dev)
+            objs.append(player)
+            objs.extend(player.items)
         for o in objs:
             s.root.add(o)
         self.objs[dev.path] = objs
@@ -1318,6 +1487,8 @@ class Media:
 
     def remove_for(self, dev):
         for o in reversed(self.objs.pop(dev.path, [])):
+            if isinstance(o, Player):
+                o.stop_clock()
             self.svc.root.remove(o)
 
     def set_state(self, dev, state):

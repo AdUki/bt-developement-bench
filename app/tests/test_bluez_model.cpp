@@ -162,6 +162,63 @@ void test_media() {
   CHECK_EQ(t["configuration"].get<std::string>(), std::string("11150235"));
 }
 
+void test_players() {
+  const json objs = json::parse(R"({
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01": {"org.bluez.Device1": {"Address": "5C:E9:1E:22:40:01"}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/sep1/fd0": {"org.bluez.MediaTransport1": {
+      "Device": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01", "UUID": "0000110b-0000-1000-8000-00805f9b34fb",
+      "Codec": 0, "Configuration": [17, 21, 2, 53], "State": "active", "Volume": 90}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/player0": {
+      "org.bluez.MediaPlayer1": {"Device": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01", "Name": "Music",
+        "Status": "paused", "Position": 1500, "Repeat": "alltracks", "Browsable": true,
+        "Track": {"Title": "T", "Artist": "A", "TrackNumber": 3, "NumberOfTracks": 4294967295,
+                  "Duration": 4294967295}},
+      "org.bluez.MediaFolder1": {"Name": "/NowPlaying", "NumberOfItems": 2}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/player0/NowPlaying/item10": {"org.bluez.MediaItem1": {
+      "Player": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/player0", "Name": "Ten", "Type": "audio", "Playable": true}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/player0/NowPlaying/item2": {"org.bluez.MediaItem1": {
+      "Player": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/player0", "Name": "Two", "Type": "audio",
+      "Metadata": {"Title": "Two", "Duration": 1000}}}
+  })");
+  const json m = model_media(objs);
+  CHECK_EQ(m["players"].size(), size_t(1));
+  const json& p = m["players"][0];
+  CHECK_EQ(p["status"].get<std::string>(), std::string("paused"));
+  CHECK_EQ(p["repeat"].get<std::string>(), std::string("alltracks"));
+  CHECK(p["shuffle"].is_null());  // not offered by this player
+  CHECK(p["browsable"].get<bool>());
+  CHECK_EQ(p["track"]["track_number"].get<int>(), 3);
+  CHECK(p["track"]["number_of_tracks"].is_null());  // all ones: unknown
+  CHECK_EQ(p["track"]["duration_ms"].get<int>(), 0);
+  CHECK_EQ(p["transport"].get<std::string>(), std::string("/org/bluez/hci0/dev_5C_E9_1E_22_40_01/sep1/fd0"));
+  CHECK_EQ(p["folder"]["items"].get<int>(), 2);
+  // Items in listing order: item2 before item10.
+  CHECK_EQ(p["items"].size(), size_t(2));
+  CHECK_EQ(p["items"][0]["name"].get<std::string>(), std::string("Two"));
+  CHECK_EQ(p["items"][0]["metadata"]["duration_ms"].get<int>(), 1000);
+  CHECK(p["items"][1]["playable"].get<bool>());
+
+  std::string method;
+  int key = 0;
+  CHECK(player_method("fast-forward", &method, &key));
+  CHECK_EQ(method, std::string("FastForward"));
+  CHECK_EQ(key, -1);
+  CHECK(player_method("press:0x44", &method, &key));
+  CHECK_EQ(method, std::string("Press"));
+  CHECK_EQ(key, 0x44);
+  CHECK(player_method("hold:75", &method, &key));
+  CHECK_EQ(key, 75);
+  CHECK(!player_method("press:0x80", &method, &key));
+  CHECK(!player_method("eject", &method, &key));
+
+  const json items = browse_items(json::parse(R"([{"/p/item1": {"Name": "One", "Type": "audio",
+      "Playable": true, "Metadata": {"Title": "One", "Artist": "X", "Duration": 2000}}}])"));
+  CHECK_EQ(items.size(), size_t(1));
+  CHECK_EQ(items[0]["path"].get<std::string>(), std::string("/p/item1"));
+  CHECK_EQ(items[0]["artist"].get<std::string>(), std::string("X"));
+  CHECK(browse_items(json::array()).empty());
+}
+
 void test_names() {
   CHECK_EQ(class_major_name(0x5a020c), std::string("phone"));
   CHECK_EQ(class_major_name(0x1f00), std::string("uncategorized"));
@@ -180,6 +237,7 @@ int main() {
   test_devices();
   test_gatt();
   test_media();
+  test_players();
   test_names();
   return report("test_bluez_model");
 }

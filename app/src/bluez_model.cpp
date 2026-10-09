@@ -24,6 +24,8 @@ constexpr const char* kDesc = "org.bluez.GattDescriptor1";
 constexpr const char* kEndpoint = "org.bluez.MediaEndpoint1";
 constexpr const char* kTransport = "org.bluez.MediaTransport1";
 constexpr const char* kPlayer = "org.bluez.MediaPlayer1";
+constexpr const char* kFolder = "org.bluez.MediaFolder1";
+constexpr const char* kItem = "org.bluez.MediaItem1";
 
 std::string hexn(unsigned v, int width) {
   char b[16];
@@ -42,6 +44,24 @@ json uuid_list(const std::vector<std::string>& v) {
 }
 
 std::string text_of(const std::vector<uint8_t>& b) { return printable(b); }
+
+// AVRCP track metadata (MediaPlayer1.Track, MediaItem1.Metadata). Numbers the device does not
+// know are all ones, in whichever width it happens to use, and come out as 0 / null.
+json player_track(const json& tr) {
+  auto known = [&tr](const char* k) {
+    const long long v = num_of(tr, k);
+    return v > 0 && v < 0x7fffffff ? json(v) : json(nullptr);
+  };
+  const json dur = known("Duration");
+  return json{{"title", str_of(tr, "Title")},
+              {"artist", str_of(tr, "Artist")},
+              {"album", str_of(tr, "Album")},
+              {"genre", str_of(tr, "Genre")},
+              {"track_number", known("TrackNumber")},
+              {"number_of_tracks", known("NumberOfTracks")},
+              {"duration_ms", dur.is_null() ? json(0) : dur},
+              {"img_handle", str_of(tr, "ImgHandle")}};
+}
 
 // By what the list shows: the alias, which BlueZ fills with the address for a device that never
 // said its name.
@@ -342,27 +362,114 @@ json model_media(const json& objs) {
     }
     if (it->contains(kPlayer)) {
       const json& p = (*it)[kPlayer];
-      json track = json::object();
-      if (p.contains("Track") && p["Track"].is_object()) {
-        const json& tr = p["Track"];
-        const long long dur = num_of(tr, "Duration");
-        track = json{{"title", str_of(tr, "Title")},
-                     {"artist", str_of(tr, "Artist")},
-                     {"album", str_of(tr, "Album")},
-                     // Unknown is all ones, in whichever width the device happens to use.
-                     {"duration_ms", dur > 0 && dur < 0x7fffffff ? dur : 0}};
-      }
       const std::string dev = str_of(p, "Device");
-      players.push_back(json{{"path", it.key()},
-                             {"device", dev},
-                             {"address", address_from_path(dev.empty() ? it.key() : dev)},
-                             {"name", str_of(p, "Name")},
-                             {"status", str_of(p, "Status")},
-                             {"track", track},
-                             {"position_ms", num_of(p, "Position")}});
+      // Settings a player does not support are absent; null says so, rather than "off".
+      auto opt = [&p](const char* k) { return p.contains(k) ? json(str_of(p, k)) : json(nullptr); };
+      json pl{{"path", it.key()},
+              {"device", dev},
+              {"address", address_from_path(dev.empty() ? it.key() : dev)},
+              {"name", str_of(p, "Name")},
+              {"type", str_of(p, "Type")},
+              {"subtype", str_of(p, "Subtype")},
+              {"status", str_of(p, "Status")},
+              {"track", player_track(p.contains("Track") ? p["Track"] : json::object())},
+              {"position_ms", num_of(p, "Position")},
+              {"repeat", opt("Repeat")},
+              {"shuffle", opt("Shuffle")},
+              {"equalizer", opt("Equalizer")},
+              {"scan", opt("Scan")},
+              {"browsable", bool_of(p, "Browsable")},
+              {"searchable", bool_of(p, "Searchable")},
+              {"items", json::array()}};
+      // The transport of the same device, for the volume next to the transport controls.
+      pl["transport"] = nullptr;
+      for (auto t = objs.begin(); t != objs.end(); ++t) {
+        if (t->contains(kTransport) && str_of((*t)[kTransport], "Device") == dev && !dev.empty()) {
+          pl["transport"] = t.key();
+          break;
+        }
+      }
+      if (it->contains(kFolder))
+        pl["folder"] = json{{"name", str_of((*it)[kFolder], "Name")},
+                            {"items", num_of((*it)[kFolder], "NumberOfItems")}};
+      players.push_back(std::move(pl));
+    }
+  }
+  // MediaItem1 objects (what browsing a player listed: the now-playing list, a folder) under
+  // their player, in the order of their object names (item1, item2, ...: BlueZ's listing order).
+  std::vector<std::pair<std::string, json>> items;
+  for (auto it = objs.begin(); it != objs.end(); ++it) {
+    if (!it->contains(kItem)) continue;
+    const json& m = (*it)[kItem];
+    items.emplace_back(str_of(m, "Player"),
+                       json{{"path", it.key()},
+                            {"name", str_of(m, "Name")},
+                            {"type", str_of(m, "Type")},
+                            {"folder_type", str_of(m, "FolderType")},
+                            {"playable", bool_of(m, "Playable")},
+                            {"metadata", player_track(m.contains("Metadata") ? m["Metadata"] : json::object())}});
+  }
+  std::stable_sort(items.begin(), items.end(), [](const auto& a, const auto& b) {
+    const std::string& x = a.second["path"].template get_ref<const std::string&>();
+    const std::string& y = b.second["path"].template get_ref<const std::string&>();
+    return x.size() != y.size() ? x.size() < y.size() : x < y;
+  });
+  for (auto& [player, item] : items) {
+    for (json& pl : players) {
+      // A player's items live under its path; Player says which when they do not.
+      if (pl["path"] == player || (player.empty() && starts_with(item["path"].get<std::string>(),
+                                                                 pl["path"].get<std::string>() + "/"))) {
+        pl["items"].push_back(item);
+        break;
+      }
     }
   }
   return json{{"endpoints", endpoints}, {"transports", transports}, {"players", players}};
+}
+
+bool player_method(const std::string& action, std::string* method, int* key) {
+  static const std::pair<const char*, const char*> kMethods[] = {
+      {"play", "Play"},       {"pause", "Pause"},          {"stop", "Stop"},      {"next", "Next"},
+      {"previous", "Previous"}, {"fast-forward", "FastForward"}, {"rewind", "Rewind"},
+      {"release", "Release"}};
+  *key = -1;
+  for (const auto& [a, m] : kMethods) {
+    if (action == a) {
+      *method = m;
+      return true;
+    }
+  }
+  // press:<key>, hold:<key> — the AV/C pass-through operation id (0x44 play, 0x4b forward, ...).
+  for (const char* p : {"press:", "hold:"}) {
+    if (!starts_with(action, p)) continue;
+    uint64_t v = 0;
+    if (!parse_uint(action.substr(std::string(p).size()), 0x7f, &v)) return false;
+    *method = p[0] == 'p' ? "Press" : "Hold";
+    *key = static_cast<int>(v);
+    return true;
+  }
+  return false;
+}
+
+json browse_items(const json& reply) {
+  // ListItems answers a{oa{sv}}: read_json makes that one object keyed by item path.
+  json out = json::array();
+  const json& list = reply.is_array() && !reply.empty() ? reply[0] : json::object();
+  if (!list.is_object()) return out;
+  for (auto it = list.begin(); it != list.end(); ++it) {
+    const json& m = it.value();
+    const json md = m.contains("Metadata") ? m["Metadata"] : json::object();
+    out.push_back(json{{"path", it.key()},
+                       {"name", str_of(m, "Name")},
+                       {"type", str_of(m, "Type")},
+                       {"folder_type", str_of(m, "FolderType")},
+                       {"playable", bool_of(m, "Playable")},
+                       {"title", str_of(md, "Title")},
+                       {"artist", str_of(md, "Artist")},
+                       {"album", str_of(md, "Album")},
+                       {"duration_ms", num_of(md, "Duration")}});
+  }
+  return out;
 }
 
 std::string class_major_name(uint32_t cod) {

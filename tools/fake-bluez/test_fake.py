@@ -247,6 +247,17 @@ def main():
     check(wait_for(lambda: c.get(tr, 'org.bluez.MediaTransport1', 'State') == 'active', 4),
           'which goes active when the phone starts playing')
     check(dev(PIXEL) + '/player0' in c.objects(), 'with an AVRCP player')
+    pl = dev(PIXEL) + '/player0'
+    PL = 'org.bluez.MediaPlayer1'
+    c.call(pl, PL, 'Pause')
+    check(c.get(pl, PL, 'Status') == 'paused', 'Pause pauses the player')
+    t0 = c.get(pl, PL, 'Track')['Title']
+    c.call(pl, PL, 'Next')
+    check(c.get(pl, PL, 'Track')['Title'] != t0, 'Next changes the track')
+    c.call(pl, PL, 'Play')
+    check(c.get(pl, PL, 'Status') == 'playing', 'Play plays')
+    items = c.call(pl, 'org.bluez.MediaFolder1', 'ListItems', 'a{sv}', ({},))[0]
+    check(len(items) == 4, 'ListItems lists the now-playing tracks')
 
     # -- outgoing pairing: just works ---------------------------------------------------------
     check(wait_for(lambda: dev(JBL) in c.objects(), 3), 'the JBL is there')

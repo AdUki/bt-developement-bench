@@ -61,6 +61,14 @@ void reply_error(httplib::Response& res, const BtCallResult& r) {
   send_json(res, json{{"error", r.error}, {"dbus_error", r.error_name}}, status);
 }
 
+// An AVRCP command goes to the phone and back; a phone with no app in front answers in well under
+// a second, or not at all.
+constexpr int kPlayerTimeoutMs = 5000;
+
+bool media_object(const json& objs, const std::string& path, const char* iface) {
+  return objs.contains(path) && objs[path].contains(iface);
+}
+
 }  // namespace
 
 void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
@@ -292,6 +300,83 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     const BtCallResult r = d.bt.set_property(path, "org.bluez.MediaTransport1", "Volume",
                                              DVar::u16(static_cast<uint16_t>(v)), 5000);
     if (!r.ok) return reply_error(res, r);
+  }));
+
+  // ---- AVRCP: the remote players (a phone's music app, as BlueZ's MediaPlayer1) -----------------
+
+  // Body: {"path": "<a MediaPlayer1>", "action": "play|pause|stop|next|previous|fast-forward|
+  // rewind|release|press:0x44|hold:0x4b"}. Waited for, so a player that refuses (NotSupported, a
+  // phone with no app playing) says so to the button that asked.
+  svr.Post("/api/media/players/control", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    const std::string path = j.at("path").get<std::string>();
+    std::string action = lower(j.at("action").get<std::string>());
+    if (!media_object(*d.bt.objects(), path, "org.bluez.MediaPlayer1"))
+      return send_error(res, 404, "no such player");
+    std::string method;
+    int key = -1;
+    if (!player_method(action, &method, &key))
+      return send_error(res, 400, "action is play, pause, stop, next, previous, fast-forward, rewind, "
+                                  "release, press:<key> or hold:<key> (an AV/C operation id, 0..0x7f)");
+    const BtCallResult r = d.bt.call(path, "org.bluez.MediaPlayer1", method, [key](sd_bus_message* m) {
+      return key < 0 ? 0 : sd_bus_message_append(m, "y", static_cast<uint8_t>(key));
+    }, kPlayerTimeoutMs);
+    if (!r.ok) return reply_error(res, r);
+    d.bt.touch();
+  }));
+
+  // Body: {"path": "<a MediaPlayer1>"} and any of repeat (off|singletrack|alltracks|group),
+  // shuffle (off|alltracks|group), equalizer (off|on), scan (off|alltracks|group).
+  svr.Put("/api/media/players", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    const std::string path = j.at("path").get<std::string>();
+    if (!media_object(*d.bt.objects(), path, "org.bluez.MediaPlayer1"))
+      return send_error(res, 404, "no such player");
+    static const std::pair<const char*, const char*> kSettings[] = {
+        {"repeat", "Repeat"}, {"shuffle", "Shuffle"}, {"equalizer", "Equalizer"}, {"scan", "Scan"}};
+    bool any = false;
+    for (const auto& [key, prop] : kSettings) {
+      if (!j.contains(key)) continue;
+      any = true;
+      const BtCallResult r = d.bt.set_property(path, "org.bluez.MediaPlayer1", prop,
+                                               DVar::str(j[key].get<std::string>()), kPlayerTimeoutMs);
+      if (!r.ok) return reply_error(res, r);
+    }
+    if (!any) return send_error(res, 400, "nothing to set: repeat, shuffle, equalizer or scan");
+    d.bt.touch();
+  }));
+
+  // Body: {"path": "<a MediaPlayer1>", "folder": "<a folder item's path>" (optional)}: ChangeFolder
+  // when asked, then ListItems. BlueZ creates the MediaItem1 objects it lists, so they also show
+  // under the player in GET /api/media from then on; the answer is the listing itself.
+  svr.Post("/api/media/players/browse", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    const std::string path = j.at("path").get<std::string>();
+    if (!media_object(*d.bt.objects(), path, "org.bluez.MediaFolder1"))
+      return send_error(res, 404, "no such player, or it is not browsable");
+    const std::string folder = j.value("folder", std::string{});
+    if (!folder.empty()) {
+      const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "ChangeFolder", [folder](sd_bus_message* m) {
+        return sd_bus_message_append(m, "o", folder.c_str());
+      }, kPlayerTimeoutMs);
+      if (!r.ok) return reply_error(res, r);
+    }
+    const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
+      return append_dict(m, DDict{});
+    }, kPlayerTimeoutMs);
+    if (!r.ok) return reply_error(res, r);
+    d.bt.touch();
+    send_json(res, json{{"items", browse_items(r.reply)}});
+  }));
+
+  // Body: {"path": "<a MediaItem1>", "action": "play|add"}: play it now, or AddtoNowPlaying.
+  svr.Post("/api/media/items", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    const std::string path = j.at("path").get<std::string>();
+    if (!media_object(*d.bt.objects(), path, "org.bluez.MediaItem1"))
+      return send_error(res, 404, "no such item (browse the player first)");
+    const std::string action = j.value("action", std::string("play"));
+    if (action != "play" && action != "add") return send_error(res, 400, "action is play or add");
+    const BtCallResult r = d.bt.call(path, "org.bluez.MediaItem1", action == "play" ? "Play" : "AddtoNowPlaying",
+                                     nullptr, kPlayerTimeoutMs);
+    if (!r.ok) return reply_error(res, r);
+    d.bt.touch();
   }));
 }
 
