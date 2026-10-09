@@ -1,6 +1,8 @@
 #include "audio/endpoints.h"
 
 #include <algorithm>
+#include <map>
+#include <sstream>
 #include <cctype>
 
 #include "util/strings.h"
@@ -50,6 +52,34 @@ std::string bt_address(std::string a) {
 }
 
 }  // namespace
+
+json parse_pw_dump(const std::string& text) {
+  std::istringstream in(text);
+  std::map<long long, json> byid;
+  std::vector<long long> order;
+  for (;;) {
+    in >> std::ws;
+    if (in.peek() == EOF) break;
+    json part;
+    try {
+      in >> part;
+    } catch (const std::exception&) {
+      break;  // a truncated tail: keep what parsed
+    }
+    if (!part.is_array()) continue;
+    for (json& o : part) {
+      if (!o.is_object() || !o.contains("id")) continue;
+      const long long id = o["id"].get<long long>();
+      if (!byid.count(id)) order.push_back(id);
+      if (o.contains("info") && o["info"].is_null()) byid.erase(id);
+      else byid[id] = std::move(o);
+    }
+  }
+  json out = json::array();
+  for (long long id : order)
+    if (byid.count(id)) out.push_back(byid[id]);
+  return out;
+}
 
 json endpoints_from_pw_dump(const json& dump) {
   json sinks = json::array(), sources = json::array();

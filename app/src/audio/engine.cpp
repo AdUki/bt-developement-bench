@@ -1081,7 +1081,7 @@ json AudioEngine::endpoints(bool fresh) {
     const ExecResult r = run_cmd({tools_.pw_dump}, 5000, 8 << 20);
     if (r.ok()) {
       try {
-        out = endpoints_from_pw_dump(json::parse(r.out));
+        out = endpoints_from_pw_dump(parse_pw_dump(r.out));
         have_pw = true;
       } catch (const std::exception& e) {
         error = std::string("pw-dump: ") + e.what();
@@ -1110,7 +1110,7 @@ json AudioEngine::devices() {
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "PipeWire is not running (" + r.reason() + "): codecs are picked in pipewire mode"}};
   try {
-    json out = cards_from_pw_dump(json::parse(r.out));
+    json out = cards_from_pw_dump(parse_pw_dump(r.out));
     out["backend"] = "pipewire";
     out["error"] = "";
     return out;

@@ -15,6 +15,11 @@ namespace btb::audio {
 // rate|null, channels|null}. `id` is what a stream names as its target: PipeWire's node.name, or
 // the ALSA device string ("bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp", "hw:Loopback,0,0").
 
+// pw-dump's stdout → one array of objects. pw-dump prints the dump as a JSON array, and when
+// objects change while it runs it prints more arrays after it (the updates, keyed by id, with
+// null info for a removed object): they are merged in, later wins.
+nlohmann::json parse_pw_dump(const std::string& text);
+
 // pw-dump's output (an array of objects) → {sinks:[...], sources:[...]}, with `default` set on
 // the current default sink and source (the "default" metadata). Monitor-only and video nodes, and
 // streams (an application's own output) are left out.

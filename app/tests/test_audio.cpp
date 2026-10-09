@@ -293,6 +293,16 @@ void test_endpoints() {
   for (const json& x : a["sinks"]) CHECK(endpoint_id_ok(x["id"].get<std::string>()));
 }
 
+void test_pw_dump_parse() {
+  // The dump, then an update that changes node 2 and removes node 3.
+  const json d = parse_pw_dump(R"([{"id": 1, "info": {"a": 1}}, {"id": 2, "info": {"a": 2}}, {"id": 3, "info": {}}]
+[{"id": 2, "info": {"a": 22}}, {"id": 3, "info": null}]
+[{"id": 4, "info": {"a": 4)");  // a truncated tail
+  CHECK_EQ(d.size(), size_t(2));
+  CHECK_EQ(d[1]["info"]["a"].get<int>(), 22);
+  CHECK(parse_pw_dump("").empty());
+}
+
 void test_cards() {
   const json dump = json::parse(R"J([
     {"id": 58, "type": "PipeWire:Interface:Device", "info": {
@@ -421,6 +431,7 @@ int main() {
   test_specs();
   test_argv();
   test_endpoints();
+  test_pw_dump_parse();
   test_cards();
   test_xml();
   test_upnp();
