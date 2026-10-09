@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 
 #include "util/log.h"
 #include "util/strings.h"
@@ -239,7 +241,26 @@ json hid_key_names() {
 
 // ---- the remote ----------------------------------------------------------------------------------
 
-HidRemote::HidRemote(BtManager& bt, AdvManager& adv, GattServer& gatt) : bt_(bt), adv_(adv), gatt_(gatt) {}
+HidRemote::HidRemote(BtManager& bt, AdvManager& adv, GattServer& gatt, std::string state_file)
+    : bt_(bt), adv_(adv), gatt_(gatt), state_file_(std::move(state_file)) {
+  if (state_file_.empty()) return;
+  std::ifstream f(state_file_);
+  const json j = json::parse(f, nullptr, false);
+  if (!j.is_object()) return;
+  name_ = j.value("name", name_);
+  want_on_ = j.value("enabled", false);
+  if (want_on_) worker_ = std::thread([this] { run(); });
+}
+
+void HidRemote::save() const {
+  if (state_file_.empty()) return;
+  {
+    std::ofstream f(state_file_ + ".tmp");
+    f << json{{"enabled", enabled_}, {"name", name_}}.dump() << "\n";
+    if (!f) return;
+  }
+  std::rename((state_file_ + ".tmp").c_str(), state_file_.c_str());
+}
 
 HidRemote::~HidRemote() {
   {
@@ -310,6 +331,8 @@ bool HidRemote::enable(const std::string& name, std::string* err) {
   name_ = n;
   adv_id_ = out.value("id", 0);
   battery_ = 100;
+  want_on_ = false;
+  save();
   if (!worker_.joinable()) worker_ = std::thread([this] { run(); });
   LOG_INFO("hid remote: enabled as \"{}\"", n);
   return true;
@@ -324,6 +347,8 @@ void HidRemote::disable() {
     id = adv_id_;
     adv_id_ = 0;
     for (bool& h : held_) h = false;
+    want_on_ = false;
+    save();
   }
   std::string err;
   if (id) adv_.remove(id, &err);
@@ -458,8 +483,16 @@ void HidRemote::run() {
     const uint64_t now = mono_ns();
     if (now >= next_adv_check && steps_.empty()) {
       next_adv_check = now + 5ull * 1000000000ull;
+      const bool restore = want_on_ && !enabled_ && bt_.running();
+      const std::string name = name_;
       lk.unlock();
-      keep_advertising();
+      if (restore) {
+        std::string err;
+        if (enable(name, &err)) LOG_INFO("hid remote: back on after a restart");
+        else LOG_WARN("hid remote: cannot turn back on: {}", err);
+      } else {
+        keep_advertising();
+      }
       lk.lock();
     }
     for (int r = 1; r <= 2; ++r) {

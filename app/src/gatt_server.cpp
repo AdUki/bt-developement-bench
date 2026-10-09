@@ -2,6 +2,8 @@
 
 #include <errno.h>
 #include <string.h>
+
+#include <cstring>
 #include <systemd/sd-bus.h>
 
 #include <algorithm>
@@ -355,6 +357,55 @@ int on_notify(sd_bus_message* m, void* userdata, sd_bus_error*) {
 
 int on_confirm(sd_bus_message* m, void*, sd_bus_error*) { return sd_bus_reply_method_return(m, ""); }
 
+// The properties of one exported object, as GetManagedObjects lists them.
+int append_object(sd_bus_message* reply, GattServer::Obj* o) {
+  static const std::vector<const char*> kService = {"UUID", "Primary", "Handle"};
+  static const std::vector<const char*> kChar = {"UUID", "Service", "Flags", "Value", "Notifying", "Handle"};
+  static const std::vector<const char*> kDesc = {"UUID", "Characteristic", "Flags", "Value", "Handle"};
+  const auto& props = o->iface == kServiceIface ? kService : o->iface == kCharIface ? kChar : kDesc;
+  int r = sd_bus_message_open_container(reply, 'e', "oa{sa{sv}}");
+  if (r >= 0) r = sd_bus_message_append(reply, "o", o->path.c_str());
+  if (r >= 0) r = sd_bus_message_open_container(reply, 'a', "{sa{sv}}");
+  if (r >= 0) r = sd_bus_message_open_container(reply, 'e', "sa{sv}");
+  if (r >= 0) r = sd_bus_message_append(reply, "s", o->iface.c_str());
+  if (r >= 0) r = sd_bus_message_open_container(reply, 'a', "{sv}");
+  for (const char* p : props) {
+    const char* sig = !strcmp(p, "UUID") ? "s" : !strcmp(p, "Primary") || !strcmp(p, "Notifying") ? "b"
+                    : !strcmp(p, "Service") || !strcmp(p, "Characteristic") ? "o" : !strcmp(p, "Flags") ? "as"
+                    : !strcmp(p, "Value") ? "ay" : "q";
+    if (r >= 0) r = sd_bus_message_open_container(reply, 'e', "sv");
+    if (r >= 0) r = sd_bus_message_append(reply, "s", p);
+    if (r >= 0) r = sd_bus_message_open_container(reply, 'v', sig);
+    if (r >= 0) r = obj_get(nullptr, o->path.c_str(), o->iface.c_str(), p, reply, o, nullptr);
+    if (r >= 0) r = sd_bus_message_close_container(reply);
+    if (r >= 0) r = sd_bus_message_close_container(reply);
+  }
+  if (r >= 0) r = sd_bus_message_close_container(reply);
+  if (r >= 0) r = sd_bus_message_close_container(reply);
+  if (r >= 0) r = sd_bus_message_close_container(reply);
+  if (r >= 0) r = sd_bus_message_close_container(reply);
+  return r;
+}
+
+// GetManagedObjects at the root, answered here rather than by sd-bus's object manager: BlueZ adds
+// the objects to its database in the order of this reply, and puts each notifying
+// characteristic's CCC in the first free handle of its service. sd-bus lists objects in hash
+// order; in definition order, every CCC lands right after its characteristic's value — which is
+// what makes fixed handles (and the console's handles, run to run) come out as defined.
+int on_object_manager(sd_bus_message* m, void* userdata, sd_bus_error*) {
+  if (!sd_bus_message_is_method_call(m, "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")) return 0;
+  auto* srv = static_cast<GattServer*>(userdata);
+  sd_bus_message* reply = nullptr;
+  int r = sd_bus_message_new_method_return(m, &reply);
+  if (r >= 0) r = sd_bus_message_open_container(reply, 'a', "{oa{sa{sv}}}");
+  for (GattServer::Obj* o : srv->ordered_objects())
+    if (r >= 0) r = append_object(reply, o);
+  if (r >= 0) r = sd_bus_message_close_container(reply);
+  if (r >= 0) r = sd_bus_send(nullptr, reply, nullptr);
+  sd_bus_message_unref(reply);
+  return r < 0 ? r : 1;
+}
+
 int app_registered(sd_bus_message* m, void* data, sd_bus_error*) {
   static_cast<GattServer*>(data)->on_registered(sd_bus_message_get_error(m));
   return 0;
@@ -515,7 +566,7 @@ void GattServer::unregister_app(sd_bus* bus) {
 
 void GattServer::bus_opened(sd_bus* bus) {
   bus_ = bus;
-  sd_bus_add_object_manager(bus, &om_slot_, root_.c_str());
+  sd_bus_add_object(bus, &om_slot_, root_.c_str(), on_object_manager, this);
   build(bus);
 }
 
@@ -611,6 +662,14 @@ bool GattServer::set(const GattAppDef& def, std::string* err) {
     return false;
   }
   return true;
+}
+
+// Bus thread: objs_ only changes there, so the list can be walked without the lock (the getters
+// take it for the values).
+std::vector<GattServer::Obj*> GattServer::ordered_objects() const {
+  std::vector<Obj*> v;
+  for (const auto& o : objs_) v.push_back(o.get());
+  return v;
 }
 
 bool GattServer::set_value(const std::string& path, std::vector<uint8_t> value, bool* notifying) {

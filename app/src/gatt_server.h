@@ -91,6 +91,7 @@ class GattServer : public BusUser {
     if (event_) event_(ev);
   }
   std::mutex& values_mutex() const { return m_; }
+  std::vector<Obj*> ordered_objects() const;  // bus thread: in definition order
 
  private:
   void build(sd_bus* bus);

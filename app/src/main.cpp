@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
   // The HID remote is a second GATT application with its own root, so the console's GATT server
   // and the remote can be up at the same time.
   btb::GattServer hid_gatt(bt, [&publish](const nlohmann::json& ev) { publish("gatt.server", ev); }, "/org/btbench/hid");
-  btb::HidRemote hid_remote(bt, adv, hid_gatt);
+  btb::HidRemote hid_remote(bt, adv, hid_gatt, data_dir + "/hid-remote.json");
   bt.add_user(&adv);
   bt.add_user(&gatt_server);
   bt.add_user(&hid_gatt);

@@ -54,8 +54,10 @@ nlohmann::json hid_key_names();
 
 class HidRemote {
  public:
-  // `gatt` is the remote's own GattServer instance (a root other than the console's).
-  HidRemote(BtManager& bt, AdvManager& adv, GattServer& gatt);
+  // `gatt` is the remote's own GattServer instance (a root other than the console's). `state_file`
+  // keeps on/off and the name across restarts ("" = not kept): a remote someone paired is turned
+  // back on by itself once BlueZ is up.
+  HidRemote(BtManager& bt, AdvManager& adv, GattServer& gatt, std::string state_file = "");
   ~HidRemote();
   HidRemote(const HidRemote&) = delete;
   HidRemote& operator=(const HidRemote&) = delete;
@@ -85,9 +87,13 @@ class HidRemote {
   void run();
   std::string report_path(HidReport r) const;
 
+  void save() const;
+
   BtManager& bt_;
   AdvManager& adv_;
   GattServer& gatt_;
+  const std::string state_file_;
+  bool want_on_ = false;  // from the state file: turn on when BlueZ is up
 
   mutable std::mutex m_;
   std::condition_variable cv_;
