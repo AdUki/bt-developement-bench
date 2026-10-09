@@ -110,6 +110,10 @@ Routes:
 - `GET /api/hci/live.pcap` — chunked pcap, linktype 254 (LINUX_BT_MONITOR), live from now on
 - `GET /api/capture` — `{"running":true,"unit":"btbench-btsnoop.service","dir":"/data/btsnoop","files":[{"name":"hci-20261009-120000.btsnoop","size":123,"mtime":<ms>,"active":true}]}`
 - `PUT /api/capture` `{"running":false}`; `GET|DELETE /api/capture/files/<name>`; `GET /api/capture/files/<name>/analyze` (text: `btmon -a`)
+- Packet view of a file (docs/monitor.md "Packet view" has the filter syntax and full shapes). Each answers within a 400 ms budget; `"complete":false` + `"next"` mean "repeat the request, it continues":
+  - `GET /api/capture/files/<name>/packets?filter=&start=0&count=200` (or `at_t=SECONDS` / `at_n=FRAME`) — `{"total","start","complete","next","scanned","packets_in_file","indexed_bytes","file_size","datalink","t0_ms","filter","packets":[{"n","ts_ms","t","index","dir":"tx|rx|","type":"cmd|evt|acl|sco|iso|index|log|mgmt","proto":"att|..."|null,"handle","cid","psm","len","lat_ms","summary","err"?,"mark"?,"cont"?}]}`
+  - `GET /api/capture/files/<name>/packets/<n>` — one packet as above plus `"fields":[{"name","value","off","len","children":[...]}]` and `"hex"`
+  - `GET /api/capture/files/<name>/graph?filter=&bucket_ms=&points=&from=&to=&conn=INDEX:HANDLE` — `{"from","to","bucket_ms","buckets","matches","complete","filtered":{"pkts":[],"tx_bytes":[],"rx_bytes":[]},"conns":[{"index","handle","type","peer","tx_bytes","rx_bytes",...}],"conn":{"index","handle","tx_bps":[],"rx_bps":[],"lat_p50":[],"lat_p95":[],"lat_max":[]}|null}`
 - WebSocket topics: `hci.stats` (the stats object, 1 Hz while subscribed), `hci.event` (one event).
 
 ### btbench-btsnoop.service (audio + BlueZ area)

@@ -396,6 +396,20 @@ cmd_cap() {
     analyze)
       [ $# -ge 2 ] || die "usage: bench cap analyze NAME"
       TIMEOUT=300 call GET "/api/capture/files/$2/analyze" ;;
+    packets)
+      # The board answers within a time budget: a big file, or a text filter, says "complete":
+      # false until it got through. Ask again until it did, then print the first COUNT matches.
+      [ $# -ge 2 ] || die "usage: bench cap packets NAME [FILTER]"
+      local q j
+      q="/api/capture/files/$2/packets?count=${COUNT:-200}&filter=$(jq -rn --arg s "${3-}" '$s | @uri')"
+      for _ in $(seq 100); do
+        j=$(get "$q") || return 1
+        [ "$(jq -r .complete <<<"$j")" = true ] && break
+        sleep 0.2
+      done
+      show '"\(.total) of \(.packets_in_file) packets" + (if .complete then "" else " (still searching)" end),
+        (.packets[] | [(.n | tostring), (.t | tostring), .dir, (.handle // "" | tostring), (.proto // .type),
+                       (.len | tostring), .summary + (if .lat_ms != null then "  [\(.lat_ms) ms]" else "" end)] | @tsv)' <<<"$j" ;;
     rm)
       [ $# -ge 2 ] || die "usage: bench cap rm NAME"
       del "/api/capture/files/$2" >/dev/null && echo "removed $2" ;;
@@ -408,7 +422,7 @@ cmd_cap() {
       else
         exec curl -sN "$URL/api/hci/live.pcap"
       fi ;;
-    *) die "usage: bench cap on|off|ls|get NAME [OUT]|analyze NAME|rm NAME|live" ;;
+    *) die "usage: bench cap on|off|ls|get NAME [OUT]|analyze NAME|packets NAME [FILTER]|rm NAME|live" ;;
   esac
 }
 
@@ -660,6 +674,7 @@ ${bold}Audio${off}
 ${bold}Capture and monitor${off}
   cap on|off|ls                   the always-on btsnoop ring
   cap get NAME [OUT] | analyze NAME | rm NAME
+  cap packets NAME [FILTER]       its packets (COUNT=200 first matches; filter syntax: docs/monitor.md)
   cap live                        curl -sN $URL/api/hci/live.pcap | wireshark -k -i -
   mark TEXT                       a marker in btmon, btsnoop and Wireshark
   mon [--once]                    per-connection/channel throughput, latency, credits, RTP loss

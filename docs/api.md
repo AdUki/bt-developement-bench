@@ -257,6 +257,14 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 | `PUT /api/capture` `{"running": false}` | stop or start `btbench-btsnoop.service` |
 | `GET` / `DELETE /api/capture/files/{name}` | download or delete one file |
 | `GET /api/capture/files/{name}/analyze` | `btmon -a` of it, as text |
+| `GET /api/capture/files/{name}/packets?filter=&start=0&count=200` | its packets, filtered and paged: `{total, start, complete, next, packets_in_file, packets: [{n, t, ts_ms, dir, type, proto, handle, cid, psm, len, lat_ms, summary}]}`. `at_t=SECONDS` or `at_n=FRAME` start the page there. Filter terms: `type:`, `dir:`, `proto:`, `handle:`, `cid:`, `psm:`, `index:`, `opcode:`, `evt:`, `subevt:`, `is:err\|mark\|cont\|lat`, `len>N`, `lat>MS`, `t>=S t<S`, `n<=N`, `!term`, `a\|b`; other words search the summaries |
+| `GET /api/capture/files/{name}/packets/{n}` | one packet decoded: the same object plus `fields` (a tree of `{name, value, off, len, children}`) and `hex` |
+| `GET /api/capture/files/{name}/graph?filter=&bucket_ms=&points=&conn=INDEX:HANDLE` | per time bucket, the filtered packets and bytes, and one link's TX/RX bit/s and TX latency p50/p95/max; the list of links |
+
+The packet routes work against a time budget (400 ms a request on the board): an answer with
+`"complete": false` is partial (a big file still being indexed, or a text filter still searching),
+and repeating the same request continues where it stopped. The filter syntax, the shapes in full
+and the timings are in `docs/monitor.md` ("Packet view").
 
 They answer 503 with the reason when the monitor socket cannot be opened (no `CAP_NET_RAW`).
 `btbenchd --hci-replay FILE.btsnoop` feeds the monitor from a capture instead (`make run

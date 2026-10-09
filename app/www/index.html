@@ -199,6 +199,54 @@
       <div class="row between"><h3 id="cap-an-title"></h3><button class="small-btn" id="cap-an-close">close</button></div>
       <pre id="cap-an-text" class="log tall"></pre>
     </div>
+
+    <div class="card" id="cv" hidden>
+      <div class="row between">
+        <h3 class="mono" id="cv-title"></h3>
+        <div class="row wrap">
+          <span id="cv-status" class="small muted"></span>
+          <label class="check small" id="cv-follow-wrap" hidden><input type="checkbox" id="cv-follow"> follow</label>
+          <button class="small-btn" id="cv-close">close</button>
+        </div>
+      </div>
+      <div class="row cv-filter">
+        <input id="cv-filter" class="mono" spellcheck="false" autocomplete="off"
+               placeholder='proto:att handle:64 dir:tx len>20 t>=12.5 !evt:0x13 "read request"'>
+        <button id="cv-apply">Filter</button>
+      </div>
+      <div id="cv-chips" class="cv-chips"></div>
+      <details class="small muted cv-hint">
+        <summary>Filter syntax</summary>
+        <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value.
+          <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
+          <code>proto:hci|l2cap|att|smp|sdp|rfcomm|avdtp|rtp|avctp|bnep|hid|sco|iso</code> ·
+          <code>handle:11</code> <code>cid:0x40</code> <code>psm:25</code> <code>index:0</code> ·
+          <code>opcode:0x0406</code> (a command and its Complete/Status) <code>evt:0x13</code> <code>subevt:0x02</code> ·
+          <code>is:err|mark|cont|lat</code> · <code>len&gt;100</code> <code>n&lt;=500</code> <code>lat&gt;20</code> (TX → NOCP, ms) ·
+          <code>t&gt;=12.5 t&lt;30</code> (seconds since the first packet). Any other word, or a <code>"quoted phrase"</code>,
+          is searched in the summaries (case-insensitive) — slower, so on a big file the results arrive over a few seconds.
+          Drag across the graph to select a time range; click it to jump there.</p>
+      </details>
+      <div class="cv-graph-wrap">
+        <div class="row wrap small">
+          <select id="cv-conn" class="small"></select>
+          <span class="legend"><i class="c-tx"></i>TX<i class="c-rx"></i>RX<i class="c-p50"></i>lat p50<i class="c-p95"></i>p95</span>
+          <span id="cv-gscale" class="muted"></span>
+          <span id="cv-readout" class="mono muted grow"></span>
+        </div>
+        <canvas id="cv-graph" class="cv-graph"></canvas>
+      </div>
+      <div class="cv-split">
+        <div class="cv-table" id="cv-table" tabindex="0">
+          <div class="cv-head"><span>No.</span><span>time (s)</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
+          <div class="cv-body" id="cv-body"><div id="cv-spacer"></div><div class="cv-rows" id="cv-rows"></div></div>
+        </div>
+        <div class="cv-detail">
+          <div id="cv-fields" class="cv-fields"></div>
+          <pre id="cv-hex" class="cv-hex"></pre>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ======================================================== Wi-Fi -->

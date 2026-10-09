@@ -53,7 +53,25 @@ its L2CAP channels with the AVDTP stream's state, codec and RTP loss/jitter. Bel
 btsnoop ring and live captures, and the command for a live capture in Wireshark on your PC.
 
 **Capture** — the always-on btsnoop ring: start/stop, the files (the newest is being written),
-download, delete, and `btmon -a` analysis on the board.
+view, download, delete, and `btmon -a` analysis on the board. *View* opens a file in the packet
+viewer:
+- a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
+  [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
+  ATT, SMP, AVDTP, media, AVRCP, RFCOMM, errors, marks and logs, slow TX;
+- a graph strip of the whole capture: packets per time bucket of the filtered set, and for a chosen
+  connection its TX/RX throughput and TX latency p50/p95. Drag across it to keep only that time
+  range (it becomes `t>=… t<…` in the filter, and the graph zooms to it); click to jump the table
+  there. The band shows which part of the capture is on screen;
+- the packet table: frame number, time since the first packet, direction, handle, protocol,
+  length and summary (TX latency for completed TX packets), coloured by kind and direction, errors
+  in red, marks highlighted. Only the rows on screen are fetched, so a 300 000-packet file scrolls
+  like a small one. ↑ ↓, Page Up/Down, Home and End move the selection;
+- the selected packet decoded: a tree of fields, and the hex dump with offsets. Hovering a field
+  highlights its bytes.
+
+On the board a big file is indexed, and a text filter searched, a slice at a time: the status line
+shows the progress and the totals grow until done. For the file btmon is writing, *follow* keeps
+reading what is appended (and scrolls with it while the table is at the bottom).
 
 **Wi-Fi** — state (client, setup AP, connecting, off), networks in range, add a network, the saved
 ones, and the mode (auto / client / setup AP / off). The same page is served alone at `/wifi`:

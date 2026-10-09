@@ -167,3 +167,78 @@ body.wifi-page main { max-width: 560px; padding-top: 0.5rem; }
   .grid { grid-template-columns: 1fr; }
   .tbl th, .tbl td { padding: 0.25rem 0.35rem; }
 }
+
+/* Capture packet view: a virtualised table (fixed 22 px rows, only those on screen exist), the
+   decoded fields + hex of one packet beside it (below it on a phone), and a graph strip. Colours
+   come from the theme variables, tints by color-mix(), so light and dark both work. */
+.cv-filter { margin-top: 0.6rem; }
+.cv-filter input { flex: 1 1 auto; min-width: 0; }
+.cv-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0 0.3rem; }
+.cv-chip { border-radius: 999px; padding: 0.1rem 0.55rem; }
+.cv-chip.on { border-color: var(--accent); color: var(--accent); }
+.cv-hint { margin: 0.2rem 0; }
+.cv-hint summary { cursor: pointer; }
+.cv-hint p { margin: 0.3rem 0; line-height: 1.7; }
+.cv-hint code { background: var(--well); border: 1px solid var(--line); border-radius: 4px; padding: 0 0.25rem; color: var(--fg); }
+.cv-graph-wrap { margin-top: 0.5rem; }
+.cv-graph-wrap .row { margin-bottom: 0.3rem; }
+.cv-graph-wrap select { max-width: 100%; }
+#cv-readout { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+canvas.cv-graph {
+  width: 100%; height: 170px; display: block; background: var(--well); border: 1px solid var(--line);
+  border-radius: 6px; cursor: crosshair; touch-action: none;
+}
+.cv-split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0.6rem; margin-top: 0.6rem; }
+.cv-table { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); outline: none; min-width: 0; overflow: hidden; }
+.cv-table:focus-visible { border-color: var(--accent); }
+.cv-head, .cv-row {
+  display: grid; grid-template-columns: 4.4rem 6.2rem 1.7rem 3rem 3.5rem 2.8rem minmax(0, 1fr);
+  gap: 0 0.4rem; padding: 0 0.4rem; align-items: center;
+}
+.cv-head { height: 24px; font-size: 0.75rem; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); }
+.cv-body { height: 440px; overflow-y: auto; overflow-x: hidden; position: relative; }
+.cv-rows { position: absolute; top: 0; left: 0; right: 0; }
+.cv-row {
+  height: 22px; font: 12px/22px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; white-space: nowrap;
+  cursor: pointer; border-left: 3px solid transparent;
+}
+.cv-row > span { overflow: hidden; text-overflow: ellipsis; }
+.cv-row.d-tx { border-left-color: var(--tx); }
+.cv-row.d-rx { border-left-color: var(--rx); }
+.cv-row.d-tx .cv-dir { color: var(--tx); }
+.cv-row.d-rx .cv-dir { color: var(--rx); }
+.cv-row.t-cmd, .cv-row.t-evt { background: color-mix(in srgb, var(--p50) 8%, transparent); }
+.cv-row.t-sco, .cv-row.t-iso { background: color-mix(in srgb, var(--fl) 8%, transparent); }
+.cv-row.t-index, .cv-row.t-log, .cv-row.t-mgmt, .cv-row.t-diag { color: var(--muted); }
+.cv-row.mark { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--fg); }
+.cv-row.err { color: var(--bad); }
+.cv-row:hover { background: var(--well); }
+.cv-row.sel, .cv-row.sel .cv-dir, .cv-row.sel i { background: var(--accent); color: #fff; }
+.cv-row i { font-style: normal; }
+.cv-wait { color: var(--muted); cursor: default; }
+.cv-empty { padding: 1rem; }
+.cv-detail {
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 0.5rem;
+  min-width: 0; max-height: 466px; overflow: auto;
+}
+.cv-dhead { margin-bottom: 0.4rem; overflow-wrap: anywhere; }
+.cv-fields { font-size: 0.82rem; }
+.cv-fields details details { margin-left: 0.9rem; }
+.cv-fields summary { cursor: pointer; overflow-wrap: anywhere; }
+.cv-f { padding-left: 1.1rem; overflow-wrap: anywhere; }
+.cv-v { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
+.cv-fields [data-off]:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 3px; }
+.cv-hex {
+  margin: 0.6rem 0 0; padding: 0.4rem; background: var(--well); border: 1px solid var(--line); border-radius: 6px;
+  white-space: pre; overflow-x: auto; font-size: 12px; line-height: 1.5;
+}
+.cv-hex span.hl { background: var(--accent); color: #fff; border-radius: 2px; }
+@media (max-width: 900px) {
+  .cv-split { grid-template-columns: minmax(0, 1fr); }
+  .cv-body { height: 360px; }
+}
+@media (max-width: 560px) {
+  /* The coloured left edge already says TX/RX: the summary gets the room. */
+  .cv-head, .cv-row { grid-template-columns: 3.2rem 4.2rem 2.6rem minmax(0, 1fr); gap: 0 0.3rem; }
+  .cv-c-h, .cv-c-l, .cv-c-d { display: none; }
+}
