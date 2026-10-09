@@ -329,7 +329,8 @@ int main(int argc, char **argv)
 
 	if (Config::ExtendedColors == Config::Feature::autodetect) {
 		// check if terminal supports 256 colors
-		std::string term(std::getenv("TERM"));
+		const char* term_env = std::getenv("TERM");  // unset without a terminal (ssh host cmd, a service)
+		std::string term(term_env ? term_env : "");
 		if (term.find("256") != std::string::npos)
 			Config::ExtendedColors = Config::Feature::yes;
 	}

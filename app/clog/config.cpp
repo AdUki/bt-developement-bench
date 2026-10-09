@@ -188,8 +188,10 @@ std::vector<Parser> parseConfigFiles(const std::string &inputFilename, bool list
 	for (std::string path : Config::ConfigFilepaths) {
 		for (const std::string &replaceString : replaceStrings) {
 			size_t pos = path.find(replaceString);
-			if (pos != std::string::npos)
-				path.replace(pos, replaceString.size(), std::getenv("HOME"));
+			if (pos != std::string::npos) {
+				const char* home = std::getenv("HOME");  // unset in some service environments
+				path.replace(pos, replaceString.size(), home ? home : "/");
+			}
 		}
 		configs.push_back(std::make_shared<std::ifstream>(path));
 	}
