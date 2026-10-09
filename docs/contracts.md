@@ -43,8 +43,16 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
 - `/data` — ext4 partition (label `data`), mounted at boot, grown to fill the card at first boot.
   - `/data/btbench/audio-mode` — one word.
   - `/data/btbench/bluetoothd.env` — `BLUETOOTHD_ARGS="-d ..."` (no `-n`: under systemd it only duplicates
-    journal lines) and `BLUETOOTHD_NOPLUGIN="hfp"` (BlueZ's own HFP plugin would fight PipeWire
-    for the HF role), both read by the bluetooth.service drop-in. Writers replace one, keep the other.
+    journal lines; the System page's) and `BLUETOOTHD_NOPLUGIN` — Setup's: `--noplugin=<plugins off>`
+    (`hfp` by default: BlueZ's own HFP plugin would fight PipeWire for the HF role) and, once a
+    main.conf setting is changed, `--configfile=/data/btbench/main.conf`. Both are read by the
+    bluetooth.service drop-in; each writer replaces its own variable and keeps the other lines.
+  - `/data/btbench/setup.json` — Setup's state: `{plugins_off, roles_on, obex_off, settings}`.
+  - `/data/btbench/main.conf` — written by btbenchd from the image's `/etc/bluetooth/main.conf` with
+    Setup's settings applied (the image's file is never edited); absent while none is set.
+  - `/etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf` — written by btbenchd: the
+    Bluetooth roles (`override.bluez5.roles`) and Setup's WirePlumber settings, on top of the image's
+    `50-btbench.conf`.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.

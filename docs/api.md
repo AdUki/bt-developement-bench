@@ -552,6 +552,56 @@ good: {version}, test: {present, version}, prev: {present, version}}`, plus `op`
 second later. `POST /api/kernel/commit` (test → good, good → prev) and `POST /api/kernel/rollback`
 answer with the new status.
 
+## Setup
+
+Profiles switched on and off, BlueZ's plugins, and the main.conf and WirePlumber settings worth
+changing. Each switch is applied in the layer that implements it: bluetoothd's `--noplugin` list,
+a main.conf btbenchd writes and passes with `--configfile` (both in `BLUETOOTHD_NOPLUGIN` of
+`/data/btbench/bluetoothd.env`), WirePlumber's `bluez5.roles` and settings in
+`60-btbench-profiles.conf`, obexd's `-P` (OBEX servers), and the HID remote. On a PC (`--pc`) the
+files are written into the data directory and nothing is restarted (`pending: true`).
+
+`GET /api/setup`:
+
+```json
+{"profiles": [{"id": "a2dp_source", "label": "A2DP source", "group": "Audio", "help": "...", "on": true,
+               "layers": ["pipewire"], "plugins": [], "roles": ["a2dp_source"], "obex": []}, ...],
+ "plugins": [{"name": "policy", "label": "Policy", "help": "...", "on": true}, ...],
+ "settings": [{"key": "LE.MinConnectionInterval", "label": "Connection interval, min", "help": "...",
+               "type": "number", "file": "main.conf", "min": 7.5, "max": 4000, "unit": "ms", "step": 1.25,
+               "value": null}, ...],
+ "roles": ["a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "bap_bcast_sink", "bap_bcast_source",
+           "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"],
+ "apply": true, "files": {"main_conf": null, "bluetoothd_env": "...", "wireplumber": "..."}}
+```
+
+Profiles: A2DP sink/source, HFP HF/AG, HSP HS/AG, LE Audio unicast sink/source and broadcast
+sink/source (WirePlumber roles), BlueZ's own HFP, AVRCP, HID host (classic), HID over GATT host,
+PAN, battery levels (BlueZ plugins), the OBEX servers (Object Push, File Transfer, Phonebook,
+Message Access) and the HID remote. By default all are on except HSP, the broadcast roles,
+BlueZ's HFP and the remote, as the image has them.
+
+Settings (`value` null: BlueZ's or the image's default): `General.ControllerMode`
+`dual|bredr|le`, `General.SecureConnections` `on|off|only`, `General.Privacy`,
+`General.JustWorksRepairing`, `General.FastConnectable`, `General.AlwaysPairable`,
+`General.NameResolving`, `General.Experimental`, `General.KernelExperimental`, `BR.PageTimeout`
+and `BR.LinkSupervisionTimeout` (ms), `LE.MinConnectionInterval` / `LE.MaxConnectionInterval`
+(ms, 7.5..4000), `LE.ConnectionLatency`, `LE.ConnectionSupervisionTimeout` (ms),
+`LE.Min/MaxAdvertisementInterval` (ms), `GATT.Cache`, `GATT.KeySize`, `GATT.ExchangeMTU`,
+`GATT.Channels` (EATT), `GATT.Client`, `Policy.ReconnectAttempts`, `Policy.AutoEnable`,
+`Policy.ResumeDelay`; and WirePlumber's: `Monitor.bluez5.codecs` (a list), `Monitor.bluez5.enable-sbc-xq`,
+`Monitor.bluez5.enable-msbc`, `Monitor.bluez5.enable-hw-volume`, `Monitor.bluez5.hfphsp-backend`,
+`Monitor.bluez5.default.rate`, `Device.bluez5.a2dp.ldac.quality`, `Device.bluez5.a2dp.aac.bitratemode`,
+`Settings.bluetooth.autoswitch-to-headset-profile`, `Settings.bluetooth.use-persistent-storage`.
+Times are given in ms and written in BlueZ's units (1.25 ms, 10 ms, 0.625 ms slots).
+
+`PUT /api/setup` `{"profiles": {"a2dp_source": false}, "plugins": {"policy": false},
+"settings": {"General.ControllerMode": "le", "GATT.Cache": null}}` — checked as a whole (400 and
+nothing changed when one part is wrong), saved, and applied: WirePlumber restarted when its
+fragment changed, then bluetooth.service when its arguments or main.conf did, obexd when its
+servers did. A restart drops every connection. Answers with the state plus `restarted`
+(`["wireplumber.service", "bluetooth.service", "obexd"]`) and `pending`.
+
 ## System
 
 | route | what |

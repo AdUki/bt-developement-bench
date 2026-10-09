@@ -5,8 +5,8 @@ or `http://localhost:8080/` with `make run`. Plain HTML/JS/CSS from `app/www/`, 
 `make deploy-www` copies it to the board and a reload shows it. Light or dark follows the system.
 The REST and WebSocket API behind every button is in [api.md](api.md) (also served at `/api`).
 
-The console is seven areas — **Listen**, **Devices**, **Audio**, **LE**, **Files**, **Traffic**,
-**System** —
+The console is eight areas — **Listen**, **Devices**, **Audio**, **LE**, **Files**, **Traffic**,
+**Setup**, **System** —
 in a rail on the left (a bar at the bottom on a phone). Each area has a few views in the bar at
 the top of the page; an area reopens on the view last used in it, and the address names the view
 (`#audio/play`, `#packets`), so it can be bookmarked. Settings that are set once (the adapter's
@@ -161,12 +161,20 @@ On the board a big file is indexed, and a text filter searched, a slice at a tim
 shows the progress and the totals grow until done. For the file btmon is writing, *follow* keeps
 reading what is appended (and scrolls with it while the table is at the bottom).
 
-**System** — four views. *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
-kernel, the stack's services with restart buttons, bluetoothd's command line under a
-disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
-bluetooth), and reboot. *Logs and tools*: the journal of a unit (the last 200 lines, and live with
-*follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted
-tools, with live output and kill).
+**Setup** — how the stack is configured. *Profiles*: every profile the board offers, on and off
+by group — Audio (A2DP sink and source, HFP HF and AG, HSP, BlueZ's own HFP), LE Audio (unicast
+sink and source, broadcast sink and source), Control (AVRCP), Input (HID host, HID over GATT host,
+the HID remote), Network (PAN), Files (the OBEX servers) and Device info. *Bluetooth*: BlueZ's
+main.conf — the radio (classic and LE, classic only, LE only), Secure Connections, privacy,
+re-pairing, fast connectable, the classic page and supervision timeouts, the LE connection and
+advertising intervals, latency and supervision timeout, the GATT cache, key size, MTU and EATT
+channels, and the policy plugin's reconnects — each with *Default* to leave the image's value.
+*Audio*: WirePlumber's Bluetooth settings — the codecs offered, SBC-XQ, mSBC, hardware volume,
+the HFP backend, the default rate, LDAC quality, AAC's bitrate mode, switching to the headset
+profile when recording, remembering profiles. *Plugins*: every BlueZ plugin on its own (policy,
+autopair, the LE Audio services, …). Changes collect until *Apply*: the bar says how many there
+are and what applying restarts (bluetoothd, WirePlumber, obexd), since a restart drops every
+connection. Wi-Fi and Kernel are here too.
 
 *Wi-Fi*: state (client, setup AP, connecting, off), networks in range, add a network, the saved
 ones, and the mode (auto / client / setup AP / off). The same page is served alone at `/wifi`:
@@ -177,6 +185,13 @@ the AP if joining fails.
 *Kernel*: the good / test / previous kernel slots, and *try* (one trial boot of the test kernel,
 falling back to the good one on a panic, hang or power cycle), *commit* and *roll back*, each
 behind a confirmation.
+
+**System** — two views. *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
+kernel, the stack's services with restart buttons, bluetoothd's command line under a
+disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
+bluetooth), and reboot. *Logs and tools*: the journal of a unit (the last 200 lines, and live with
+*follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted
+tools, with live output and kill).
 
 On a PC (`make run`, `make pc`) the board-only parts — audio mode, Wi-Fi, kernel, reboot — say
 that they run on the board only.
