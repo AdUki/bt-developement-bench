@@ -49,6 +49,17 @@ bool split_topic(const std::string& m, std::string* topic, std::string* rest) {
   return true;
 }
 
+// Packaged builds log the source path as the build saw it, "/usr/src/debug/bluez5/5.87+git/
+// profiles/audio/avctp.c:...": shortened to the path in the source tree, as a build from source
+// prints it.
+std::string strip_debug_prefix(const std::string& m) {
+  static const std::string kDebug = "/usr/src/debug/";
+  if (m.rfind(kDebug, 0) != 0) return m;
+  size_t at = kDebug.size();
+  for (int i = 0; i < 2 && at != std::string::npos; ++i) at = m.find('/', at) + 1;  // <package>/<version>/
+  return at == 0 || at == std::string::npos ? m : m.substr(at);
+}
+
 std::string pad_right(std::string s, size_t n) {
   if (s.size() < n) s.append(n - s.size(), ' ');
   return s;
@@ -74,7 +85,7 @@ std::string format(const Entry& e, const Route& r) {
     case Format::bluez: {
       // bluetoothd[13077]: 20220309 12:06:48.280 DEBUG src/adapter.c:adapter_service_insert() /org/bluez/hci0
       const char* lvl = p >= 7 ? "DEBUG" : p >= 5 ? "INFO" : p == 4 ? "WARN" : "ERROR";
-      return "bluetoothd[" + std::to_string(e.pid) + "]: " + stamp_ms(e.realtime_us) + " " + lvl + " " + e.message;
+      return "bluetoothd[" + std::to_string(e.pid) + "]: " + stamp_ms(e.realtime_us) + " " + lvl + " " + strip_debug_prefix(e.message);
     }
     case Format::pipewire: {
       // [I][10:44:56.111404] pw.conf      | [          conf.c:  423 conf_load()] loaded config ...

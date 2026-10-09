@@ -50,6 +50,9 @@ void test_formats() {
   CHECK(matches(bz, R"(^\S+ (\d{8} \d\d:\d\d:\d\d)\.\d\d\d (?:(DEBUG)|INFO|(WARN)|(ERROR)) (?:(\S+\.[ch]):)?)"));
   e.priority = 3;
   CHECK(format(e, route(e)).find(" ERROR ") != std::string::npos);
+  // A packaged build's source path, shortened to the tree's.
+  e.message = "/usr/src/debug/bluez5/5.87+git/profiles/audio/avctp.c:init_uinput() AVRCP: failed";
+  CHECK(format(e, route(e)).find(" ERROR profiles/audio/avctp.c:init_uinput() AVRCP: failed") != std::string::npos);
 
   // pipewire group.
   e = Entry{};
