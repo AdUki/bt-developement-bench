@@ -493,7 +493,7 @@ function playerCard(p, transports) {
     <div class="pl-time mono">${fmtMs(playerPosition(p))}${d ? ' / ' + fmtMs(d) : ''}</div>
     <div class="pl-controls">
       ${btn('previous', 'Previous')}${btn('rewind', 'Rewind (hold)')}
-      ${playing ? btn('pause', 'Pause', 'main') : btn('play', 'Play', 'main')}
+      ${btn('play', 'Play', playing ? 'main' : '')}${btn('pause', 'Pause', playing ? '' : 'main')}
       ${btn('fast-forward', 'Fast forward (hold)')}${btn('next', 'Next')}${btn('stop', 'Stop')}
       <span class="spacer"></span>
       <button class="small-btn pl-listen" data-address="${esc(p.address)}" title="Hear what this device sends the board">Listen here</button>

@@ -612,6 +612,10 @@ td.acts > * { margin-right: 0.25rem; }
 .np-btn.main svg { width: 26px; height: 26px; }
 .np-btn.main:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
 .np-btn.minor svg { width: 16px; height: 16px; }
+/* The state the player is in: the button of it filled. */
+.np-btn.on { background: var(--accent); color: var(--on-accent); }
+.np-btn.on:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
+.np-ctl .pill { margin-left: 0.4rem; }
 .np-foot { display: flex; align-items: center; gap: 0.6rem 1.4rem; flex-wrap: wrap; margin-top: 0.9rem; }
 .np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 200px; max-width: 320px; }
 .np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
