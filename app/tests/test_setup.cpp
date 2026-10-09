@@ -42,15 +42,21 @@ void test_merge() {
                                                 {"GATT.Channels", 3},
                                                 {"Monitor.bluez5.enable-msbc", true}});
   // A commented example gets the live line after it; the doc comment is not a key line.
-  CHECK(has(out, "#ControllerMode = dual\nControllerMode = le"));
+  CHECK(has(out, "#ControllerMode = dual\n# set by btbenchd (Setup)\nControllerMode = le"));
   CHECK(has(out, "# Possible values: dual, bredr, le\n"));
   // A live line is replaced in place, ms turned into BlueZ's 1.25 ms units.
-  CHECK(has(out, "MinConnectionInterval = 6  # btbenchd setup"));
+  CHECK(has(out, "# set by btbenchd (Setup)\nMinConnectionInterval = 6\n"));
   CHECK(!has(out, "MinConnectionInterval = 24"));
   // A missing key goes to the end of its section (10 ms units), a missing section to the end.
-  CHECK(has(out, "ConnectionSupervisionTimeout = 42  # btbenchd setup\n[Policy]"));
+  CHECK(has(out, "ConnectionSupervisionTimeout = 42\n[Policy]"));
+  // No value carries a trailing comment: a key file would take it as part of the value.
+  {
+    std::istringstream in(out);
+    for (std::string l; std::getline(in, l);)
+      if (!l.empty() && l[0] != '#' && l.find('=') != std::string::npos) CHECK(l.find('#') == std::string::npos);
+  }
   CHECK(has(out, "AutoEnable = false"));
-  CHECK(has(out, "\n[GATT]\nChannels = 3"));
+  CHECK(has(out, "\n[GATT]\n# set by btbenchd (Setup)\nChannels = 3"));
   // WirePlumber settings never reach main.conf.
   CHECK(!has(out, "msbc"));
   CHECK(has(out, "Name = btbench"));

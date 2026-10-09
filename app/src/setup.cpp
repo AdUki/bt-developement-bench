@@ -335,7 +335,10 @@ std::string main_conf_merge(const std::string& base, const std::map<std::string,
     if (!s) continue;
     const std::string sec = full.substr(0, full.find('.'));
     const std::string key = full.substr(full.find('.') + 1);
-    const std::string line = key + " = " + conf_value(*s, v) + "  # btbenchd setup";
+    // The marker on a line of its own: GLib key files have no trailing comments, and
+    // "FastConnectable = true  # ..." would be read as the value "true  # ...", which BlueZ
+    // rejects and replaces with its default.
+    const std::string line = "# set by btbenchd (Setup)\n" + key + " = " + conf_value(*s, v);
     std::string cur;
     int sec_start = -1, sec_end = -1, hit = -1, live = -1;
     for (size_t i = 0; i < lines.size(); ++i) {
