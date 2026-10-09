@@ -73,7 +73,16 @@ tracks (title, artist, album, genre, track number, duration). `Play`, `Pause`, `
 and `Position`; the position advances while playing and is published every 5 s, as a phone
 does. `Repeat` and `Shuffle` are writable (a bad value is `InvalidArgs`). It is also a
 `MediaFolder1` (`/NowPlaying`) whose `ListItems` lists the tracks as `MediaItem1` objects
-(`…/player0/NowPlaying/itemN`); an item's `Play` jumps to it.
+(`…/player0/NowPlaying/itemN`); an item's `Play` jumps to it. `…/player0/Filesystem` has a folder
+of the same tracks (and an empty one), `Search` finds tracks by title or artist, and items take
+`AddtoNowPlaying`. The track carries an `ImgHandle` and the player an `ObexPort` (cover art).
+
+**obexd** (`fake_obex.py`, `org.bluez.obex` on a connection of its own): `Client1` sessions to the
+devices that offer the profile (the phone: OPP, FTP, PBAP, MAP, BIP; the speakers: OPP; others
+fail as obexd does), a small file tree for FTP, three contacts and a message store, cover art as
+a PNG per track; transfers go queued → active → complete over about a second and write their file
+where the client asked. `AgentManager1` takes an agent; `ctl obex-push ADDR NAME SIZE` has a device
+push a file, which asks that agent (`AuthorizePush`).
 
 ## Playing the other side
 

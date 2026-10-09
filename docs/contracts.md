@@ -47,6 +47,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     for the HF role), both read by the bluetooth.service drop-in. Writers replace one, keep the other.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
+  - `/data/btbench/obex/` — OBEX files and obexd's root: `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
   - `/data/btbench/wifi/` — wpa_supplicant networks.
   - `/data/bluetooth/` — persisted `/var/lib/bluetooth` (bonds survive reflashes of the rootfs? no: of deploys and kernel swaps; a reflash rewrites /data too).
   - `/data/btsnoop/` — the always-on btmon ring (`hci-<YYYYmmdd-HHMMSS>.btsnoop`, newest is being written).
@@ -84,6 +85,9 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
 - Flags: `--port N` `--www DIR` `--data-dir DIR` (default `/data/btbench`) `--no-bluetooth`
   `--hci-replay FILE.btsnoop` (feed the HCI monitor from a capture, paced in real time).
 - WebSocket `/api/ws?topics=a,b` — messages `{"topic":"...","data":{...}}`.
+- OBEX (`/api/obex`, `app/src/obex/`): btbenchd runs `/usr/libexec/bluetooth/obexd -n -s -r
+  /data/btbench/obex` on first use (bluez5-obex; `-s` puts `org.bluez.obex` on the system bus,
+  which BlueZ's `obex.conf` allows root), unless the name is owned already.
 - Audio streams (`/api/audio/streams`, `app/src/audio/`) run, from PATH: `pw-cat` and `pw-dump`
   (pipewire-tools, with `PIPEWIRE_RUNTIME_DIR=/run/pipewire` from the unit), `aplay`/`arecord`
   (alsa-utils-aplay), `mpg123` (packagegroup-btbench-audio), `ffmpeg` (only with

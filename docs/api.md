@@ -28,6 +28,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 | `bt.request` | the pending agent request, or `null` | at once when it appears or goes |
 | `media` | the body of `GET /api/media` | on change, at most 1 Hz; once on connect |
 | `gatt.notify` | `{address, path, handle, uuid, value, text, ts}` | every value change BlueZ reports: notifications, indications, and the result of reads |
+| `obex` | the body of `GET /api/obex` | on a change (a session, a transfer's progress, an incoming push), at most 4 Hz |
 | `audio.streams` | the body of `GET /api/audio/streams` (levels, titles) | 4 Hz while a stream runs, once more when the last ends |
 | `gatt.server` | `{op: "read\|write\|notify-on\|notify-off", path, uuid, value, offset, device}` | a remote device using the local GATT server |
 | `system` | the body of `GET /api/system/health` | 1 Hz |
@@ -269,6 +270,31 @@ transport, for its volume. `items` are what browsing listed (see below), in list
 | `PUT /api/media/players` | `{"path"}` + any of `repeat` (`off\|singletrack\|alltracks\|group`), `shuffle` (`off\|alltracks\|group`), `equalizer` (`off\|on`), `scan` | the player's settings |
 | `POST /api/media/players/browse` | `{"path", "folder": "<item path>"}` (folder optional) | `ChangeFolder` when given, then `ListItems`: `{"items": [{path, name, type, folder_type, playable, title, artist, album, duration_ms}]}`. The items also appear under the player from then on |
 | `POST /api/media/items` | `{"path": "<item>", "action": "play\|add"}` | play an item now, or add it to the now-playing list |
+| `POST /api/media/players/search` | `{"path", "value"}` | `MediaFolder1.Search` (a `searchable` player), answered with the result folder's listing: `{"items", "folder", "result"}` |
+| `GET /api/media/players/cover?path=<player>[&full=1]` | | the current track's cover art (`track.img_handle`), pulled over BIP from the player's `obex_port` (AVRCP 1.6 cover art) through obexd and cached per handle: the 200×200 thumbnail, or with `full=1` the native image. 404 when the player offers none |
+
+Browsing folders: `POST /api/media/players/browse` with `"folder": "<player>/NowPlaying"`, `"<player>/Filesystem"`,
+or a folder item's path. Its answer also has `folder`, the name the player gives the folder now listed.
+
+### AVDTP browsing
+
+`POST /api/media/avdtp/{addr}?timeout_s=15` asks the device itself for its stream endpoints, over
+an AVDTP signalling channel of btbenchd's own (it pages the device if needed): DISCOVER, then
+GET_ALL_CAPABILITIES (GET_CAPABILITIES for AVDTP 1.0) of every SEP.
+
+```json
+{"address": "A4:B1:C1:0B:28:E4", "took_ms": 683,
+ "seps": [{"seid": 6, "role": "sink", "media_type": "audio", "in_use": false,
+           "codec": {"name": "SBC", "summary": "..."},
+           "capabilities": [{"category": 1, "name": "media transport", "hex": ""},
+                            {"category": 7, "name": "media codec", "hex": "0000ffff0235", "media_type": 0,
+                             "codec_type": 0, "codec": {...}},
+                            {"category": 8, "name": "delay reporting", "hex": ""}]}]}
+```
+
+It needs no audio stack and shows what BlueZ's endpoint objects do not (SEPs in use, every
+capability, a device not connected over A2DP). Devices take one signalling channel at a time:
+while A2DP is up the probe is refused (409) and `GET /api/media`'s endpoints are BlueZ's view.
 
 ## Audio streams
 
@@ -381,6 +407,41 @@ board; MP3 plays with mpg123). `tools/fake-upnp/server.py` is a media server to 
 `GET /api/audio/radio` — `{"stations": [{"name", "url"}], "saved": false}` (a starter list until
 one is saved); `PUT /api/audio/radio` `{"stations": [...]}` saves them to
 `/data/btbench/radio.json`.
+
+## OBEX
+
+btbenchd drives BlueZ's obexd: started on first use with `--system-bus` (or adopted when something
+already owns `org.bluez.obex`), stopped with btbenchd. Files live under `/data/btbench/obex`
+(obexd's root too: it writes nowhere else): `out/` what is sent, `in/` what is received or
+pulled, `shared/` anything put there for others. A device browsing the board over FTP sees all
+three.
+
+`GET /api/obex` — `{running, managed, owner, error, root, agent: {policy, registered}, request,
+sessions: [{id, path, destination, target, channel, psm}], transfers: [{id, session, status,
+name, filename, size, transferred, direction}], files: {in, out, shared}}`.
+`PUT /api/obex` `{"running": true|false, "policy": "auto|ask|reject"}`: start/stop obexd, and what
+the board's OBEX server does with an incoming push (`auto` saves it into `in/`; `ask` holds it as
+`request` for `POST /api/obex/request` `{"id", "accept", "name"}`, 55 s).
+
+`POST /api/obex/sessions` `{"address", "target": "opp|ftp|pbap|map|bip-avrcp", "channel"|"psm"}`
+(201) opens a client session; `DELETE /api/obex/sessions/{id}` closes it.
+`POST /api/obex/sessions/{id}` `{"op": ..., ...}` runs one operation:
+
+| target | op | arguments | answer |
+|---|---|---|---|
+| opp | `send`, `pull_card`, `exchange` | `file` (a name in `out/`) for send/exchange | the transfer |
+| ftp | `list` | | `{entries: [{name, type, size, modified}]}` |
+| ftp | `cd`, `mkdir`, `delete` | `name` (`..` up, `/` root for cd) | |
+| ftp | `get` / `put` | `name` (remote) / `file` (in `out/`) and `name` | the transfer (get lands in `in/`) |
+| ftp | `copy`, `move` | `name`, `to` | |
+| pbap | `select` | `location` (`int`, `sim1`), `phonebook` (`pb`, `ich`, `och`, `mch`, `cch`, `spd`, `fav`) | |
+| pbap | `size`, `list`, `search`, `pull`, `pull_all` | `field`/`value` (search), `vcard` (pull), `format`, `order`, `max` | `{size}`, `{vcards: [{vcard, name}]}`, or the transfer |
+| map | `folder`, `list_folders`, `list`, `get` | `name` (folder), `message` (a listed path), `attachment` | `{folders}`, `{messages: [{path, subject, sender, timestamp, read, ...}]}`, or `{transfer, file}` |
+| bip-avrcp | `properties`, `thumbnail`, `get` | `handle` | `{properties: [...]}`, or the transfer |
+
+`POST /api/obex/transfers/{id}` `{"action": "cancel|suspend|resume"}`. Files:
+`GET /api/obex/files/{in|out|shared}`, `POST /api/obex/files/{out|shared}?name=x` (the body is the
+file, up to 32 MiB), `GET`/`DELETE /api/obex/files/{folder}/{name}`.
 
 ## HCI monitor and capture
 

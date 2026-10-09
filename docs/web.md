@@ -45,10 +45,11 @@ restarting bluetoothd. *Bluetooth codecs*: per connected device, the PipeWire pr
 which is the codec — to use: send with SBC, SBC-XQ, AAC, aptX, LDAC, Opus (what the build has),
 both ways (duplex), receive, or HFP with CVSD/mSBC; the link renegotiates on a change. *Players*: each connected phone's AVRCP player with its track (title,
 artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
-previous / rewind / play–pause / stop / fast forward / next (the seeks run while the button is
+its cover art (AVRCP 1.6, pulled over BIP) when the phone offers it, previous / rewind /
+play–pause / stop / fast forward / next (the seeks run while the button is
 held), repeat and shuffle when the player offers them, the transport's absolute volume, *listen*
-(hear what the phone sends the board, in this browser) and, for a browsable player, its
-now-playing list with *play* per item. *Play and listen*: a new stream from a tone (its own
+(hear what the phone sends the board, in this browser) and, for a browsable player, a browser: the now-playing list, its files (folders open, back),
+search, and *play* or *add* (to now playing) per item. *Play and listen*: a new stream from a tone (its own
 frequency on the right channel if wanted), a sweep, white/pink/brown noise, silence, a URL
 (internet radio, a playlist, a file), a device's audio (capture — with a speaker as the sink,
 that is a tunnel from one device to another) or what a sink plays (its monitor), into any sink
@@ -59,7 +60,18 @@ console keeps listening when you change tabs. *Internet radio*: the station list
 `name | url` lines), play to the chosen sink or listen. *UPnP media servers*: search the LAN,
 browse a server's folders and play or listen to its tracks. Then BlueZ's view, the same in every
 mode: transports (codec decoded, raw configuration, state, delay, an AVRCP absolute-volume
-slider) and the remote stream endpoints with their capabilities.
+slider) and the remote stream endpoints with their capabilities, and the *AVDTP probe*: a device's own
+DISCOVER / GET_ALL_CAPABILITIES answer, every stream endpoint with its role, codec and other
+capabilities.
+
+**OBEX** — obexd (start/stop; what the board's server does with an incoming push: accept into
+`in/`, ask, reject — an asked push comes up with its sender, name and size, and a name to save it
+as), a new client session to a paired device (Object Push, File Transfer, Phonebook, Messages,
+cover art) and a card per session with its operations: send a file from `out/`, pull or exchange
+a business card; browse the device's folders, get, put, mkdir, delete; select a phonebook, list,
+search, pull one or all; list message folders and messages, fetch one; an image's properties,
+thumbnail or full image. Transfers with progress (pause, resume, cancel), and the files on the
+board — `out/` (upload what to send), `in/` (download what arrived), `shared/`.
 
 **Graphs** — live, scrolling graphs on one time axis (30 s, 2 min or 5 min): per connection the
 throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the

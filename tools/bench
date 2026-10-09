@@ -423,6 +423,35 @@ cmd_codec() {
     show '"now " + .active.name + (if .active.codec != "" then " (" + .active.codec + ")" else "" end) + (if .switch_error then "  — " + .switch_error else "" end)'
 }
 
+# OBEX: obexd's state, or push a file to a device (Object Push), or list its folder (FTP).
+cmd_obex() {
+  case "${1-status}" in
+    status) get /api/obex | show '"obexd " + (if .running then "running" + (if .managed then " (ours)" else "" end) else "stopped" end)
+        + "  agent " + .agent.policy, (.sessions[] | "  " + .id + "  " + .target + "  " + .destination),
+        (.transfers[:5][] | "  " + .id + "  " + .status + "  " + (.name // "") + "  " + ((.transferred|tostring) + "/" + (.size|tostring)))' ;;
+    push)
+      [ $# -ge 3 ] || die "usage: bench obex push ADDR FILE"
+      local name; name=$(basename "$3")
+      curl -sS -f -X POST -H "Content-Type: application/octet-stream" --data-binary "@$3" "$URL/api/obex/files/out?name=$name" >/dev/null || exit 1
+      local sid; sid=$(post /api/obex/sessions "$(jq -nc --arg a "$2" '{address:$a, target:"opp"}')" | jq -r .id) || exit 1
+      post "/api/obex/sessions/$sid" "$(jq -nc --arg f "$name" '{op:"send", file:$f}')" | show '"sending " + .name + " (" + (.size|tostring) + " bytes): " + .id' ;;
+    ls)
+      [ $# -ge 2 ] || die "usage: bench obex ls ADDR [FOLDER]"
+      local sid; sid=$(post /api/obex/sessions "$(jq -nc --arg a "$2" '{address:$a, target:"ftp"}')" | jq -r .id) || exit 1
+      [ -n "${3-}" ] && post "/api/obex/sessions/$sid" "$(jq -nc --arg n "$3" '{op:"cd", name:$n}')" >/dev/null
+      post "/api/obex/sessions/$sid" '{"op":"list"}' | show '.entries[] | "  " + (if .type == "folder" then "d " else "- " end) + .name + (if .size then "  " + (.size|tostring) else "" end)'
+      del "/api/obex/sessions/$sid" >/dev/null ;;
+    *) die "usage: bench obex [status] | push ADDR FILE | ls ADDR [FOLDER]" ;;
+  esac
+}
+
+# AVDTP browsing: a device's stream endpoints as it states them.
+cmd_avdtp() {
+  [ $# -ge 1 ] || die "usage: bench avdtp ADDR   (refused while A2DP is connected)"
+  post "/api/media/avdtp/$1" | show '"\(.seps | length) SEPs (\(.took_ms) ms)",
+    (.seps[] | "  SEP \(.seid)  \(.role)  \(.media_type)\(if .in_use then "  in use" else "" end)  " + (.codec.name // .error // "-") + "  " + (.codec.summary // ""))'
+}
+
 cmd_sinks() {
   get /api/audio/endpoints?fresh=1 | show '"backend " + .backend + (if .error != "" then "  (" + .error + ")" else "" end),
     "sinks", (.sinks[] | "  " + .id + "  " + .label + (if .default then "  (default)" else "" end)),
@@ -744,7 +773,7 @@ cmd_completion() {
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
   local cmds="status scan devices info pair connect disconnect trust untrust block unblock cancel remove
-    discoverable agent gatt adv audio media player codec sinks play radio streams stop listen cap mark mon wifi kernel sys logs bt-args run ssh help completion"
+    discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel sys logs bt-args run ssh help completion"
   if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
@@ -803,6 +832,8 @@ ${bold}Audio${off}
   player [ADDR] [play|pause|stop|next|previous|fast-forward|rewind|repeat M|shuffle M]
                                   a phone's AVRCP player: control it, show its track
   sinks                           where streams play to and capture from
+  avdtp ADDR                      a device's stream endpoints (AVDTP DISCOVER + capabilities)
+  obex [status] | push ADDR FILE | ls ADDR [FOLDER]   the OBEX tester (OPP push, FTP listing)
   codec [ADDR [PROFILE]]          a device's codecs (PipeWire profiles), or switch: a2dp-sink-sbc_xq
   play tone [HZ]|sweep|noise [COLOUR]|silence|url URL|capture SOURCE [TARGET]
                                   start a stream into TARGET (default sink; - = listen only)
@@ -848,6 +879,8 @@ case "$cmd" in
   player) cmd_player "$@" ;;
   sinks) cmd_sinks ;;
   codec) cmd_codec "$@" ;;
+  obex) cmd_obex "$@" ;;
+  avdtp) cmd_avdtp "$@" ;;
   play) cmd_play "$@" ;;
   radio) cmd_radio "$@" ;;
   streams) cmd_streams ;;
