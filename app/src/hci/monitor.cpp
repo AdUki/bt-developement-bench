@@ -91,7 +91,8 @@ Monitor::Impl::Impl(const Options& o, Publish p)
     : opts(o),
       publish(std::move(p)),
       feed(std::make_shared<PcapFeed>()),
-      capture(std::make_shared<Capture>(o.capture_dir, o.capture_unit, o.systemctl, o.btmon)) {}
+      capture(std::make_shared<Capture>(o.capture_dir, o.capture_unit, o.systemctl, o.btmon)),
+      packets(std::make_shared<PacketStore>(o.capture_dir)) {}
 
 Monitor::Impl::~Impl() { stop(); }
 

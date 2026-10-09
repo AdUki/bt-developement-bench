@@ -12,6 +12,7 @@
 #include "capture.h"
 #include "decoder.h"
 #include "hci_monitor.h"
+#include "packet_view.h"
 #include "pcap.h"
 
 namespace btb::hci {
@@ -35,6 +36,8 @@ struct Monitor::Impl {
   // releaser runs when the connection ends).
   const std::shared_ptr<PcapFeed> feed;
   const std::shared_ptr<Capture> capture;
+  // The packet view of the capture files: indexes cached across requests, own locking.
+  const std::shared_ptr<PacketStore> packets;
 
   // Everything the reader thread and the HTTP handlers both touch is under mu.
   mutable std::mutex mu;

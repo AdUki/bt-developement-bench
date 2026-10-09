@@ -151,6 +151,79 @@ void register_routes(httplib::Server& svr, Monitor& mon) {
     send_json(res, cap->status());
   });
 
+  // ---- packet view (docs/monitor.md "Packet view"): each answers within the store's budget,
+  // with "complete": false and its progress when the file or a text filter needs more time.
+
+  const std::shared_ptr<PacketStore> packets = mon.impl().packets;
+
+  svr.Get(R"(/api/capture/files/([^/]+)/packets)",
+          [packets](const httplib::Request& req, httplib::Response& res) {
+            PacketStore::ListParams p;
+            p.filter = req.get_param_value("filter");
+            int v = 0;
+            if (int_param(req, "start", &v) && v > 0) p.start = static_cast<size_t>(v);
+            if (int_param(req, "count", &v) && v > 0) p.count = static_cast<size_t>(v);
+            if (int_param(req, "at_n", &v)) p.at_n = v;
+            if (req.has_param("at_t")) {
+              p.at_t = std::strtod(req.get_param_value("at_t").c_str(), nullptr);
+              if (!(p.at_t >= 0)) p.at_t = 0;
+            }
+            json out;
+            int status = 500;
+            std::string err;
+            if (!packets->list(req.matches[1], p, &out, &status, &err)) {
+              return send_error(res, status, err);
+            }
+            send_json(res, out);
+          });
+
+  svr.Get(R"(/api/capture/files/([^/]+)/packets/(\d+))",
+          [packets](const httplib::Request& req, httplib::Response& res) {
+            const unsigned long n = std::strtoul(req.matches[2].str().c_str(), nullptr, 10);
+            json out;
+            int status = 500;
+            std::string err;
+            if (n == 0 || n > 0xffffffffUL ||
+                !packets->packet(req.matches[1], static_cast<uint32_t>(n), &out, &status, &err)) {
+              return send_error(res, n == 0 ? 404 : status, n == 0 ? "no such packet" : err);
+            }
+            send_json(res, out);
+          });
+
+  svr.Get(R"(/api/capture/files/([^/]+)/graph)",
+          [packets](const httplib::Request& req, httplib::Response& res) {
+            PacketStore::GraphParams p;
+            p.filter = req.get_param_value("filter");
+            int v = 0;
+            if (int_param(req, "bucket_ms", &v) && v > 0) p.bucket_ms = v;
+            if (int_param(req, "points", &v) && v > 0) p.points = static_cast<size_t>(v);
+            if (req.has_param("from")) p.from = std::strtod(req.get_param_value("from").c_str(), nullptr);
+            if (req.has_param("to")) p.to = std::strtod(req.get_param_value("to").c_str(), nullptr);
+            // conn=HANDLE or conn=INDEX:HANDLE
+            if (req.has_param("conn")) {
+              const std::string c = req.get_param_value("conn");
+              const size_t colon = c.find(':');
+              char* end = nullptr;
+              if (colon == std::string::npos) {
+                p.conn_index = 0;
+                p.conn_handle = static_cast<int>(std::strtol(c.c_str(), &end, 0));
+              } else {
+                p.conn_index = static_cast<int>(std::strtol(c.substr(0, colon).c_str(), nullptr, 0));
+                p.conn_handle = static_cast<int>(std::strtol(c.c_str() + colon + 1, &end, 0));
+              }
+              if (c.empty() || (end && *end) || p.conn_handle < 0 || p.conn_index < 0) {
+                return send_error(res, 400, "conn must be HANDLE or INDEX:HANDLE");
+              }
+            }
+            json out;
+            int status = 500;
+            std::string err;
+            if (!packets->graph(req.matches[1], p, &out, &status, &err)) {
+              return send_error(res, status, err);
+            }
+            send_json(res, out);
+          });
+
   svr.Get(R"(/api/capture/files/([^/]+)/analyze)",
           [cap](const httplib::Request& req, httplib::Response& res) {
             const std::string name = req.matches[1];

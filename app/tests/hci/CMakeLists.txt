@@ -14,6 +14,7 @@ add_hci_test(hci_decode)
 add_hci_test(hci_pcap)
 add_hci_test(hci_capture)
 add_hci_test(hci_replay)
+add_hci_test(hci_packets)
 
 # Not a test: runs a real capture through the decoder and prints a summary (docs/monitor.md).
 add_executable(hci_snoop_summary hci_snoop_summary.cpp)

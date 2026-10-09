@@ -11,8 +11,10 @@ namespace {
 
 const uint8_t kMagic[8] = {'b', 't', 's', 'n', 'o', 'o', 'p', 0};
 
+}  // namespace
+
 // btsnoop_read_hci()'s mapping for files that are not in monitor format.
-uint16_t opcode_from_flags(uint8_t type, uint32_t flags) {
+uint16_t btsnoop_hci_opcode(uint8_t type, uint32_t flags) {
   const bool rx = flags & 0x01;
   switch (type) {
     case 0x01: return kMonCommand;
@@ -26,8 +28,6 @@ uint16_t opcode_from_flags(uint8_t type, uint32_t flags) {
     default: return 0xffff;
   }
 }
-
-}  // namespace
 
 BtsnoopReader::~BtsnoopReader() {
   if (f_) std::fclose(f_);
@@ -74,14 +74,14 @@ bool BtsnoopReader::read(SnoopPacket* out) {
       case kBtsnoopUart:
         if (incl < 1) continue;
         out->index = 0;
-        out->opcode = opcode_from_flags(buf_[0], flags);
+        out->opcode = btsnoop_hci_opcode(buf_[0], flags);
         out->data = buf_.data() + 1;
         out->len = incl - 1;
         if (out->opcode == 0xffff) continue;
         return true;
       default:
         out->index = 0;
-        out->opcode = opcode_from_flags(0xff, flags);
+        out->opcode = btsnoop_hci_opcode(0xff, flags);
         return true;
     }
   }

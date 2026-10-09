@@ -14,7 +14,9 @@ add_library(btb_hci STATIC
   capture.cpp
   codec.cpp
   decoder.cpp
+  dissect.cpp
   monitor.cpp
+  packet_view.cpp
   pcap.cpp
   routes.cpp
 )
@@ -43,12 +45,13 @@ else()
   target_link_libraries(btb_hci PUBLIC Threads::Threads)
 endif()
 
-# 64-bit file offsets on 32-bit ARM for the two files that read the capture directory, so
-# readdir()/stat() never fail with EOVERFLOW. Only there, and deliberately not for the whole
-# library: anything that includes httplib.h must see the same off_t/time_t as the daemon's own
-# translation units, or the header-only Server/Request layouts differ between them (ODR).
+# 64-bit file offsets on 32-bit ARM for the files that read the capture directory, so
+# readdir()/stat()/pread() never fail with EOVERFLOW. Only there, and deliberately not for the
+# whole library: anything that includes httplib.h must see the same off_t/time_t as the daemon's
+# own translation units, or the header-only Server/Request layouts differ between them (ODR).
+# packet_view.h, which routes.cpp includes, therefore holds no off_t: offsets in it are uint64_t.
 # (scarthgap's SDK already passes -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64 to everything.)
-set_source_files_properties(capture.cpp btsnoop.cpp PROPERTIES COMPILE_DEFINITIONS
+set_source_files_properties(capture.cpp btsnoop.cpp packet_view.cpp PROPERTIES COMPILE_DEFINITIONS
                             _FILE_OFFSET_BITS=64)
 
 option(BTB_HCI_WERROR "Build btb_hci with -Werror" OFF)

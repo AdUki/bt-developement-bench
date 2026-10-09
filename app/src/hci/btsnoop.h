@@ -20,6 +20,10 @@ constexpr uint32_t kBtsnoopUart = 1002;
 constexpr uint32_t kBtsnoopMonitor = 2001;
 constexpr int64_t kBtsnoopEpochDelta = 0x00E03AB44A676000LL;  // µs, year 0 → 1970
 
+// The monitor opcode of a datalink 1002 record (its H4 type byte) or a 1001 one (type 0xff), from
+// that type and the btsnoop flags (bit 0: received, bit 1: command/event); 0xffff: skip it.
+uint16_t btsnoop_hci_opcode(uint8_t h4_type, uint32_t flags);
+
 struct SnoopPacket {
   int64_t ts_us = 0;  // Unix epoch
   uint16_t index = 0;
