@@ -463,6 +463,8 @@ function playerCard(p, transports) {
       ${p.type ? `<span class="small muted">${esc(p.type)}${p.subtype ? ' / ' + esc(p.subtype) : ''}</span>` : ''}</span>
       ${pill(p.status || 'unknown', playing ? 'good' : p.status === 'paused' ? 'warn' : '')}</div>
     <div class="pl-track">
+      ${p.obex_port != null && t.img_handle ? `<img class="cover" alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}"
+        onerror="this.hidden=true">` : ''}
       <div class="pl-title">${esc(t.title || 'no track')}</div>
       <div class="small">${esc([t.artist, t.album].filter(Boolean).join(' — '))}</div>
       <div class="small muted">${esc([t.genre, num].filter(Boolean).join(' · '))}</div>

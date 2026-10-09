@@ -12,6 +12,7 @@
 #   ctl app-read 2a37                     # a remote device reads / writes / subscribes to a
 #   ctl app-write 12345678-1234-5678-1234-56789abcdef1 6869   # characteristic of the bench's
 #   ctl app-subscribe 2a37                # own GATT server (its values are logged by the fake)
+#   ctl obex-push 5C:E9:1E:22:40:01 photo.jpg 20000   # the phone pushes a file (OPP) to the bench
 #   ctl reset                             # back to the initial world
 #   ctl objects                           # GetManagedObjects of org.bluez
 #   ctl busctl ...                        # anything else, on the private bus
@@ -35,6 +36,7 @@ case "$cmd" in
   app-read)      hook AppRead s "$1" ;;
   app-write)     hook AppWrite ss "$1" "$2" ;;
   app-subscribe) hook AppSubscribe s "$1" ;;
+  obex-push)     hook ObexPush ssu "$1" "${2:-photo.jpg}" "${3:-20000}" ;;
   reset)         hook Reset ;;
   objects)       bc --json=pretty call org.bluez / org.freedesktop.DBus.ObjectManager GetManagedObjects ;;
   busctl)        bc "$@" ;;

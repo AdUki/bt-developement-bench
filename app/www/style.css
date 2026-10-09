@@ -171,6 +171,18 @@ canvas.graph.short { height: 110px; }
 .codec-row:last-child { border-bottom: 0; }
 .codec-row select { min-width: 12rem; }
 
+/* OBEX */
+.ob-request { margin-top: 0.6rem; padding: 0.6rem; border: 1px solid var(--warn); border-radius: 6px; }
+.ob-session .ops { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin: 0.4rem 0; }
+.ob-session .result { max-height: 18rem; overflow: auto; }
+.ob-path { font-family: ui-monospace, monospace; font-size: 12.5px; }
+.progress { height: 6px; min-width: 6rem; background: var(--well); border-radius: 3px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--accent); }
+.upload { cursor: pointer; display: inline-block; border: 1px solid var(--line); border-radius: 6px; }
+.file-row { display: flex; justify-content: space-between; gap: 0.4rem; padding: 0.15rem 0; border-bottom: 1px solid var(--line); }
+.file-row span:first-child { overflow-wrap: anywhere; }
+.cover { width: 96px; height: 96px; border-radius: 6px; object-fit: cover; background: var(--well); border: 1px solid var(--line); float: right; margin-left: 0.6rem; }
+
 /* Graphs */
 .gr-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; margin-top: 0.5rem; }
 .gr-legend span { cursor: pointer; user-select: none; }

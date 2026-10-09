@@ -21,6 +21,7 @@
   <a href="#devices" class="tab" data-tab="devices">Devices</a>
   <a href="#le" class="tab" data-tab="le">LE</a>
   <a href="#audio" class="tab" data-tab="audio">Audio</a>
+  <a href="#obex" class="tab" data-tab="obex">OBEX</a>
   <a href="#graphs" class="tab" data-tab="graphs">Graphs</a>
   <a href="#monitor" class="tab" data-tab="monitor">Monitor</a>
   <a href="#capture" class="tab" data-tab="capture">Capture</a>
@@ -229,6 +230,50 @@
     <div id="au-endpoints" class="list"></div>
   </section>
 
+  <!-- ======================================================== OBEX -->
+  <section id="obex" class="panel">
+    <div class="card">
+      <div class="row wrap">
+        <h3>obexd</h3>
+        <span id="ob-state" class="pill">…</span>
+        <button id="ob-toggle">Start</button>
+        <label class="row small">incoming pushes
+          <select id="ob-policy"><option value="auto">accept into in/</option><option value="ask">ask here</option><option value="reject">reject</option></select></label>
+        <span id="ob-msg" class="small"></span>
+      </div>
+      <div id="ob-info" class="small muted"></div>
+      <div id="ob-request" class="ob-request" hidden></div>
+    </div>
+
+    <div class="card">
+      <h3>New session</h3>
+      <div class="row wrap">
+        <label class="row">Device <select id="ob-dev"></select></label>
+        <label class="row">Profile
+          <select id="ob-target">
+            <option value="opp">OPP: Object Push</option><option value="ftp">FTP: File Transfer</option>
+            <option value="pbap">PBAP: Phonebook</option><option value="map">MAP: Messages</option>
+            <option value="bip-avrcp">BIP: AVRCP cover art</option>
+          </select></label>
+        <label class="row small">channel/PSM <input id="ob-chan" class="narrow" placeholder="auto"></label>
+        <button class="primary" id="ob-connect">Connect</button>
+      </div>
+    </div>
+    <div id="ob-sessions" class="list"></div>
+
+    <h2>Transfers</h2>
+    <div class="card"><div class="scroll-x"><table id="ob-transfers" class="tbl"></table></div></div>
+
+    <h2>Files on the board</h2>
+    <div class="cols">
+      <div class="card"><div class="row between"><h3>out/ <span class="small muted">to send</span></h3>
+        <label class="small-btn upload">upload<input type="file" id="ob-up-out" multiple hidden></label></div><div id="ob-f-out" class="small"></div></div>
+      <div class="card"><div class="row between"><h3>in/ <span class="small muted">received, pulled</span></h3></div><div id="ob-f-in" class="small"></div></div>
+      <div class="card"><div class="row between"><h3>shared/ <span class="small muted">what the board's FTP server offers</span></h3>
+        <label class="small-btn upload">upload<input type="file" id="ob-up-shared" multiple hidden></label></div><div id="ob-f-shared" class="small"></div></div>
+    </div>
+  </section>
+
   <!-- ======================================================== Graphs -->
   <section id="graphs" class="panel">
     <div class="card">
@@ -423,6 +468,7 @@
 <script src="audio.js"></script>
 <script src="monitor.js"></script>
 <script src="graphs.js"></script>
+<script src="obex.js"></script>
 <script src="capture.js"></script>
 <script src="wifi.js"></script>
 <script src="kernel.js"></script>

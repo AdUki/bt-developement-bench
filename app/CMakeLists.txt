@@ -76,7 +76,10 @@ target_include_directories(third_party SYSTEM INTERFACE
 # Header-only spdlog: no library to link, no fmt to build. CLI11 is header-only as long as
 # CLI11_COMPILE stays undefined. The thread pool's floor is set in webserver.cpp; this is only
 # httplib's own default, kept as small as the board for anything that builds a server without it.
-target_compile_definitions(third_party INTERFACE SPDLOG_HEADER_ONLY CPPHTTPLIB_THREAD_POOL_COUNT=3)
+# httplib caps a form-encoded body at 8 KiB. Nothing here takes forms, but curl --data-binary
+# labels a raw upload (POST /api/obex/files) that way, so the cap is the upload limit instead.
+target_compile_definitions(third_party INTERFACE SPDLOG_HEADER_ONLY CPPHTTPLIB_THREAD_POOL_COUNT=3
+                           CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH=33554432)
 
 add_library(btbench_core STATIC
   src/a2dp_codec.cpp
@@ -88,12 +91,14 @@ add_library(btbench_core STATIC
   src/api_audio.cpp
   src/api_bluetooth.cpp
   src/api_le.cpp
+  src/api_obex.cpp
   src/api_system.cpp
   src/bluetooth.cpp
   src/bluez_model.cpp
   src/dbus_util.cpp
   src/gatt_server.cpp
   src/jobs.cpp
+  src/obex/obex.cpp
   src/journal.cpp
   src/scripts.cpp
   src/system.cpp

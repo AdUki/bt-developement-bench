@@ -379,6 +379,8 @@ json model_media(const json& objs) {
               {"equalizer", opt("Equalizer")},
               {"scan", opt("Scan")},
               {"browsable", bool_of(p, "Browsable")},
+              // The L2CAP PSM of the device's BIP responder: cover art is there to pull.
+              {"obex_port", p.contains("ObexPort") ? json(num_of(p, "ObexPort")) : json(nullptr)},
               {"searchable", bool_of(p, "Searchable")},
               {"items", json::array()}};
       // The transport of the same device, for the volume next to the transport controls.

@@ -58,7 +58,7 @@ bool gatt_find(const nlohmann::json& objs, const std::string& dev_path, uint16_t
 // configuration:"hex", delay_ms|null, volume|null}], players:[{path, device, address, name, type,
 // subtype, status, track:{title, artist, album, genre, track_number, number_of_tracks,
 // duration_ms, img_handle}, position_ms, repeat|null, shuffle|null, equalizer|null, scan|null,
-// browsable, searchable, transport|null, folder?:{name, items}, items:[{path, name, type,
+// browsable, searchable, obex_port|null (BIP cover art), transport|null, folder?:{name, items}, items:[{path, name, type,
 // folder_type, playable, metadata:{...as track}}]}]}.
 nlohmann::json model_media(const nlohmann::json& objs);
 

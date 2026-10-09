@@ -11,6 +11,7 @@
 
 #include "adv.h"
 #include "audio/engine.h"
+#include "obex/obex.h"
 #include "bluetooth.h"
 #include "bluez_model.h"
 #include "gatt_server.h"
@@ -149,7 +150,12 @@ int main(int argc, char** argv) {
   btb::audio::AudioEngine audio(publish, [&hub](const std::string& t) { return hub.has_subscribers(t); },
                                 data_dir, [&bt] { return btb::model_media(*bt.objects()); });
 
-  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio};
+  // OBEX (obexd on the system bus), started on first use; its files live under the data dir.
+  btb::obex::Options oopt;
+  oopt.root = data_dir + "/obex";
+  btb::obex::ObexManager obex(oopt, publish, [&hub](const std::string& t) { return hub.has_subscribers(t); });
+
+  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, obex};
   btb::WebServer server(deps, wopt);
   bt.on_change([&server](bool request) { server.publish_bt(request); });
 
@@ -186,6 +192,7 @@ int main(int argc, char** argv) {
   journal.stop();
   jobs.stop_all();
   audio.stop_all();
+  obex.stop();
 #ifdef BTB_HAVE_HCI
   mon->stop();
 #endif

@@ -25,6 +25,8 @@ import time
 
 import dbus
 import dbus.bus
+
+import fake_obex
 import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
@@ -1290,6 +1292,8 @@ class Player(PropObject):
              'Device': dbus.ObjectPath(dev.path), 'Track': self.track(),
              'Repeat': dbus.String('off'), 'Shuffle': dbus.String('off'),
              'Browsable': dbus.Boolean(True), 'Searchable': dbus.Boolean(False),
+             # Cover art: the PSM of the phone's BIP responder (fake_obex serves the images).
+             'ObexPort': dbus.UInt16(4101),
              'Playlist': dbus.ObjectPath(path + '/NowPlaying')}
         w = {PLAYER + '.Repeat': lambda v: self.set_mode('Repeat', v, REPEAT),
              PLAYER + '.Shuffle': lambda v: self.set_mode('Shuffle', v, SHUFFLE)}
@@ -1306,7 +1310,8 @@ class Player(PropObject):
         return dbus.Dictionary({'Title': dbus.String(t[0]), 'Artist': dbus.String(t[1]),
                                 'Album': dbus.String(t[2]), 'Genre': dbus.String(t[3]),
                                 'Duration': dbus.UInt32(t[4]), 'TrackNumber': dbus.UInt32(self.index + 1),
-                                'NumberOfTracks': dbus.UInt32(len(TRACKS))}, signature='sv')
+                                'NumberOfTracks': dbus.UInt32(len(TRACKS)),
+                                'ImgHandle': dbus.String('%07d' % (1000001 + self.index))}, signature='sv')
 
     def stop_clock(self):
         if self.timer:
@@ -1582,6 +1587,11 @@ class Fake(dbus.service.Object):
         d.link_lost('DropLink: out of range')
         d.go_out_of_range()
 
+    @dbus.service.method(FAKE, in_signature='ssu', out_signature='s', async_callbacks=('ok', 'fail'))
+    def ObexPush(self, address, name, size, ok=None, fail=None):
+        """A device pushes a file to the bench (OPP): obexd asks the registered agent."""
+        self.svc.obex.incoming_push(str(address).upper(), str(name), int(size), ok)
+
     @dbus.service.method(FAKE, in_signature='s', out_signature='')
     def StartStream(self, address):
         d = self.device(address, create=False)
@@ -1749,6 +1759,12 @@ def main():
     conn.set_exit_on_disconnect(True)
     svc = Service(conn)
     name = dbus.service.BusName('org.bluez', conn, do_not_queue=True)
+
+    # obexd, on a connection of its own (its ObjectManager is at "/" too).
+    def connected(addr):
+        d = svc.devices.get(addr)
+        return bool(d and d.p['Connected'])
+    svc.obex = fake_obex.FakeObex(args.address, str(svc.adapter.p['Address']), connected)
     log('fake BlueZ on %s' % args.address)
     loop = GLib.MainLoop()
     try:
