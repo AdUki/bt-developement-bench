@@ -293,6 +293,38 @@ void test_endpoints() {
   for (const json& x : a["sinks"]) CHECK(endpoint_id_ok(x["id"].get<std::string>()));
 }
 
+void test_cards() {
+  const json dump = json::parse(R"J([
+    {"id": 58, "type": "PipeWire:Interface:Device", "info": {
+      "props": {"device.api": "bluez5", "device.name": "bluez_card.B8_27_EB_8F_D1_56", "device.description": "btbench"},
+      "params": {
+        "EnumProfile": [
+          {"index": 0, "name": "off", "description": "Off", "available": "yes"},
+          {"index": 1, "name": "audio-gateway", "description": "Audio Gateway (A2DP Source & HSP/HFP AG)", "available": "yes"},
+          {"index": 6, "name": "a2dp-sink-sbc_xq", "description": "High Fidelity Playback (A2DP Sink, codec SBC-XQ)", "available": "yes"},
+          {"index": 20, "name": "a2dp-duplex-opus_05_duplex", "description": "High Fidelity Duplex (A2DP Source/Sink, codec Opus 05 Duplex)", "available": "yes"},
+          {"index": 196865, "name": "headset-head-unit", "description": "Headset Head Unit (HSP/HFP, codec mSBC)", "available": "no"}],
+        "Profile": [{"index": 6, "name": "a2dp-sink-sbc_xq", "description": "High Fidelity Playback (A2DP Sink, codec SBC-XQ)"}]}}},
+    {"id": 41, "type": "PipeWire:Interface:Device", "info": {"props": {"device.api": "alsa", "device.name": "alsa_card.x"}}}
+  ])J");
+  const json c = cards_from_pw_dump(dump);
+  CHECK_EQ(c["devices"].size(), size_t(1));  // ALSA cards are not the picker's
+  const json& d = c["devices"][0];
+  CHECK_EQ(d["id"].get<int>(), 58);
+  CHECK_EQ(d["address"].get<std::string>(), std::string("B8:27:EB:8F:D1:56"));
+  CHECK_EQ(d["label"].get<std::string>(), std::string("btbench"));
+  CHECK_EQ(d["active"]["codec"].get<std::string>(), std::string("SBC-XQ"));
+  CHECK_EQ(d["active"]["kind"].get<std::string>(), std::string("a2dp"));
+  CHECK_EQ(d["profiles"].size(), size_t(5));
+  CHECK_EQ(d["profiles"][1]["kind"].get<std::string>(), std::string("gateway"));
+  CHECK_EQ(d["profiles"][1]["codec"].get<std::string>(), std::string());
+  CHECK_EQ(d["profiles"][3]["kind"].get<std::string>(), std::string("a2dp-duplex"));
+  CHECK_EQ(d["profiles"][3]["codec"].get<std::string>(), std::string("Opus 05 Duplex"));
+  CHECK(!d["profiles"][4]["available"].get<bool>());
+  CHECK_EQ(d["profiles"][4]["kind"].get<std::string>(), std::string("headset"));
+  CHECK_EQ(profile_codec("Off"), std::string());
+}
+
 void test_xml() {
   const XmlNode d = parse_xml(R"(<?xml version="1.0"?><!-- c --><a:root x='1' y="&lt;2&gt;">
       <b>one &amp; two &#233;&#x41;</b><c/><b k=v>three<![CDATA[<raw>]]></b></a:root>)");
@@ -389,6 +421,7 @@ int main() {
   test_specs();
   test_argv();
   test_endpoints();
+  test_cards();
   test_xml();
   test_upnp();
   return report("test_audio");

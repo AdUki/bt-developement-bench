@@ -407,6 +407,22 @@ cmd_player() {
     "  " + ((.position_ms / 1000 | floor | tostring) + " s" + (if .track.duration_ms > 0 then " / " + (.track.duration_ms / 1000 | floor | tostring) + " s" else "" end))'
 }
 
+# The codec picker: a device's PipeWire profiles, or switch one (by name, e.g. a2dp-sink-sbc_xq).
+cmd_codec() {
+  local addr=${1-} prof=${2-}
+  if [ -z "$prof" ]; then
+    get /api/audio/devices | jq -c --arg a "$(echo "$addr" | tr a-f A-F)" '[.devices[] | select($a == "" or .address == $a)]' |
+      show '.[] | .label + "  " + .address + "  now: " + (.active.name // "-") + (if (.active.codec // "") != "" then " (" + .active.codec + ")" else "" end),
+        (.profiles[] | "    " + .name + (if .codec != "" then "  " + .codec else "" end) + (if .available then "" else "  (unavailable)" end))'
+    return
+  fi
+  local id
+  id=$(get /api/audio/devices | jq -r --arg a "$(echo "$addr" | tr a-f A-F)" '[.devices[] | select(.address == $a)][0].id // empty')
+  [ -n "$id" ] || die "no Bluetooth audio device $addr (bench codec lists them)"
+  put "/api/audio/devices/$id/profile" "$(jq -nc --arg p "$prof" '{profile:$p}')" |
+    show '"now " + .active.name + (if .active.codec != "" then " (" + .active.codec + ")" else "" end) + (if .switch_error then "  — " + .switch_error else "" end)'
+}
+
 cmd_sinks() {
   get /api/audio/endpoints?fresh=1 | show '"backend " + .backend + (if .error != "" then "  (" + .error + ")" else "" end),
     "sinks", (.sinks[] | "  " + .id + "  " + .label + (if .default then "  (default)" else "" end)),
@@ -728,7 +744,7 @@ cmd_completion() {
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
   local cmds="status scan devices info pair connect disconnect trust untrust block unblock cancel remove
-    discoverable agent gatt adv audio media player sinks play radio streams stop listen cap mark mon wifi kernel sys logs bt-args run ssh help completion"
+    discoverable agent gatt adv audio media player codec sinks play radio streams stop listen cap mark mon wifi kernel sys logs bt-args run ssh help completion"
   if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
@@ -787,6 +803,7 @@ ${bold}Audio${off}
   player [ADDR] [play|pause|stop|next|previous|fast-forward|rewind|repeat M|shuffle M]
                                   a phone's AVRCP player: control it, show its track
   sinks                           where streams play to and capture from
+  codec [ADDR [PROFILE]]          a device's codecs (PipeWire profiles), or switch: a2dp-sink-sbc_xq
   play tone [HZ]|sweep|noise [COLOUR]|silence|url URL|capture SOURCE [TARGET]
                                   start a stream into TARGET (default sink; - = listen only)
   radio [NAME [TARGET]]           the station list, or play one
@@ -830,6 +847,7 @@ case "$cmd" in
   media) cmd_media ;;
   player) cmd_player "$@" ;;
   sinks) cmd_sinks ;;
+  codec) cmd_codec "$@" ;;
   play) cmd_play "$@" ;;
   radio) cmd_radio "$@" ;;
   streams) cmd_streams ;;

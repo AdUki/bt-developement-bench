@@ -169,6 +169,72 @@ json endpoints_from_alsa(const json& media, bool loopback) {
   return json{{"sinks", sinks}, {"sources", sources}};
 }
 
+std::string profile_codec(const std::string& d) {
+  const size_t c = d.rfind("codec ");
+  if (c == std::string::npos) return {};
+  std::string out = d.substr(c + 6);
+  const size_t e = out.find(')');
+  if (e != std::string::npos) out.resize(e);
+  return trim(out);
+}
+
+std::string profile_kind(const std::string& n) {
+  if (n == "off") return "off";
+  if (starts_with(n, "a2dp-duplex")) return "a2dp-duplex";
+  if (starts_with(n, "a2dp-sink")) return "a2dp";
+  if (starts_with(n, "audio-gateway")) return "gateway";
+  if (starts_with(n, "headset-head-unit") || starts_with(n, "hsp-hs") || starts_with(n, "hfp-hf")) return "headset";
+  if (starts_with(n, "bap")) return "bap";
+  return "other";
+}
+
+json cards_from_pw_dump(const json& dump) {
+  json devices = json::array();
+  if (!dump.is_array()) return json{{"devices", devices}};
+  for (const json& o : dump) {
+    if (o.value("type", "") != "PipeWire:Interface:Device" || !o.contains("info")) continue;
+    const json& info = o["info"];
+    if (!info.contains("props")) continue;
+    const json& p = info["props"];
+    if (prop(p, "device.api") != "bluez5") continue;
+    auto to_profile = [](const json& pr) {
+      const std::string name = pr.value("name", "");
+      const std::string desc = pr.value("description", "");
+      json av = pr.contains("available") ? pr["available"] : json("unknown");
+      return json{{"index", pr.value("index", -1)},
+                  {"name", name},
+                  {"description", desc},
+                  {"available", av.is_string() ? av.get<std::string>() != "no" : av.is_boolean() ? av.get<bool>() : true},
+                  {"kind", profile_kind(name)},
+                  {"codec", profile_codec(desc)}};
+    };
+    json profiles = json::array(), active = nullptr;
+    const json params = info.contains("params") ? info["params"] : json::object();
+    if (params.contains("EnumProfile") && params["EnumProfile"].is_array())
+      for (const json& pr : params["EnumProfile"])
+        if (pr.is_object()) profiles.push_back(to_profile(pr));
+    if (params.contains("Profile") && params["Profile"].is_array() && !params["Profile"].empty() &&
+        params["Profile"][0].is_object())
+      active = to_profile(params["Profile"][0]);
+    std::string address = prop(p, "api.bluez5.address");
+    if (address.empty()) {
+      // bluez_card.AA_BB_CC_DD_EE_FF
+      const std::string n = prop(p, "device.name");
+      const size_t dot = n.find('.');
+      if (dot != std::string::npos) address = bt_address(n.substr(dot + 1));
+    }
+    std::string label = prop(p, "device.description");
+    if (label.empty()) label = prop(p, "device.alias");
+    devices.push_back(json{{"id", o.value("id", -1)},
+                           {"name", prop(p, "device.name")},
+                           {"label", label.empty() ? address : label},
+                           {"address", address},
+                           {"active", active},
+                           {"profiles", profiles}});
+  }
+  return json{{"devices", devices}};
+}
+
 bool endpoint_id_ok(const std::string& id) {
   if (id.empty() || id.size() > 200 || id[0] == '-') return false;
   for (const char c : id) {

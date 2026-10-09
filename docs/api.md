@@ -346,6 +346,26 @@ transport where the board is the A2DP source is a sink, one where it is the sink
 both (`PROFILE=sco`) — plus the loopback card when snd-aloop is loaded. `kind`: `bluetooth`,
 `loopback`, `hardware`, `virtual`.
 
+### Bluetooth codecs
+
+PipeWire picks a Bluetooth device's codec with its profile: `a2dp-sink-sbc_xq` sends A2DP with
+SBC-XQ, `a2dp-duplex-opus_05` runs Opus both ways, `audio-gateway` receives the device's A2DP (and
+is its HFP gateway), `headset-head-unit` is HFP with mSBC. Choosing a profile is choosing the
+codec (as in a desktop's Bluetooth sound settings).
+
+`GET /api/audio/devices` — `{"backend": "pipewire", "error": "", "devices": [{"id": 38, "name":
+"bluez_card.A4_B1_C1_0B_28_E4", "label": "SMI-PC", "address": "A4:B1:C1:0B:28:E4", "active":
+{...a profile...}, "profiles": [{"index": 131074, "name": "a2dp-sink-sbc_xq", "description":
+"High Fidelity Playback (A2DP Sink, codec SBC-XQ)", "available": true, "kind": "a2dp", "codec":
+"SBC-XQ"}]}]}`. `kind`: `a2dp` (send), `a2dp-duplex`, `gateway` (receive), `headset`, `bap`,
+`off`, `other`. The list depends on what is connected: the receive profiles appear once the device
+has opened its stream to the board, the send ones once the board's A2DP source is connected.
+
+`PUT /api/audio/devices/{id}/profile` `{"profile": "a2dp-sink-sbc_xq"}` (or the index) switches
+it (`wpctl set-profile`) and answers with the device once the link has renegotiated (a few
+seconds; it waits up to about ten); `switch_error` says so when it has not by then. Without PipeWire (BlueALSA mode)
+the list is empty and says why.
+
 ### UPnP media servers
 
 | route | what |

@@ -26,6 +26,18 @@ nlohmann::json endpoints_from_pw_dump(const nlohmann::json& dump);
 // hw:Loopback,0,0 (play) and hw:Loopback,1,0 (capture what was played into it) are there too.
 nlohmann::json endpoints_from_alsa(const nlohmann::json& media, bool loopback);
 
+// The codec picker: pw-dump's Bluetooth devices (PipeWire "cards") with their profiles, as
+// {devices:[{id, name, label, address, active:{...profile}|null, profiles:[{index, name,
+// description, available, kind, codec}]}]}. In PipeWire a profile *is* the codec choice
+// ("a2dp-sink-sbc_xq": send A2DP with SBC-XQ), so choosing one is how a codec is picked. kind:
+// "a2dp" (send to the device), "a2dp-duplex" (both ways), "gateway" (receive the device's A2DP,
+// be its HFP gateway), "headset" (HFP/HSP as the head unit), "bap" (LE Audio), "off", "other".
+// codec is the profile's codec as PipeWire names it in the description ("SBC-XQ"), "" for none.
+nlohmann::json cards_from_pw_dump(const nlohmann::json& dump);
+// "High Fidelity Playback (A2DP Sink, codec SBC-XQ)" → "SBC-XQ".
+std::string profile_codec(const std::string& description);
+std::string profile_kind(const std::string& name);
+
 // What an endpoint id may contain before it becomes a command-line argument: node names and ALSA
 // device strings use [A-Za-z0-9_.:,=-] and nothing else (no spaces, quotes or option dashes at the
 // start), and no ALSA device here needs more.

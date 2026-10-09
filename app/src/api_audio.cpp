@@ -98,6 +98,25 @@ void install_audio_routes(httplib::Server& svr, Deps& d) {
         });
   });
 
+  // ---- the codec picker: Bluetooth devices' PipeWire profiles ------------------------------------
+
+  svr.Get("/api/audio/devices", [&a](const httplib::Request&, httplib::Response& res) {
+    send_json(res, a.devices());
+  });
+
+  // Body: {"profile": <index> | "<name>"}, e.g. "a2dp-sink-sbc_xq" (send A2DP with SBC-XQ).
+  svr.Put(R"(/api/audio/devices/(\d+)/profile)", json_route([&a](const json& j, const httplib::Request& req, httplib::Response& res) {
+    int id = 0;
+    if (!stream_id(req, &id)) return send_error(res, 404, "no such device");
+    if (!j.contains("profile") || !(j["profile"].is_number_integer() || j["profile"].is_string()))
+      return send_error(res, 400, "body must be {\"profile\": index or name}");
+    json out;
+    std::string err;
+    int status = 400;
+    if (!a.set_profile(id, j["profile"], &out, &err, &status)) return send_error(res, status, err);
+    send_json(res, out);
+  }));
+
   // ---- UPnP media servers -----------------------------------------------------------------------
 
   // ?search=1 searches the LAN (about 2 s); without it, the last search's servers.

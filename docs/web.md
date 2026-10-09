@@ -41,7 +41,9 @@ heart-rate counter, a battery level and an echo characteristic), its live values
 what remote devices read, wrote and subscribed to.
 
 **Audio** — the audio stack (PipeWire / BlueALSA / none) with a confirmation, optionally
-restarting bluetoothd. *Players*: each connected phone's AVRCP player with its track (title,
+restarting bluetoothd. *Bluetooth codecs*: per connected device, the PipeWire profile —
+which is the codec — to use: send with SBC, SBC-XQ, AAC, aptX, LDAC, Opus (what the build has),
+both ways (duplex), receive, or HFP with CVSD/mSBC; the link renegotiates on a change. *Players*: each connected phone's AVRCP player with its track (title,
 artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
 previous / rewind / play–pause / stop / fast forward / next (the seeks run while the button is
 held), repeat and shuffle when the player offers them, the transport's absolute volume, *listen*

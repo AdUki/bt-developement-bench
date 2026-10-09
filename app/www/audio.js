@@ -388,6 +388,36 @@ function drawSpectrum(cv, l) {
   }
 }
 
+// ---------------------------------------------------------------- codec picker
+
+const CD_KINDS = [['a2dp', 'Send (A2DP)'], ['a2dp-duplex', 'Both ways (A2DP duplex)'], ['gateway', 'Receive A2DP / HFP gateway'],
+  ['headset', 'Headset (HFP/HSP)'], ['bap', 'LE Audio (BAP)'], ['other', 'Other'], ['off', 'Off']];
+
+function renderCodecs(r) {
+  au.devices = r;
+  if (!r.devices.length) {
+    setHTML($('cd-list'), `<div class="small muted">${esc(r.error || 'No Bluetooth audio device connected.')}</div>`);
+    return;
+  }
+  // Not while a picker is open: the rebuild would close it.
+  const ae = document.activeElement;
+  if (ae && $('cd-list').contains(ae) && ae.tagName === 'SELECT') return;
+  setHTML($('cd-list'), r.devices.map(d => {
+    const a = d.active;
+    const groups = CD_KINDS.map(([k, label]) => {
+      const ps = d.profiles.filter(p => p.kind === k);
+      if (!ps.length) return '';
+      return `<optgroup label="${esc(label)}">${ps.map(p => `<option value="${p.index}"${a && a.index === p.index ? ' selected' : ''}${p.available ? '' : ' disabled'}>
+        ${p.codec ? esc(p.codec) + ' (' + esc(p.name) + ')' : esc(p.name)}</option>`).join('')}</optgroup>`;
+    }).join('');
+    return `<div class="row wrap codec-row"><b>${esc(d.label)}</b> <span class="mono small muted">${esc(d.address)}</span>
+      ${a ? pill(a.codec || a.name, a.kind === 'off' ? '' : 'good') : ''}
+      <select class="cd-pick grow" data-id="${d.id}">${groups}</select></div>`;
+  }).join(''));
+}
+
+const refreshCodecs = () => api('/audio/devices').then(renderCodecs).catch(e => setHTML($('cd-list'), `<span class="bad-text">${esc(e.message)}</span>`));
+
 // ---------------------------------------------------------------- AVRCP players
 
 const fmtMs = ms => {
@@ -625,6 +655,18 @@ function setupAudio() {
     window.addEventListener('pointerup', up);
   };
 
+  // The codec picker.
+  $('cd-refresh').onclick = refreshCodecs;
+  $('cd-list').onchange = e => {
+    const sel = e.target.closest('select.cd-pick');
+    if (!sel) return;
+    sel.disabled = true;
+    put(`/audio/devices/${sel.dataset.id}/profile`, {profile: parseInt(sel.value, 10)})
+      .then(d => { if (d.switch_error) toast(d.switch_error); refreshCodecs(); refreshEndpoints(true); })
+      .catch(err => { fail(err); refreshCodecs(); })
+      .finally(() => { sel.disabled = false; });
+  };
+
   // The stream form.
   $('st-src').onchange = showSourceFields;
   showSourceFields();
@@ -732,6 +774,7 @@ registerTab('audio', {
     refreshAudio();
     refreshMedia();
     refreshEndpoints(false);
+    refreshCodecs();
     refreshStreams();
     api('/audio/radio').then(renderRadio).catch(() => {});
     api('/audio/upnp/servers').then(renderUpnpServers).catch(() => {});
@@ -747,6 +790,8 @@ registerTab('audio', {
   onMessage(topic, data) {
     if (currentTab !== 'audio') return;
     if (topic === 'media') {
+      clearTimeout(au.cdTimer);
+      au.cdTimer = setTimeout(refreshCodecs, 1500);
       // Not under a volume drag: the rebuild would take the slider from under the pointer.
       const ae = document.activeElement;
       if (!(ae && ae.type === 'range' && !$('au-players').contains(ae))) renderMedia(data);

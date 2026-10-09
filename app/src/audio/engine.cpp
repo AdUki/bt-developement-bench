@@ -125,6 +125,7 @@ Tools Tools::find() {
   Tools t;
   t.pw_cat = find_exec("pw-cat");
   t.pw_dump = find_exec("pw-dump");
+  t.wpctl = find_exec("wpctl");
   t.aplay = find_exec("aplay");
   t.arecord = find_exec("arecord");
   t.mpg123 = find_exec("mpg123");
@@ -135,6 +136,7 @@ Tools Tools::find() {
 
 json Tools::to_json() const {
   return nlohmann::json{{"pw-cat", !pw_cat.empty()},   {"pw-dump", !pw_dump.empty()},
+                        {"wpctl", !wpctl.empty()},
                         {"aplay", !aplay.empty()},     {"arecord", !arecord.empty()},
                         {"mpg123", !mpg123.empty()},   {"ffmpeg", !ffmpeg.empty()},
                         {"curl", !curl.empty()}};
@@ -1095,6 +1097,87 @@ json AudioEngine::endpoints(bool fresh) {
   ep_cache_ = out;
   ep_at_ms_ = now;
   return out;
+}
+
+// ---- codec picker -------------------------------------------------------------------------------
+
+json AudioEngine::devices() {
+  if (tools_.pw_dump.empty())
+    return json{{"backend", "none"}, {"devices", json::array()},
+                {"error", "codecs are picked through PipeWire, which is not installed"}};
+  const ExecResult r = run_cmd({tools_.pw_dump}, 5000, 8 << 20);
+  if (!r.ok())
+    return json{{"backend", "none"}, {"devices", json::array()},
+                {"error", "PipeWire is not running (" + r.reason() + "): codecs are picked in pipewire mode"}};
+  try {
+    json out = cards_from_pw_dump(json::parse(r.out));
+    out["backend"] = "pipewire";
+    out["error"] = "";
+    return out;
+  } catch (const std::exception& e) {
+    return json{{"backend", "pipewire"}, {"devices", json::array()}, {"error", std::string("pw-dump: ") + e.what()}};
+  }
+}
+
+bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std::string* err,
+                              int* status) {
+  if (tools_.wpctl.empty()) {
+    *status = 503;
+    *err = "wpctl is not installed";
+    return false;
+  }
+  const json all = devices();
+  const json* dev = nullptr;
+  for (const json& d : all["devices"])
+    if (d["id"] == device_id) dev = &d;
+  if (!dev) {
+    *status = 404;
+    *err = all["error"].get<std::string>().empty() ? "no such Bluetooth device" : all["error"].get<std::string>();
+    return false;
+  }
+  // By index or by name, but only one of this device's own: wpctl would take any number.
+  const json* pick = nullptr;
+  for (const json& p : (*dev)["profiles"]) {
+    if ((profile.is_number_integer() && p["index"] == profile) || (profile.is_string() && p["name"] == profile))
+      pick = &p;
+  }
+  if (!pick) {
+    *status = 400;
+    *err = "the device has no such profile (GET /api/audio/devices lists them)";
+    return false;
+  }
+  const ExecResult r = run_cmd({tools_.wpctl, "set-profile", std::to_string(device_id),
+                                std::to_string((*pick)["index"].get<long long>())}, 5000);
+  if (!r.ok()) {
+    *status = 502;
+    *err = "wpctl set-profile: " + r.reason();
+    return false;
+  }
+  LOG_INFO("audio: device {} ({}) → profile {}", device_id, (*dev)["label"].get<std::string>(),
+           (*pick)["name"].get<std::string>());
+  {
+    std::lock_guard<std::mutex> lk(ep_m_);
+    ep_cache_ = nullptr;  // the endpoints change with the profile
+  }
+  // The switch renegotiates the stream with the device (an AVDTP reconfiguration: a second or two
+  // on a Zero W, six seen with a desktop as the peer). The answer is the device once its active
+  // profile is the new one, or as it is after ~10 s when it never gets there (the device refused;
+  // the old profile stays).
+  const json want = (*pick)["name"];
+  // Twenty tries: each pw-dump itself takes a third of a second on the board.
+  for (int i = 0; i < 20; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Held by name: a range-for over devices()["devices"] would walk a destroyed temporary.
+    const json now = devices();
+    for (const json& d : now["devices"])
+      if (d["id"] == device_id) *out = d;
+    if (out->is_object() && (*out)["active"].is_object() && (*out)["active"]["name"] == want) return true;
+  }
+  if (out->is_null()) *out = *dev;
+  (*out)["switch_error"] = "the device is still on " +
+                           ((*out)["active"].is_object() ? (*out)["active"]["name"].get<std::string>() : std::string("no profile")) +
+                           ": it did not accept " + want.get<std::string>() + " (yet)";
+  return true;
 }
 
 // ---- radio stations -----------------------------------------------------------------------------

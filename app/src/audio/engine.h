@@ -38,7 +38,7 @@ namespace btb::audio {
 
 // The programs the streams run, found once on PATH. Empty when missing.
 struct Tools {
-  std::string pw_cat, pw_dump, aplay, arecord, mpg123, ffmpeg, curl;
+  std::string pw_cat, pw_dump, wpctl, aplay, arecord, mpg123, ffmpeg, curl;
   static Tools find();
   nlohmann::json to_json() const;
 };
@@ -144,6 +144,15 @@ class AudioEngine {
   // GET /api/audio/endpoints: {backend, sinks, sources, tools, error}. pw-dump is run at most every
   // two seconds; `fresh` skips that cache.
   nlohmann::json endpoints(bool fresh);
+  // The codec picker (GET/PUT /api/audio/devices): PipeWire's Bluetooth devices and their
+  // profiles, and switching one to another profile — which is how PipeWire picks a codec.
+  // {backend, devices:[...cards_from_pw_dump...], error}.
+  nlohmann::json devices();
+  // `profile` is a profile's index or name, of that device. Answers with the device as it is
+  // after the switch.
+  bool set_profile(int device_id, const nlohmann::json& profile, nlohmann::json* out,
+                   std::string* err, int* status);
+
   const Tools& tools() const { return tools_; }
   UpnpBrowser& upnp() { return upnp_; }
 

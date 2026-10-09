@@ -128,6 +128,7 @@ The drop-in is `/etc/wireplumber/wireplumber.conf.d/50-btbench.conf`:
 | `bluez5.roles` | `[ a2dp_sink a2dp_source bap_sink bap_source hfp_hf hfp_ag ]` | every role except HSP, as upstream does |
 | `bluez5.codecs` | every codec name PipeWire 1.6 knows | names that were not built are ignored. Trim the list to force a codec |
 | `bluez5.hfphsp-backend` | `native` | PipeWire's own HFP; no oFono or hsphfpd on the image |
+| `bluetooth.autoswitch-to-headset-profile` | `false` | upstream switches a device to HFP when anything records from it; on the bench every recorder is a measurement, and the switch would drop the A2DP stream being captured. Profiles (codecs) are chosen on purpose: the console's codec picker, `bench codec`, `wpctl set-profile` |
 
 WirePlumber merges fragments: objects key by key, arrays by **concatenation**. To replace one of
 these lists from another fragment, name the section `override.monitor.bluez.properties`.
