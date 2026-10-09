@@ -292,3 +292,13 @@ canvas.cv-graph {
   .cv-head, .cv-row { grid-template-columns: 3.2rem 4.2rem 2.6rem minmax(0, 1fr); gap: 0 0.3rem; }
   .cv-c-h, .cv-c-l, .cv-c-d { display: none; }
 }
+
+/* Live packets (Monitor tab): the Capture viewer's table and detail, its rows appended as they
+   come instead of virtualised (the page keeps at most 1000). */
+.lp-body { height: 360px; }
+.lp-note > span:last-child { grid-column: 2 / -1; font-style: italic; }
+#lp .cv-detail { max-height: 386px; }
+@media (max-width: 560px) {
+  /* The time column holds a clock with milliseconds here, not seconds since the first packet. */
+  #lp .cv-head, #lp .cv-row { grid-template-columns: 3.2rem 6.2rem 2.6rem minmax(0, 1fr); }
+}

@@ -117,6 +117,8 @@ Routes:
 - `GET /api/hci/events?since=<seq>` — `[{"seq":1,"ts":<ms>,"index":0,"handle":11,"kind":"conn|disconn|avdtp|l2cap|mark|...","text":"..."}]` (ring of 500)
 - `POST /api/hci/mark` `{"text":"..."}` — written to the kernel's logging channel (shows in btmon/btsnoop/Wireshark)
 - `GET /api/hci/live.pcap` — chunked pcap, linktype 254 (LINUX_BT_MONITOR), live from now on
+- `GET /api/hci/live?filter=&since=<seq>` — chunked NDJSON (`application/x-ndjson`), live packets filtered per stream with the packet view's filter syntax: packet lines `{"seq","n","ts_ms","t","index","dir","type","proto","handle","cid","psm","len","lat_ms","summary","err"?,"mark"?,"cont"?}` (the capture packet object, `n` = `seq`) and status lines `{"status":{"seq","cursor","scanned","sent","dropped","skipped","filter"?,"ring"?,"batch_ms"?,"lat_hold"?}}` (first, on every change of `dropped`/`skipped`, at least every 2 s). 150 ms batches of at most 200 packet lines; a ring of the last 2048 packets, fed only while a stream is open; at most 4 streams (503); 400 for a bad filter
+- `GET /api/hci/live/<seq>` — one packet of the live ring as `/api/capture/files/<name>/packets/<n>` answers (plus `"seq"`); 404 when no longer in the ring
 - `GET /api/capture` — `{"running":true,"unit":"btbench-btsnoop.service","dir":"/data/btsnoop","files":[{"name":"hci-20261009-120000.btsnoop","size":123,"mtime":<ms>,"active":true}]}`
 - `PUT /api/capture` `{"running":false}`; `GET|DELETE /api/capture/files/<name>`; `GET /api/capture/files/<name>/analyze` (text: `btmon -a`)
 - Packet view of a file (docs/monitor.md "Packet view" has the filter syntax and full shapes). Each answers within a 400 ms budget; `"complete":false` + `"next"` mean "repeat the request, it continues":

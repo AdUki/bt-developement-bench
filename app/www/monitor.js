@@ -3,6 +3,8 @@
 // throughput, TX latency (HCI send → Number Of Completed Packets), in-flight packets against the
 // controller's credits, and the AVDTP stream. Stats arrive on "hci.stats" once a second; the
 // graphs read /api/hci/history for the selected connection at the same pace, only while visible.
+// Below the events, the live packet list: the monitor's packets as they happen, filtered on the
+// board with the Capture viewer's filter language.
 
 const mon = {sel: null, stats: null, hist: null, lat: null, poll: null, latPoll: null, lastSeq: 0};
 
@@ -182,6 +184,342 @@ function setupMonitor() {
   window.addEventListener('resize', () => { if (currentTab === 'monitor') { pollHistory(); pollLatency(); } });
 }
 
+// ---------------------------------------------------------------- live packets
+
+// GET /api/hci/live is a stream of NDJSON lines: packets in the Capture viewer's shape plus
+// "seq", and {"status": {...}} lines with the stream's counters. The filter is the stream's own:
+// changing it reopens the stream with since=0, so the board re-filters the packets it still holds
+// (the last 2048). The stream is open only while this tab is on screen, the page is visible and
+// the view is not paused — the board then classifies nothing at all.
+const livePkts = (() => {
+  const MAXROWS = 1000;  // rows kept in the table; the board's ring holds more for the detail
+  const ROW = 22;        // px, as the Capture viewer's rows
+  const CHIPS = [
+    ['all', ''],
+    ['HCI cmd/evt', 'type:cmd|evt !evt:0x13'],
+    ['L2CAP sig', 'cid:1|5'],
+    ['ATT', 'proto:att'],
+    ['SMP', 'proto:smp'],
+    ['AVDTP', 'proto:avdtp'],
+    ['media', 'proto:rtp'],
+    ['AVRCP', 'proto:avctp'],
+    ['RFCOMM', 'proto:rfcomm'],
+    ['errors', 'is:err'],
+    ['marks + logs', 'type:log'],
+    ['slow TX', 'lat>20'],
+  ];
+  const lp = {
+    filter: lsGet('btbench.lp.filter') || 'type:cmd|evt !evt:0x13', paused: false, abort: null,
+    gen: 0, lastSeq: -1, shown: 0, dropped: 0, skipped: 0, base: null, error: '', sel: null,
+    hexSpans: [], retry: null, connected: false, held: [],
+  };
+
+  const want = () => currentTab === 'monitor' && !document.hidden && !lp.paused;
+
+  function renderStatus() {
+    const bits = [];
+    if (lp.error) bits.push(lp.error);
+    else if (lp.paused) bits.push('paused');
+    else if (lp.connected) bits.push('live');
+    else bits.push('connecting…');
+    bits.push(`${lp.shown.toLocaleString()} shown`);
+    if (lp.dropped) bits.push(`${lp.dropped.toLocaleString()} dropped`);
+    if (lp.skipped) bits.push(`${lp.skipped.toLocaleString()} skipped`);
+    if (lp.held.length) bits.push(`${lp.held.length.toLocaleString()} new rows held: scroll to the bottom to follow`);
+    setText($('lp-status'), bits.join(' · '));
+    setClass($('lp-status'), 'small ' + (lp.error ? 'bad-text' : lp.dropped || lp.skipped ? 'warn-text' : 'muted'));
+    setText($('lp-run'), lp.paused ? 'Resume' : 'Pause');
+  }
+
+  function renderChips() {
+    setHTML($('lp-chips'), CHIPS.map(([label, f]) =>
+      `<button class="small-btn cv-chip${lp.filter === f ? ' on' : ''}" data-chip="${esc(f)}">${esc(label)}</button>`).join(''));
+  }
+
+  const atBottom = el => el.scrollTop + el.clientHeight >= el.scrollHeight - ROW * 2;
+
+  function rowHTML(p) {
+    const ms = String(Math.floor(p.ts_ms % 1000)).padStart(3, '0');
+    const cls = ['cv-row', 't-' + p.type, p.dir ? 'd-' + p.dir : '', p.err ? 'err' : '', p.mark ? 'mark' : '',
+      p.seq === lp.sel ? 'sel' : ''].join(' ');
+    return `<div class="${cls}" data-seq="${p.seq}"><span>${p.seq}</span><span>${fmtTime(p.ts_ms)}.${ms}</span>` +
+      `<span class="cv-dir cv-c-d">${p.dir}</span><span class="cv-c-h">${p.handle == null ? '' : p.handle}</span>` +
+      `<span>${p.proto || p.type}</span><span class="cv-c-l">${p.len}</span>` +
+      `<span class="cv-sum">${esc(p.summary)}${p.lat_ms != null ? ` <i class="muted">${p.lat_ms} ms</i>` : ''}</span></div>`;
+  }
+  const noteHTML = text => `<div class="cv-row cv-wait lp-note"><span></span><span>${esc(text)}</span></div>`;
+
+  // Rows arrive in batches (the board sends one every 150 ms at most): one DOM insertion each.
+  // While the reader is scrolled up, new rows are held back instead of added: at A2DP rates the
+  // rows being read would otherwise be trimmed from the top within a second or two.
+  function append(rows) {
+    if (!rows.length) return;
+    if (lp.held.length || !atBottom($('lp-body'))) {
+      lp.held.push(...rows);
+      if (lp.held.length > MAXROWS) lp.held.splice(0, lp.held.length - MAXROWS);
+      return;
+    }
+    insert(rows);
+  }
+
+  function insert(rows) {
+    const body = $('lp-body');
+    const empty = body.querySelector('.cv-empty');
+    if (empty) empty.remove();
+    body.insertAdjacentHTML('beforeend', rows.join(''));
+    let extra = body.childElementCount - MAXROWS;
+    while (extra-- > 0) body.firstElementChild.remove();
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function onScroll() {
+    if (lp.held.length && atBottom($('lp-body'))) {
+      const rows = lp.held;
+      lp.held = [];
+      insert(rows);
+    }
+    renderStatus();
+  }
+
+  function onLines(items) {
+    const rows = [];
+    for (const o of items) {
+      if (o.status) {
+        const s = o.status;
+        // The counters are the stream's: a reopened stream starts from 0, so add what grew.
+        if (lp.base == null) lp.base = {dropped: 0, skipped: 0};
+        const nd = s.dropped - lp.base.dropped, ns = s.skipped - lp.base.skipped;
+        if (nd > 0 || ns > 0) {
+          rows.push(noteHTML([nd > 0 ? `${nd.toLocaleString()} packets dropped (the page fell behind)` : '',
+            ns > 0 ? `${ns.toLocaleString()} matching packets skipped (too many to show; the newest are)` : '']
+            .filter(Boolean).join(' · ')));
+          lp.dropped += Math.max(0, nd);
+          lp.skipped += Math.max(0, ns);
+        }
+        lp.base = {dropped: s.dropped, skipped: s.skipped};
+        continue;
+      }
+      lp.lastSeq = Math.max(lp.lastSeq, o.seq);
+      lp.shown++;
+      rows.push(rowHTML(o));
+    }
+    append(rows);
+    renderStatus();
+  }
+
+  function stop() {
+    lp.gen++;
+    clearTimeout(lp.retry);
+    lp.retry = null;
+    if (lp.abort) lp.abort.abort();
+    lp.abort = null;
+    lp.connected = false;
+  }
+
+  // (Re)opens the stream if it should be open and is not. since: where to pick up — the last
+  // packet seen, or 0 to re-filter everything the board still holds.
+  function start(since) {
+    if (!want() || lp.abort) return;
+    const gen = ++lp.gen;
+    const ctl = new AbortController();
+    lp.abort = ctl;
+    lp.base = null;
+    lp.error = '';
+    const q = `filter=${encodeURIComponent(lp.filter)}${since != null && since >= 0 ? '&since=' + since : ''}`;
+    renderStatus();
+    fetch(`/api/hci/live?${q}`, {signal: ctl.signal, cache: 'no-store'}).then(async r => {
+      if (!r.ok) {
+        let msg = r.statusText;
+        try { msg = (await r.json()).error || msg; } catch (e) { /* not JSON */ }
+        const err = new Error(msg);
+        err.status = r.status;
+        throw err;
+      }
+      lp.connected = true;
+      renderStatus();
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done || gen !== lp.gen) break;
+        buf += dec.decode(value, {stream: true});
+        const items = [];
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (line) try { items.push(JSON.parse(line)); } catch (e) { /* a cut line: skip */ }
+        }
+        if (items.length) onLines(items);
+      }
+      throw new Error('the stream ended');
+    }).catch(e => {
+      if (gen !== lp.gen) return;  // stopped on purpose
+      lp.abort = null;
+      lp.connected = false;
+      lp.error = e.message;
+      renderStatus();
+      // A bad filter stays wrong; anything else (the daemon restarting, too many streams) is
+      // retried, picking up where the stream stopped.
+      if (e.status !== 400) lp.retry = setTimeout(() => { lp.error = ''; start(lp.lastSeq); }, 3000);
+    });
+  }
+
+  function restart(since) {
+    stop();
+    start(since);
+  }
+
+  function clear() {
+    // Rows are appended outside setHTML, so its memo of the content is dropped too.
+    const body = $('lp-body');
+    body.innerHTML = '<div class="cv-empty muted small">Waiting for packets…</div>';
+    body._html = null;
+    lp.held = [];
+    lp.shown = lp.dropped = lp.skipped = 0;
+  }
+
+  function applyFilter(f) {
+    lp.filter = f.trim();
+    $('lp-filter').value = lp.filter;
+    lsSet('btbench.lp.filter', lp.filter);
+    renderChips();
+    clear();
+    lp.lastSeq = -1;
+    restart(0);
+  }
+
+  function setPaused(on) {
+    lp.paused = on;
+    if (on) {
+      stop();
+      append([noteHTML('paused')]);
+    } else {
+      start(lp.lastSeq);
+    }
+    renderStatus();
+  }
+
+  // ---- the detail pane (the Capture viewer's layout)
+
+  function fieldsHTML(list) {
+    return (list || []).map(f => {
+      const rng = f.len ? ` data-off="${f.off}" data-len="${f.len}"` : '';
+      const val = f.value ? ` <span class="cv-v">${esc(f.value)}</span>` : '';
+      if (f.children) {
+        return `<details open><summary${rng}><b>${esc(f.name)}</b>${val}</summary>${fieldsHTML(f.children)}</details>`;
+      }
+      return `<div class="cv-f"${rng}><span class="muted">${esc(f.name)}</span>${val}</div>`;
+    }).join('');
+  }
+
+  function hexHTML(hex) {
+    const n = hex.length / 2;
+    let out = '';
+    for (let off = 0; off < n; off += 16) {
+      let h = '', a = '';
+      for (let i = off; i < off + 16; i++) {
+        if (i < n) {
+          const b = parseInt(hex.substr(i * 2, 2), 16);
+          h += `<span data-o="${i}">${hex.substr(i * 2, 2)}</span>` + (i % 8 === 7 ? '  ' : ' ');
+          a += b >= 0x20 && b < 0x7f ? esc(String.fromCharCode(b)) : '.';
+        } else {
+          h += '   ' + (i % 8 === 7 ? ' ' : '');
+        }
+      }
+      out += `<span class="muted">${off.toString(16).padStart(4, '0')}</span>  ${h} <span class="muted">${a}</span>\n`;
+    }
+    return out;
+  }
+
+  function clearDetail() {
+    lp.hexSpans = [];
+    setHTML($('lp-fields'), '<div class="muted small">Click a row for its decoded fields and bytes.</div>');
+    setHTML($('lp-hex'), '');
+  }
+
+  function select(seq) {
+    lp.sel = seq;
+    $('lp-body').querySelectorAll('.cv-row.sel').forEach(r => r.classList.remove('sel'));
+    const row = $('lp-body').querySelector(`.cv-row[data-seq="${seq}"]`);
+    if (row) row.classList.add('sel');
+    api(`/hci/live/${seq}`).then(d => {
+      if (lp.sel !== seq) return;
+      setHTML($('lp-fields'), `<div class="cv-dhead"><b>#${d.seq}</b> ${esc(d.summary)}</div>` + fieldsHTML(d.fields));
+      setHTML($('lp-hex'), d.hex ? hexHTML(d.hex) : '<span class="muted">(no bytes)</span>');
+      lp.hexSpans = Array.from($('lp-hex').querySelectorAll('[data-o]'));
+    }).catch(e => {
+      if (lp.sel !== seq) return;
+      setHTML($('lp-fields'), `<div class="bad-text small">${esc(e.message)}</div>`);
+      setHTML($('lp-hex'), '');
+    });
+  }
+
+  // The Capture viewer on the file btmon is writing, with this filter. Its frame numbers are the
+  // file's, not these sequence numbers.
+  function openInCapture() {
+    api('/capture').then(s => {
+      const f = (s.files || []).find(x => x.active) || (s.files || [])[0];
+      if (!f) return toast('No capture file: the btsnoop ring is not recording');
+      $('cv-filter').value = lp.filter;
+      history.replaceState(null, '', '#capture');
+      showTab('capture');
+      const open = tries => {
+        const b = Array.from(document.querySelectorAll('#cap-files button[data-view]')).find(x => x.dataset.view === f.name);
+        if (b) b.click();
+        else if (tries > 0) setTimeout(() => open(tries - 1), 200);
+      };
+      open(20);
+    }).catch(fail);
+  }
+
+  function setup() {
+    $('lp-filter').value = lp.filter;
+    $('lp-filter').addEventListener('keydown', e => {
+      if (e.key === 'Enter') applyFilter($('lp-filter').value);
+      if (e.key === 'Escape') { $('lp-filter').value = lp.filter; $('lp-filter').blur(); }
+    });
+    $('lp-apply').onclick = () => applyFilter($('lp-filter').value);
+    $('lp-chips').onclick = e => {
+      const b = e.target.closest('button[data-chip]');
+      if (b) applyFilter(b.dataset.chip);
+    };
+    $('lp-run').onclick = () => setPaused(!lp.paused);
+    $('lp-clear').onclick = () => { clear(); renderStatus(); };
+    $('lp-cap').onclick = openInCapture;
+    $('lp-body').onclick = e => {
+      const r = e.target.closest('.cv-row[data-seq]');
+      if (r) select(Number(r.dataset.seq));
+    };
+    $('lp-body').addEventListener('scroll', onScroll, {passive: true});
+    const fields = $('lp-fields');
+    const hl = (off, len) => lp.hexSpans.forEach((s, i) => s.classList.toggle('hl', off != null && i >= off && i < off + len));
+    fields.addEventListener('mouseover', e => {
+      const f = e.target.closest('[data-off]');
+      hl(f ? Number(f.dataset.off) : null, f ? Number(f.dataset.len) : 0);
+    });
+    fields.addEventListener('mouseleave', () => hl(null, 0));
+    // A browser tab in the background is "hidden" too: nothing may run for it.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stop();
+      else start(lp.lastSeq);
+      renderStatus();
+    });
+    renderChips();
+    clear();
+    clearDetail();
+    renderStatus();
+  }
+
+  return {
+    setup,
+    // show() also runs again when the WebSocket reconnects: start() does nothing when open.
+    show() { start(lp.lastSeq); },
+    hide() { stop(); renderStatus(); },
+  };
+})();
+
 registerTab('monitor', {
   topics: () => ['hci.stats', 'hci.event'],
   show() {
@@ -192,11 +530,13 @@ registerTab('monitor', {
     mon.poll = setInterval(pollHistory, 1000);
     mon.latPoll = setInterval(pollLatency, 5000);
     setTimeout(() => { pollHistory(); pollLatency(); }, 300);
+    livePkts.show();
   },
   hide() {
     clearInterval(mon.poll);
     clearInterval(mon.latPoll);
     mon.poll = mon.latPoll = null;
+    livePkts.hide();
   },
   onMessage(topic, d) {
     if (currentTab !== 'monitor') return;
@@ -208,3 +548,4 @@ registerTab('monitor', {
   },
 });
 setupMonitor();
+livePkts.setup();

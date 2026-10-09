@@ -87,7 +87,15 @@ Number Of Completed Packets), packets in flight against the controller's credits
 one for two minutes of throughput and latency graphs, the latency histogram since it connected, and
 its L2CAP channels with the AVDTP stream's state, codec and RTP loss/jitter. Below: the event log
 (connections, channels, AVDTP signalling), a **Mark** button that writes a note into btmon, the
-btsnoop ring and live captures, and the command for a live capture in Wireshark on your PC.
+btsnoop ring and live captures, then **Live packets**: the packets as they happen, filtered on the
+board with the Capture viewer's filter box and quick filters (the same syntax). The table follows
+the newest rows unless you scroll up, keeps the last 1000, and marks where the board dropped
+packets (the page fell behind) or skipped matches (more than it sends: the newest are kept).
+Changing the filter re-filters the 2048 packets the board still holds. Click a row for its decoded
+fields and hex dump; *Pause* stops the stream (the rows stay clickable while the board still holds
+them), *open in capture* opens the file btmon is writing in the Capture viewer with the same
+filter. The stream runs only while the tab is on screen and the browser tab is visible. Last, the
+command for a live capture in Wireshark on your PC.
 
 **Capture** — the always-on btsnoop ring: start/stop, the files (the newest is being written),
 view, download, delete, and `btmon -a` analysis on the board. *View* opens a file in the packet

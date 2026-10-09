@@ -325,6 +325,42 @@
       </div>
       <pre id="mon-events" class="log tall"></pre>
     </div>
+    <div class="card" id="lp">
+      <div class="row between">
+        <h3>Live packets</h3>
+        <div class="row wrap">
+          <span id="lp-status" class="small muted"></span>
+          <button class="small-btn" id="lp-run">Pause</button>
+          <button class="small-btn" id="lp-clear">Clear</button>
+          <button class="small-btn" id="lp-cap" title="Open the file btmon is writing in the Capture tab, with this filter">open in capture</button>
+        </div>
+      </div>
+      <div class="row cv-filter">
+        <input id="lp-filter" class="mono" spellcheck="false" autocomplete="off"
+               placeholder='proto:att handle:64 dir:tx len>20 !evt:0x13 "read request"'>
+        <button id="lp-apply">Filter</button>
+      </div>
+      <div id="lp-chips" class="cv-chips"></div>
+      <details class="small muted cv-hint">
+        <summary>Filter syntax</summary>
+        <p>The Capture viewer's: <code>type:</code> <code>dir:</code> <code>proto:</code> <code>handle:</code> <code>cid:</code>
+          <code>psm:</code> <code>opcode:</code> <code>evt:</code> <code>is:err|mark|cont|lat</code> <code>len&gt;100</code>
+          <code>lat&gt;20</code> (TX → NOCP, ms; such a filter shows a TX packet once its completion came, up to a second late),
+          <code>!term</code>, <code>a|b</code>, and any other word or <code>"quoted phrase"</code> searched in the summaries.
+          The board keeps the last 2048 packets while someone watches: changing the filter re-filters those, and a row
+          says where packets were dropped (the page fell behind) or skipped (more matched than it sends, the newest kept).</p>
+      </details>
+      <div class="cv-split">
+        <div class="cv-table" id="lp-table">
+          <div class="cv-head"><span>seq</span><span>time</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
+          <div class="cv-body lp-body" id="lp-body"></div>
+        </div>
+        <div class="cv-detail">
+          <div id="lp-fields" class="cv-fields"></div>
+          <pre id="lp-hex" class="cv-hex"></pre>
+        </div>
+      </div>
+    </div>
     <div class="card small">
       Live capture in Wireshark, on your PC:
       <pre class="mono" id="mon-ws-cmd"></pre>

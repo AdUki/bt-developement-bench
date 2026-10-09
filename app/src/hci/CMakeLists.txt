@@ -15,6 +15,7 @@ add_library(btb_hci STATIC
   codec.cpp
   decoder.cpp
   dissect.cpp
+  live.cpp
   monitor.cpp
   packet_view.cpp
   pcap.cpp

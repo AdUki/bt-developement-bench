@@ -456,6 +456,8 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 | `GET /api/hci/events?since=<seq>` | connections, disconnections, AVDTP, L2CAP, marks (a ring of 500) |
 | `POST /api/hci/mark` `{"text": "..."}` | a marker on the kernel's logging channel: it shows in btmon, the btsnoop ring and Wireshark |
 | `GET /api/hci/live.pcap` | live pcap (linktype 254, LINUX_BT_MONITOR): `curl -sN http://<board>/api/hci/live.pcap \| wireshark -k -i -` |
+| `GET /api/hci/live?filter=&since=SEQ` | live packets, filtered on the board (the capture filter syntax), as a chunked NDJSON stream: one packet per line in the capture packet list's shape plus `seq`, and `{"status": {seq, cursor, scanned, sent, dropped, skipped, ...}}` lines (first, whenever `dropped`/`skipped` grow, and at least every 2 s). Batched every 150 ms, at most 200 packet lines a batch (more matches: the newest are sent, the rest `skipped`; a client that falls behind loses the oldest: `dropped`). `since=SEQ` starts after that packet, `since=0` with everything the 2048-packet ring holds; without it, from now. At most 4 streams (503) |
+| `GET /api/hci/live/{seq}` | one packet of the live ring decoded: the packet object plus `fields` and `hex`, as for a capture file; 404 once the ring moved past it |
 | `GET /api/capture` | `{running, unit, dir, files: [{name, size, mtime, active}]}` — the always-on btsnoop ring |
 | `PUT /api/capture` `{"running": false}` | stop or start `btbench-btsnoop.service` |
 | `GET` / `DELETE /api/capture/files/{name}` | download or delete one file |
@@ -467,7 +469,8 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 The packet routes work against a time budget (400 ms a request on the board): an answer with
 `"complete": false` is partial (a big file still being indexed, or a text filter still searching),
 and repeating the same request continues where it stopped. The filter syntax, the shapes in full
-and the timings are in `docs/monitor.md` ("Packet view").
+and the timings are in `docs/monitor.md` ("Packet view"). The live packet stream classifies
+nothing while no stream is open, and is described in `docs/monitor.md` ("Live packets").
 
 They answer 503 with the reason when the monitor socket cannot be opened (no `CAP_NET_RAW`).
 `btbenchd --hci-replay FILE.btsnoop` feeds the monitor from a capture instead (`make run

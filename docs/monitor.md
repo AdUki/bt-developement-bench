@@ -7,8 +7,8 @@ codec, and RTP loss and jitter. It does this without btmon running and without t
 traffic.
 
 It also gives access to the always-on btmon capture ring (`/data/btsnoop`), shows what is inside
-those files (a filtered packet list, decoded packets, graphs), and can stream a live pcap to
-Wireshark.
+those files (a filtered packet list, decoded packets, graphs), shows the same filtered list live
+(per viewer, and only while someone watches), and can stream a live pcap to Wireshark.
 
 The code is in `app/src/hci/` (the static library `btb_hci`) and the tests are in
 `app/tests/hci/`. The HTTP shapes are in [contracts.md](contracts.md#hci-monitor-api-hci-monitor-area-btbenchd-wires-it-in).
@@ -463,6 +463,108 @@ the file (or not indexed yet: then the message says to try again).
 Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missing file or packet,
 415 for a file that is not a btsnoop capture.
 
+## Live packets
+
+The same packet list, live: the monitor's packets as they happen, summarised by the same code and
+filtered with the same [filter syntax](#filter-syntax) as a capture file. The Monitor tab shows it
+under the events, and `bench mon packets [FILTER]` prints it. The code is `live.{h,cpp}`.
+
+### How it works
+
+- **Nothing runs while nobody watches.** The reader thread checks a subscriber count (a 32-bit
+  atomic) and moves on. No classification, no copy, no ring.
+- **While someone watches**, the reader thread classifies each packet — headers only, the same
+  `Classifier` a capture's index uses, so links, L2CAP channels, PSMs, continuation fragments and
+  the TX → NOCP latency FIFO are tracked exactly as for a file — and copies it into a **ring of
+  the last 2048 packets** (at most 2 KiB of each, so 4 MiB at the very worst; an A2DP stream
+  needs 1–2 MiB). No decoding and no JSON happen on that thread. The ring is allocated by the
+  first packet anyone watched and stays, so the detail of a paused view's rows still works.
+- **The tracking starts mid-stream.** When the first viewer arrives, the classifier is seeded from
+  the live decoder's view: the connected links, their open channels with PSM and AVDTP role, and
+  how many TX packets each has in flight (their completions are consumed by placeholders, so the
+  first latencies are not measured from the wrong packet). An A2DP stream opened an hour earlier
+  is still `proto:rtp`. Channels opened while someone watches are learned from the signalling.
+- **Each viewer has its own stream** — its own filter, its own position in the ring, its own
+  pace. Its HTTP worker wakes at most every **150 ms**, filters the ring from where it stopped on
+  the structured terms (under the ring's lock, which the reader thread waits for only that long),
+  then decodes the summaries of the matches outside the lock (text terms, and the lines it sends).
+  So the stream is batched: a quiet link gets each packet at once, a busy one every 150 ms.
+- **Bounded, oldest first.** A viewer that cannot keep up (slow Wi-Fi, a busy browser) is a
+  position that falls behind; the reader never waits for it. What the ring overwrote before the
+  viewer got there is counted as **dropped**. A batch looks at no more than 1000 packets (6 700
+  packets/s); anything older is dropped too.
+- **Rate limited, newest first.** A batch sends at most **200** packet lines (1 333/s). When more
+  match, the newest 200 are sent and the rest counted as **skipped**. A text filter decodes at
+  most 400 candidates per batch; older candidates count as dropped. A stream's *first* batch is
+  the backlog it asked for (`since=`) and may go through the whole ring once.
+- **Latency filters wait for the latency.** A TX packet's latency is known only when its NOCP
+  arrives, usually a few ms later. A stream whose filter has a `lat` or `is:lat` term therefore
+  looks at a TX data packet once it has its latency, or after 1 s without one (it then matches no
+  `lat` term), so it runs up to a second behind. Other streams send TX packets at once, with
+  `lat_ms` still `null`; the detail shows it once known.
+- In the live stream, **`n` and `seq` are the ring's sequence number** (1 for the first packet the
+  live view ever saw, counting only packets someone watched), and `t` (and the `t` filter terms) is
+  seconds since that first packet. `n<=` filters on the sequence number.
+
+At most **4** streams are open at once (a fifth gets 503); each holds an HTTP worker while it is
+open, as a live pcap does. A stream ends when the client goes (noticed at the next write: there is
+a status line at least every 2 s) or when btbenchd stops.
+
+### Routes
+
+`GET /api/hci/live?filter=&since=SEQ` — a chunked response of NDJSON (`application/x-ndjson`),
+one object per line, until the client disconnects:
+
+```
+{"status":{"seq":41210,"cursor":41211,"scanned":0,"sent":0,"dropped":0,"skipped":0,"filter":"proto:rtp","ring":2048,"batch_ms":150,"lat_hold":false}}
+{"seq":41211,"n":41211,"ts_ms":1760000032284.542,"t":3601.284542,"index":0,"dir":"tx","type":"acl","proto":"rtp","handle":11,"cid":115,"psm":25,"len":629,"lat_ms":null,"summary":"RTP seq 1340 ts 302848, SBC 7 frames, bitpool 53"}
+{"status":{"seq":45020,"cursor":45021,"scanned":3810,"sent":1270,"dropped":0,"skipped":312}}
+```
+
+- **Packet lines** are the capture view's packet objects plus `seq`.
+- **Status lines** come first (with the normalised `filter`, the ring size and batch period, and
+  whether the stream holds TX packets for their latency), then whenever `dropped` or `skipped`
+  grew — placed in the stream where the gap is — and at least every 2 s. `seq` is the newest
+  packet in the ring, `cursor` the next one this stream will look at. The counters are this
+  stream's, from 0.
+- `since` absent: from the next packet on. `since=SEQ`: from the packet after SEQ, if the ring
+  still has it (else from the oldest it has, the difference counted as dropped). `since=0`: all
+  the ring holds. The console reopens its stream with `since=0` when the filter changes, so the
+  new filter applies to what was already seen, and with the last `seq` it got when it resumes.
+- 400 with the reason for a bad filter or `since`, 503 when the monitor is unavailable or 4
+  streams are open.
+
+`GET /api/hci/live/<seq>` — one packet from the ring decoded, exactly like
+`/api/capture/files/<name>/packets/<n>`: the packet object plus `seq`, `fields` and `hex`. The
+Frame node gives the time since the live view's first packet, and says when the packet was longer
+than the 2 KiB kept. 404 once the ring has moved past it.
+
+```sh
+curl -sN 'http://10.55.0.1/api/hci/live?filter=proto:att%20is:err'
+bench mon packets 'proto:avdtp'
+```
+
+### Cost
+
+Per packet, on this PC (one core of a Ryzen laptop, an A2DP stream of 700 HCI packets/s: 350
+media packets and their NOCPs):
+
+| | classify + ring (reader thread) | stream (its worker) |
+|---|---|---|
+| nobody watching | 0 | — |
+| filter matching nothing (`proto:smp`) | 0.09 µs | 0.03 µs |
+| text filter matching nothing (`"zzzz"`) | 0.09 µs | 0.5 µs |
+| `proto:rtp` (half the packets sent) | 0.09 µs | 0.5 µs |
+| no filter (every packet sent, ~225 bytes a line) | 0.09 µs | 0.8 µs |
+
+Measured on the whole daemon (per thread, 30 s of that replay), the reader thread costs 0.1% more
+with a viewer connected, and the stream's worker 0.33% unfiltered (730 lines/s, with its writes and
+wakeups) or 0.03% with a filter that matches nothing. The Zero W is 15–20 times slower: an
+unfiltered stream of a full A2DP link costs it roughly 5–7% of its core, a viewer filtering for
+what is rare (`is:err`, `proto:avdtp`, `type:cmd|evt !evt:0x13`) under 2%, and nobody watching
+nothing. The packet lines are written by hand rather than through a JSON object per packet: that
+was most of the cost (4.5 µs a packet before, 0.8 µs after).
+
 ## Threads and cost
 
 - **One reader thread** blocks in `poll()` on the monitor socket.
@@ -471,12 +573,17 @@ Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missi
   - The 1 Hz `hci.stats` and the per-event `hci.event` are published from this thread, outside
     the stats lock.
 - **One mutex** protects the decoder. The HTTP handlers take it briefly to copy JSON out.
+- **The live packet view** adds nothing to the reader thread unless a viewer is connected; then
+  it classifies and copies each packet into its ring (its own lock, taken inside the decoder's).
+  Decoding and serializing happen on each stream's HTTP worker, at most every 150 ms
+  ([Live packets](#live-packets)).
 - **No allocation per packet** on the data paths (ACL/SCO/ISO data, NOCP). Allocation happens:
   - when a link, channel, stream or event is created;
   - once a second, when the window's JSON is built;
   - every 64 KiB of traffic per live pcap stream.
-- **ARMv6 has no 64-bit atomics**, so none are used. Shared state is under the mutex, and the only
-  atomic is a 32-bit subscriber count.
+- **ARMv6 has no 64-bit atomics**, so none are used. Shared state is under the mutexes, and the
+  only atomics are the 32-bit subscriber counts of the live pcap and live packet streams, and the
+  live view's "seed me" flag.
 - **Speed:** a 46 000-packet capture decodes in about 0.1 s on a desktop.
 
 ## Limits
@@ -501,6 +608,10 @@ Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missi
   before btbenchd started (see above).
 - **`index`/`handle` identify a link only while it is up**, because handles are reused.
   `/history` and `/latency` return 404 once the link has been dropped.
+- **The live packet view counts only what someone watched.** Its sequence numbers and its `t`
+  skip the time nobody was connected, and a viewer arriving mid-stream gets channels from the
+  decoder's view, so a channel the decoder never saw open (btbenchd started after it) is
+  `proto:l2cap` there too. A latency filter delays its stream by up to a second.
 - **Clock steps.** The wall clock on a board without an RTC steps when NTP syncs. A backwards
   step re-anchors the windows; a long gap closes at most 300 empty windows. A NOCP that lands
   "before" its TX gives no sample.
@@ -508,11 +619,15 @@ Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missi
 ## Development
 
 - `app/tests/hci/`: synthetic packet tests, run by `make test`/ctest as `hci_decode`, `hci_pcap`,
-  `hci_capture`, `hci_replay` and `hci_packets`. `hci_replay` writes btsnoop files and drives the
+  `hci_capture`, `hci_replay`, `hci_packets` and `hci_live`. `hci_replay` writes btsnoop files and drives the
   whole module through its HTTP routes on a loopback server. `hci_packets` covers the packet view:
   the index (and its growth while a file is written), the filter language, the summaries and
   field trees of the common packet kinds, the graph's buckets and the packet routes, including
-  partial answers under a zero budget.
+  partial answers under a zero budget. `hci_live` covers the live view: the same packets fed live
+  and written to a file must match two dozen filters identically (and serialize to the same
+  objects), the channel tracking seeded mid-stream (proto:rtp, and the in-flight placeholders),
+  the ring and its detail lookup, the drop/skip accounting, the latency hold, and the routes over
+  a paced replay.
 - `hci_snoop_summary FILE.btsnoop` (built next to the tests) runs any capture through the decoder.
   It prints the events and each link's busiest second, which makes it the quick way to check the
   decoder against a real trace. Its latency figures should agree with `btmon -a`.

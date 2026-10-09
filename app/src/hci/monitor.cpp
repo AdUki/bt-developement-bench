@@ -92,7 +92,8 @@ Monitor::Impl::Impl(const Options& o, Publish p)
       publish(std::move(p)),
       feed(std::make_shared<PcapFeed>()),
       capture(std::make_shared<Capture>(o.capture_dir, o.capture_unit, o.systemctl, o.btmon)),
-      packets(std::make_shared<PacketStore>(o.capture_dir)) {}
+      packets(std::make_shared<PacketStore>(o.capture_dir)),
+      live(std::make_shared<LiveView>()) {}
 
 Monitor::Impl::~Impl() { stop(); }
 
@@ -109,6 +110,7 @@ void Monitor::Impl::stop() {
   }
   if (thread.joinable()) thread.join();
   feed->close_all();
+  live->close_all();
   for (int* fd : {&mon_fd, &wake_fd[0], &wake_fd[1]}) {
     if (*fd >= 0) close(*fd);
     *fd = -1;
@@ -268,6 +270,7 @@ void Monitor::Impl::run_live() {
         const uint16_t index = le16(buf.data() + 2);
         const size_t len = std::min<size_t>(le16(buf.data() + 4), n - kMonHdrSize);
         const uint8_t* data = buf.data() + kMonHdrSize;
+        feed_live(ts, index, opcode, data, len);
         dec.packet(ts, index, opcode, data, len);
         if (feed->active()) feed->push(ts, index, opcode, data, len);
         if (opcode == kMonNewIndex || opcode == kMonOpenIndex) new_indexes.push_back(index);
@@ -339,6 +342,7 @@ void Monitor::Impl::run_replay() {
     {
       std::lock_guard<std::mutex> lk(mu);
       const uint64_t before = dec.windows_closed();
+      feed_live(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len);
       dec.packet(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len);
       closed = static_cast<int>(dec.windows_closed() - before);
       if (feed->active()) feed->push(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len);

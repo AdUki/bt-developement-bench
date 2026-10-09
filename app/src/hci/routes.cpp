@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <httplib.h>
 #include <memory>
@@ -132,6 +133,67 @@ void register_routes(httplib::Server& svr, Monitor& mon) {
           spdlog::info("HCI monitor: live pcap stream closed ({} packets sent, {} dropped)",
                        sub->sent_records, sub->dropped_records);
         });
+  });
+
+  // Live packets (docs/monitor.md "Live packets"): NDJSON, one packet object per line in the
+  // capture view's shape plus "seq", and {"status":{...}} lines with the stream's counters.
+  // Like live.pcap it holds an HTTP worker while the client stays; unlike it, the stream is
+  // per viewer (its own filter and position), which is why it is not a WebSocket topic.
+  const std::shared_ptr<LiveView> live = mon.impl().live;
+
+  svr.Get("/api/hci/live", [m, live](const httplib::Request& req, httplib::Response& res) {
+    if (!require_source(*m, res)) return;
+    Filter f;
+    std::string err;
+    if (!Filter::parse(req.get_param_value("filter"), &f, &err)) return send_error(res, 400, err);
+    int64_t since = -1;
+    if (req.has_param("since")) {
+      const std::string v = req.get_param_value("since");
+      char* end = nullptr;
+      const unsigned long long n = std::strtoull(v.c_str(), &end, 10);
+      if (v.empty() || *end) return send_error(res, 400, "since must be a sequence number");
+      since = static_cast<int64_t>(std::min<unsigned long long>(n, INT64_MAX));
+    }
+    LiveView::ClientPtr c = live->subscribe(f, since);
+    if (!c) {
+      return send_error(res, 503,
+                        "too many live packet streams (" +
+                            std::to_string(LiveView::kMaxSubscribers) +
+                            " max): each one holds an HTTP worker");
+    }
+    // Debug, not info: the console reopens its stream on every filter change.
+    spdlog::debug("HCI monitor: live packet stream '{}' opened", f.key);
+    res.set_header("Cache-Control", "no-store");
+    // Browsers and proxies may buffer a streamed response they think they can sniff.
+    res.set_header("X-Content-Type-Options", "nosniff");
+    res.set_chunked_content_provider(
+        "application/x-ndjson",
+        [live, c](size_t, httplib::DataSink& sink) {
+          if (!live->wait(*c)) {
+            sink.done();  // shutting down
+            return true;
+          }
+          std::string out;
+          live->drain(*c, LiveView::mono_us(), &out);
+          if (out.empty()) return !sink.is_writable || sink.is_writable();
+          return sink.write(out.data(), out.size());
+        },
+        [live, c](bool) {
+          live->unsubscribe(c);
+          spdlog::debug("HCI monitor: live packet stream '{}' closed ({} sent, {} dropped, {} skipped)",
+                        c->filter.key, c->sent, c->dropped, c->skipped);
+        });
+  });
+
+  svr.Get(R"(/api/hci/live/(\d+))", [m, live](const httplib::Request& req, httplib::Response& res) {
+    if (!require_source(*m, res)) return;
+    const uint64_t seq = std::strtoull(req.matches[1].str().c_str(), nullptr, 10);
+    json out;
+    if (!live->detail(seq, &out)) {
+      return send_error(res, 404, "packet " + std::to_string(seq) + " is not in the live ring (it keeps the last " +
+                                      std::to_string(LiveView::kRing) + ")");
+    }
+    send_json(res, out);
   });
 
   // ---- capture ring ----

@@ -605,6 +605,7 @@ MON_TABLE='
   | @tsv'
 
 cmd_mon() {
+  [ "${1-}" = packets ] && { shift; mon_packets "$@"; return; }
   need tput
   local once=0
   [ "${1-}" = --once ] && once=1
@@ -634,6 +635,27 @@ cmd_mon() {
     tput ed
     sleep 1
   done
+}
+
+# Live packets, filtered on the board (docs/monitor.md "Live packets"), until interrupted. The
+# stream's status lines say where the board dropped packets (we fell behind) or skipped matches
+# (more than one batch sends); only their growth is printed.
+mon_packets() {
+  local q="/api/hci/live?filter=$(jq -rn --arg s "${1-}" '$s | @uri')"
+  curl -sSN "$URL$q" | jq -nr --unbuffered --arg dim "$dim" --arg off "$off" '
+    def clock: (. / 1000 | floor | strflocaltime("%H:%M:%S")) + "." + ("00" + (. % 1000 | floor | tostring))[-3:];
+    foreach inputs as $o ({d: 0, s: 0, out: null};
+      if $o.error then .out = "error: \($o.error)"
+      elif $o.status then
+        .out = (if $o.status.dropped > .d or $o.status.skipped > .s
+                then "\($dim)-- \($o.status.dropped - .d) dropped, \($o.status.skipped - .s) skipped --\($off)"
+                else null end)
+        | .d = $o.status.dropped | .s = $o.status.skipped
+      else .out = ([($o.seq | tostring), ($o.ts_ms | clock), $o.dir, ($o.handle // "" | tostring),
+                    ($o.proto // $o.type), ($o.len | tostring),
+                    $o.summary + (if $o.lat_ms != null then "  [\($o.lat_ms) ms]" else "" end)] | join("\t"))
+      end;
+      .out // empty)'
 }
 
 # ---- Wi-Fi, kernel, system ---------------------------------------------------------------------
@@ -847,6 +869,7 @@ ${bold}Capture and monitor${off}
   cap live                        curl -sN $URL/api/hci/live.pcap | wireshark -k -i -
   mark TEXT                       a marker in btmon, btsnoop and Wireshark
   mon [--once]                    per-connection/channel throughput, latency, credits, RTP loss
+  mon packets [FILTER]            live packets, filtered on the board (filter syntax: docs/monitor.md)
 ${bold}Board${off}
   wifi status|scan|add SSID [PSK]|remove SSID|ap|sta|off|auto
   kernel status|try|commit|rollback

@@ -40,6 +40,8 @@ constexpr size_t kMaxEntries = 1000000;
 constexpr size_t kMaxQueries = 4;  // cached filter results per file
 constexpr size_t kTxFifo = 128;    // as the live decoder: TX timestamps awaiting NOCP per link
 constexpr size_t kMaxChans = 32;
+// The timestamp of a FIFO entry that stands for a packet sent before a seed (see LinkSeed).
+constexpr int64_t kSeededTx = INT64_MIN;
 
 double round3(double v) { return std::round(v * 1000.0) / 1000.0; }
 
@@ -463,11 +465,11 @@ bool Filter::match_text(const std::string& s) const {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tracking links and L2CAP channels while indexing, so a dynamic CID maps to its PSM and every TX
+// Classifier: tracking links and L2CAP channels, so a dynamic CID maps to its PSM and every TX
 // data packet gets its NOCP latency — the same bookkeeping as the live Decoder, but kept to what
 // the index needs.
 
-struct PacketIndex::Tracker {
+struct Classifier::State {
   struct Chan {
     uint16_t lcid = 0;  // ours: what RX packets carry
     uint16_t rcid = 0;  // the peer's: what TX packets carry
@@ -495,14 +497,15 @@ struct PacketIndex::Tracker {
     bool le = false;
     std::vector<Chan> chans;
     Frag frag[2];
-    std::deque<uint32_t> fifo;  // entry indices awaiting NOCP
+    std::deque<std::pair<uint32_t, int64_t>> fifo;  // (id, ts) of TX packets awaiting NOCP
     bool avdtp_sig = false;     // an AVDTP signalling channel is open: the next one is media
     uint16_t avdtp_sig_lcid = 0;
     Pend pend[8];
     size_t pend_next = 0;
-    size_t info = 0;  // conn_info_ slot
+    size_t info = 0;  // conns slot
   };
   std::vector<std::unique_ptr<Link>> links;
+  std::vector<ConnInfo> conns;
 
   Link* find(uint16_t index, uint16_t handle) {
     for (auto& l : links) {
@@ -521,9 +524,9 @@ struct PacketIndex::Tracker {
 
 namespace {
 
-using Link = PacketIndex::Tracker::Link;
-using Chan = PacketIndex::Tracker::Chan;
-using Pend = PacketIndex::Tracker::Pend;
+using Link = Classifier::State::Link;
+using Chan = Classifier::State::Chan;
+using Pend = Classifier::State::Pend;
 
 void chan_opened(Link* l, Chan* ch) {
   ch->open = true;
@@ -655,10 +658,300 @@ void track_sig(Link* l, bool tx, const uint8_t* d, size_t len) {
 
 }  // namespace
 
+Classifier::Classifier() : st_(std::make_unique<State>()) {}
+Classifier::~Classifier() = default;
+
+const std::vector<ConnInfo>& Classifier::conns() const { return st_->conns; }
+
+void Classifier::seed(const std::vector<LinkSeed>& seeds) {
+  st_ = std::make_unique<State>();
+  for (const LinkSeed& s : seeds) {
+    if (st_->links.size() >= 64) break;
+    auto l = std::make_unique<Link>();
+    l->index = s.index;
+    l->handle = s.handle;
+    l->le = std::strcmp(s.type, "le") == 0;
+    ConnInfo ci;
+    ci.index = s.index;
+    ci.handle = s.handle;
+    ci.type = s.type;
+    st_->conns.push_back(ci);
+    l->info = st_->conns.size() - 1;
+    for (const LinkSeed::Chan& c : s.chans) {
+      if (l->chans.size() >= kMaxChans) break;
+      Chan ch{c.lcid, c.rcid, c.psm, proto_for_psm(c.psm), true};
+      if (c.avdtp_media) ch.proto = kProtoRtp;
+      if (c.avdtp_sig) {
+        l->avdtp_sig = true;
+        l->avdtp_sig_lcid = c.lcid;
+      }
+      l->chans.push_back(ch);
+    }
+    // Placeholders for what is in flight: their completions are consumed, measured for nobody.
+    for (uint16_t i = 0; i < s.in_flight && l->fifo.size() < kTxFifo; ++i) {
+      l->fifo.emplace_back(0, kSeededTx);
+    }
+    st_->links.push_back(std::move(l));
+  }
+}
+
+void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uint8_t* d,
+                          size_t len, uint32_t me, IndexEntry* out) {
+  State& tr = *st_;
+  std::vector<ConnInfo>& conn_info = tr.conns;
+  IndexEntry& e = *out;
+  e = IndexEntry{};
+  e.lat_us = kNoLat;
+  e.ts_us = ts_us;
+  e.len = static_cast<uint16_t>(std::min<size_t>(len, 0xffff));
+  e.handle = kNoHandle;
+  e.index = index == kHciDevNone ? kNoIndex : static_cast<uint8_t>(std::min<uint16_t>(index, 0xfe));
+  e.mon = static_cast<uint8_t>(mon);
+
+  auto info_for = [&](uint16_t handle, const char* type, bool create_new) -> size_t {
+    for (size_t i = 0; i < conn_info.size(); ++i) {
+      if (conn_info[i].index == index && conn_info[i].handle == handle) {
+        if (create_new && type) conn_info[i].type = type;
+        return i;
+      }
+    }
+    ConnInfo ci;
+    ci.index = index;
+    ci.handle = handle;
+    ci.type = type ? type : "acl";
+    ci.first_us = e.ts_us;
+    conn_info.push_back(ci);
+    return conn_info.size() - 1;
+  };
+  auto link_for = [&](uint16_t handle, const char* type) -> Link* {
+    Link* l = tr.find(index, handle);
+    if (!l) {
+      if (tr.links.size() >= 64) tr.links.erase(tr.links.begin());
+      auto nl = std::make_unique<Link>();
+      nl->index = index;
+      nl->handle = handle;
+      nl->le = type && std::strcmp(type, "le") == 0;
+      nl->info = info_for(handle, type, false);
+      tr.links.push_back(std::move(nl));
+      l = tr.links.back().get();
+    }
+    return l;
+  };
+  auto connected = [&](uint16_t handle, const char* type, const uint8_t* peer) {
+    tr.drop(index, handle);  // a reused handle starts afresh
+    Link* l = link_for(handle, type);
+    l->le = std::strcmp(type, "le") == 0;
+    ConnInfo& ci = conn_info[l->info];
+    ci.type = type;
+    if (peer) ci.peer = bdaddr_str(peer);
+  };
+  auto data = [&](uint16_t handle, bool tx, uint32_t payload, const char* type) -> Link* {
+    Link* l = link_for(handle, type);
+    ConnInfo& ci = conn_info[l->info];
+    ci.last_us = e.ts_us;
+    if (tx) {
+      ci.tx_bytes += payload;
+      ++ci.tx_pkts;
+      if (l->fifo.size() >= kTxFifo) l->fifo.pop_front();
+      l->fifo.emplace_back(me, e.ts_us);
+    } else {
+      ci.rx_bytes += payload;
+      ++ci.rx_pkts;
+    }
+    return l;
+  };
+
+  switch (mon) {
+    case kMonCommand:
+      e.proto = kProtoHci;
+      e.flags |= kFlagTx;
+      if (len >= 3) {
+        e.opcode = le16(d);
+        if (hci_cmd_has_handle(e.opcode) && len >= 5) e.handle = le16(d + 3) & 0x0fff;
+      }
+      break;
+    case kMonEvent: {
+      e.proto = kProtoHci;
+      e.flags |= kFlagRx;
+      if (len < 2) break;
+      e.evt = d[0];
+      const uint8_t* p = d + 2;
+      const size_t n = std::min<size_t>(d[1], len - 2);
+      if (e.evt == kEvtCmdComplete && n >= 3) {
+        e.opcode = le16(p + 1);
+        if (n >= 4 && p[3]) e.flags |= kFlagErr;
+        if (hci_cmd_has_handle(e.opcode) && n >= 6) e.handle = le16(p + 4) & 0x0fff;
+      } else if (e.evt == 0x0f && n >= 4) {
+        e.opcode = le16(p + 2);
+        if (p[0]) e.flags |= kFlagErr;
+      } else if (e.evt == kEvtNumCompletedPackets && n >= 1) {
+        for (size_t i = 0; i < p[0] && 1 + 4 * (i + 1) <= n; ++i) {
+          const uint16_t h = le16(p + 1 + 4 * i) & 0x0fff;
+          const uint16_t count = le16(p + 3 + 4 * i);
+          if (i == 0) e.handle = h;
+          Link* l = tr.find(index, h);
+          if (!l) continue;
+          ConnInfo& ci = conn_info[l->info];
+          for (uint16_t j = 0; j < count && !l->fifo.empty(); ++j) {
+            const auto sent = l->fifo.front();
+            l->fifo.pop_front();
+            if (sent.second == kSeededTx) continue;
+            const int64_t lat = e.ts_us - sent.second;
+            if (lat >= 0) {
+              ++ci.lat_n;
+              if (on_latency) on_latency(sent.first, static_cast<uint32_t>(std::min<int64_t>(lat, 0xfffffffe)));
+            }
+          }
+        }
+      } else if (e.evt == kEvtLeMeta && n >= 1) {
+        e.sub = p[0];
+        const uint8_t* q = p + 1;
+        const size_t m = n - 1;
+        if (le_status_handle(e.sub) && m >= 3) {
+          e.handle = le16(q + 1) & 0x0fff;
+          if (q[0]) e.flags |= kFlagErr;
+        } else if (le_handle_first(e.sub) && m >= 2) {
+          e.handle = le16(q) & 0x0fff;
+        } else if ((e.sub == 0x1b || e.sub == 0x1d || e.sub == 0x08 || e.sub == 0x09 ||
+                    e.sub == 0x0e || e.sub == 0x12) && m >= 1 && q[0]) {
+          e.flags |= kFlagErr;
+        }
+        if ((e.sub == kLeConnComplete || e.sub == kLeEnhConnComplete ||
+             e.sub == kLeEnhConnCompleteV2) && m >= 11 && q[0] == 0) {
+          connected(e.handle, "le", q + 5);
+        } else if ((e.sub == kLeCisEstablished || e.sub == kLeCisEstablishedV2) && m >= 3 && q[0] == 0) {
+          connected(e.handle, "cis", nullptr);
+        } else if ((e.sub == kLeBigComplete || e.sub == kLeBigSyncEstablished) && q[0] == 0) {
+          const size_t num_at = e.sub == kLeBigComplete ? 17 : 13;
+          for (size_t i = 0; num_at < m && i < q[num_at] && num_at + 1 + 2 * (i + 1) <= m; ++i) {
+            connected(le16(q + num_at + 1 + 2 * i) & 0x0fff, "bis", nullptr);
+          }
+        }
+      } else if (evt_status_handle(e.evt) && n >= 3) {
+        e.handle = le16(p + 1) & 0x0fff;
+        if (p[0]) e.flags |= kFlagErr;
+        if (p[0] == 0 && e.evt == kEvtConnComplete && n >= 10) {
+          connected(e.handle, p[9] == 0x01 ? "acl" : "sco", p + 3);
+        } else if (p[0] == 0 && e.evt == kEvtSyncConnComplete && n >= 10) {
+          connected(e.handle, p[9] == 0x02 ? "esco" : "sco", p + 3);
+        } else if (p[0] == 0 && e.evt == kEvtDisconnComplete) {
+          tr.drop(index, e.handle);
+        }
+      } else if (evt_handle_first(e.evt) && n >= 2) {
+        e.handle = le16(p) & 0x0fff;
+      } else if ((e.evt == 0x01 || e.evt == 0x07 || e.evt == 0x12 || e.evt == 0x36) && n >= 1 && p[0]) {
+        e.flags |= kFlagErr;
+      } else if (e.evt == 0x10 || e.evt == 0x1a) {
+        e.flags |= kFlagErr;  // Hardware Error, Data Buffer Overflow
+      }
+      break;
+    }
+    case kMonAclTx:
+    case kMonAclRx: {
+      const bool tx = mon == kMonAclTx;
+      e.flags |= tx ? kFlagTx : kFlagRx;
+      e.proto = kProtoL2cap;
+      if (len < 4) break;
+      const uint16_t hf = le16(d);
+      e.handle = hf & 0x0fff;
+      const uint8_t pb = (hf >> 12) & 3;
+      const size_t n = std::min<size_t>(len - 4, le16(d + 2));
+      const uint8_t* p = d + 4;
+      Link* l = data(e.handle, tx, static_cast<uint32_t>(n), nullptr);
+      State::Frag& f = l->frag[tx ? 0 : 1];
+      if (pb == 0x01) {
+        e.flags |= kFlagCont;
+        e.cid = f.cid;
+        e.psm = f.psm;
+        e.proto = f.proto == kProtoNone ? static_cast<uint8_t>(kProtoL2cap) : f.proto;
+        if (f.want && f.sig.size() < f.want) {
+          const size_t take = std::min<size_t>(n, f.want - f.sig.size());
+          f.sig.insert(f.sig.end(), p, p + take);
+          if (f.sig.size() == f.want) {
+            track_sig(l, tx, f.sig.data(), f.sig.size());
+            if (l2cap_payload_is_error(kProtoL2cap, f.cid, f.sig.data(), f.sig.size())) e.flags |= kFlagErr;
+            f.want = 0;
+            f.sig.clear();
+          }
+        }
+        f.remaining = f.remaining > n ? static_cast<uint32_t>(f.remaining - n) : 0;
+        if (!f.remaining) f = State::Frag{};
+        break;
+      }
+      f = State::Frag{};
+      if (n < 4) break;
+      const uint16_t l2len = le16(p), cid = le16(p + 2);
+      e.cid = cid;
+      if (cid < kCidDynamicStart) {
+        e.proto = proto_for_fixed_cid(cid);
+        if (cid == kCidAtt || cid == kCidLeSignaling || cid == kCidSmp) {
+          l->le = true;
+          ConnInfo& ci = conn_info[l->info];
+          if (std::strcmp(ci.type, "acl") == 0 && ci.peer.empty()) ci.type = "le";
+        }
+      } else {
+        for (const auto& ch : l->chans) {
+          if (ch.open && (tx ? ch.rcid : ch.lcid) == cid) {
+            e.psm = ch.psm;
+            e.proto = ch.proto;
+            break;
+          }
+        }
+      }
+      const uint8_t* q = p + 4;
+      const size_t got = n - 4;
+      const bool sig = cid == kCidSignaling || cid == kCidLeSignaling;
+      if (got >= l2len) {
+        if (sig) track_sig(l, tx, q, l2len);
+        if (l2cap_payload_is_error(e.proto, cid, q, l2len)) e.flags |= kFlagErr;
+      } else {
+        f.cid = cid;
+        f.psm = e.psm;
+        f.proto = e.proto;
+        f.remaining = static_cast<uint32_t>(l2len - got);
+        if (sig && l2len <= 4096) {
+          f.want = l2len;
+          f.sig.assign(q, q + got);
+        } else if (l2cap_payload_is_error(e.proto, cid, q, got)) {
+          e.flags |= kFlagErr;
+        }
+      }
+      break;
+    }
+    case kMonScoTx:
+    case kMonScoRx:
+    case kMonIsoTx:
+    case kMonIsoRx: {
+      const bool tx = mon == kMonScoTx || mon == kMonIsoTx;
+      const bool iso = mon == kMonIsoTx || mon == kMonIsoRx;
+      e.flags |= tx ? kFlagTx : kFlagRx;
+      e.proto = iso ? kProtoIso : kProtoSco;
+      const size_t hdr = iso ? 4 : 3;
+      if (len < hdr) break;
+      e.handle = le16(d) & 0x0fff;
+      data(e.handle, tx, static_cast<uint32_t>(len - hdr), iso ? "cis" : "sco");
+      break;
+    }
+    case kMonUserLogging:
+      if (len >= 2 + 7u && d[1] >= 7 && std::strncmp(reinterpret_cast<const char*>(d + 2), "btbench", 7) == 0) {
+        e.flags |= kFlagMark;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // PacketIndex
 
-PacketIndex::PacketIndex() : tracker_(std::make_unique<Tracker>()) {}
+PacketIndex::PacketIndex() {
+  // NOCP completes an entry indexed earlier; ids are entry indices.
+  cls_.on_latency = [this](uint32_t id, uint32_t lat_us) {
+    if (id < entries_.size()) entries_[id].lat_us = lat_us;
+  };
+}
+
 
 PacketIndex::~PacketIndex() {
   if (fd_ >= 0) close(fd_);
@@ -755,7 +1048,6 @@ bool PacketIndex::extend(int64_t deadline_us) {
   // A file being written: what was read past the old end may have been a partial record.
   if (buf_off_ + buf_len_ > next_off_) buf_len_ = 0;
 
-  Tracker& tr = *tracker_;
   size_t done = 0;
   for (;;) {
     if ((++done & 255) == 0 && mono_us() > deadline_us) return false;
@@ -784,252 +1076,16 @@ bool PacketIndex::extend(int64_t deadline_us) {
     next_off_ += kRecHdr + incl;
     if (mon == 0xffff) continue;
 
-    IndexEntry e{};
+    IndexEntry e;
+    cls_.classify(static_cast<int64_t>(raw_ts) - kBtsnoopEpochDelta, index, mon, d, len,
+                  static_cast<uint32_t>(entries_.size()), &e);
     e.off = static_cast<uint32_t>(rec_off);
-    e.lat_us = kNoLat;
-    e.ts_us = static_cast<int64_t>(raw_ts) - kBtsnoopEpochDelta;
-    e.len = static_cast<uint16_t>(std::min<size_t>(len, 0xffff));
-    e.handle = kNoHandle;
-    e.index = index == kHciDevNone ? kNoIndex : static_cast<uint8_t>(std::min<uint16_t>(index, 0xfe));
-    e.mon = static_cast<uint8_t>(mon);
-    const uint32_t me = static_cast<uint32_t>(entries_.size());
-
-    auto info_for = [&](uint16_t handle, const char* type, bool create_new) -> size_t {
-      for (size_t i = 0; i < conn_info_.size(); ++i) {
-        if (conn_info_[i].index == index && conn_info_[i].handle == handle) {
-          if (create_new && type) conn_info_[i].type = type;
-          return i;
-        }
-      }
-      ConnInfo ci;
-      ci.index = index;
-      ci.handle = handle;
-      ci.type = type ? type : "acl";
-      ci.first_us = e.ts_us;
-      conn_info_.push_back(ci);
-      return conn_info_.size() - 1;
-    };
-    auto link_for = [&](uint16_t handle, const char* type) -> Link* {
-      Link* l = tr.find(index, handle);
-      if (!l) {
-        if (tr.links.size() >= 64) tr.links.erase(tr.links.begin());
-        auto nl = std::make_unique<Link>();
-        nl->index = index;
-        nl->handle = handle;
-        nl->le = type && std::strcmp(type, "le") == 0;
-        nl->info = info_for(handle, type, false);
-        tr.links.push_back(std::move(nl));
-        l = tr.links.back().get();
-      }
-      return l;
-    };
-    auto connected = [&](uint16_t handle, const char* type, const uint8_t* peer) {
-      tr.drop(index, handle);  // a reused handle starts afresh
-      Link* l = link_for(handle, type);
-      l->le = std::strcmp(type, "le") == 0;
-      ConnInfo& ci = conn_info_[l->info];
-      ci.type = type;
-      if (peer) ci.peer = bdaddr_str(peer);
-    };
-    auto data = [&](uint16_t handle, bool tx, uint32_t payload, const char* type) -> Link* {
-      Link* l = link_for(handle, type);
-      ConnInfo& ci = conn_info_[l->info];
-      ci.last_us = e.ts_us;
-      if (tx) {
-        ci.tx_bytes += payload;
-        ++ci.tx_pkts;
-        if (l->fifo.size() >= kTxFifo) l->fifo.pop_front();
-        l->fifo.push_back(me);
-      } else {
-        ci.rx_bytes += payload;
-        ++ci.rx_pkts;
-      }
-      return l;
-    };
-
-    switch (mon) {
-      case kMonCommand:
-        e.proto = kProtoHci;
-        e.flags |= kFlagTx;
-        if (len >= 3) {
-          e.opcode = le16(d);
-          if (hci_cmd_has_handle(e.opcode) && len >= 5) e.handle = le16(d + 3) & 0x0fff;
-        }
-        break;
-      case kMonEvent: {
-        e.proto = kProtoHci;
-        e.flags |= kFlagRx;
-        if (len < 2) break;
-        e.evt = d[0];
-        const uint8_t* p = d + 2;
-        const size_t n = std::min<size_t>(d[1], len - 2);
-        if (e.evt == kEvtCmdComplete && n >= 3) {
-          e.opcode = le16(p + 1);
-          if (n >= 4 && p[3]) e.flags |= kFlagErr;
-          if (hci_cmd_has_handle(e.opcode) && n >= 6) e.handle = le16(p + 4) & 0x0fff;
-        } else if (e.evt == 0x0f && n >= 4) {
-          e.opcode = le16(p + 2);
-          if (p[0]) e.flags |= kFlagErr;
-        } else if (e.evt == kEvtNumCompletedPackets && n >= 1) {
-          for (size_t i = 0; i < p[0] && 1 + 4 * (i + 1) <= n; ++i) {
-            const uint16_t h = le16(p + 1 + 4 * i) & 0x0fff;
-            const uint16_t count = le16(p + 3 + 4 * i);
-            if (i == 0) e.handle = h;
-            Link* l = tr.find(index, h);
-            if (!l) continue;
-            ConnInfo& ci = conn_info_[l->info];
-            for (uint16_t j = 0; j < count && !l->fifo.empty(); ++j) {
-              IndexEntry& sent = entries_[l->fifo.front()];
-              l->fifo.pop_front();
-              const int64_t lat = e.ts_us - sent.ts_us;
-              if (lat >= 0) {
-                sent.lat_us = static_cast<uint32_t>(std::min<int64_t>(lat, 0xfffffffe));
-                ++ci.lat_n;
-              }
-            }
-          }
-        } else if (e.evt == kEvtLeMeta && n >= 1) {
-          e.sub = p[0];
-          const uint8_t* q = p + 1;
-          const size_t m = n - 1;
-          if (le_status_handle(e.sub) && m >= 3) {
-            e.handle = le16(q + 1) & 0x0fff;
-            if (q[0]) e.flags |= kFlagErr;
-          } else if (le_handle_first(e.sub) && m >= 2) {
-            e.handle = le16(q) & 0x0fff;
-          } else if ((e.sub == 0x1b || e.sub == 0x1d || e.sub == 0x08 || e.sub == 0x09 ||
-                      e.sub == 0x0e || e.sub == 0x12) && m >= 1 && q[0]) {
-            e.flags |= kFlagErr;
-          }
-          if ((e.sub == kLeConnComplete || e.sub == kLeEnhConnComplete ||
-               e.sub == kLeEnhConnCompleteV2) && m >= 11 && q[0] == 0) {
-            connected(e.handle, "le", q + 5);
-          } else if ((e.sub == kLeCisEstablished || e.sub == kLeCisEstablishedV2) && m >= 3 && q[0] == 0) {
-            connected(e.handle, "cis", nullptr);
-          } else if ((e.sub == kLeBigComplete || e.sub == kLeBigSyncEstablished) && q[0] == 0) {
-            const size_t num_at = e.sub == kLeBigComplete ? 17 : 13;
-            for (size_t i = 0; num_at < m && i < q[num_at] && num_at + 1 + 2 * (i + 1) <= m; ++i) {
-              connected(le16(q + num_at + 1 + 2 * i) & 0x0fff, "bis", nullptr);
-            }
-          }
-        } else if (evt_status_handle(e.evt) && n >= 3) {
-          e.handle = le16(p + 1) & 0x0fff;
-          if (p[0]) e.flags |= kFlagErr;
-          if (p[0] == 0 && e.evt == kEvtConnComplete && n >= 10) {
-            connected(e.handle, p[9] == 0x01 ? "acl" : "sco", p + 3);
-          } else if (p[0] == 0 && e.evt == kEvtSyncConnComplete && n >= 10) {
-            connected(e.handle, p[9] == 0x02 ? "esco" : "sco", p + 3);
-          } else if (p[0] == 0 && e.evt == kEvtDisconnComplete) {
-            tr.drop(index, e.handle);
-          }
-        } else if (evt_handle_first(e.evt) && n >= 2) {
-          e.handle = le16(p) & 0x0fff;
-        } else if ((e.evt == 0x01 || e.evt == 0x07 || e.evt == 0x12 || e.evt == 0x36) && n >= 1 && p[0]) {
-          e.flags |= kFlagErr;
-        } else if (e.evt == 0x10 || e.evt == 0x1a) {
-          e.flags |= kFlagErr;  // Hardware Error, Data Buffer Overflow
-        }
-        break;
-      }
-      case kMonAclTx:
-      case kMonAclRx: {
-        const bool tx = mon == kMonAclTx;
-        e.flags |= tx ? kFlagTx : kFlagRx;
-        e.proto = kProtoL2cap;
-        if (len < 4) break;
-        const uint16_t hf = le16(d);
-        e.handle = hf & 0x0fff;
-        const uint8_t pb = (hf >> 12) & 3;
-        const size_t n = std::min<size_t>(len - 4, le16(d + 2));
-        const uint8_t* p = d + 4;
-        Link* l = data(e.handle, tx, static_cast<uint32_t>(n), nullptr);
-        Tracker::Frag& f = l->frag[tx ? 0 : 1];
-        if (pb == 0x01) {
-          e.flags |= kFlagCont;
-          e.cid = f.cid;
-          e.psm = f.psm;
-          e.proto = f.proto == kProtoNone ? static_cast<uint8_t>(kProtoL2cap) : f.proto;
-          if (f.want && f.sig.size() < f.want) {
-            const size_t take = std::min<size_t>(n, f.want - f.sig.size());
-            f.sig.insert(f.sig.end(), p, p + take);
-            if (f.sig.size() == f.want) {
-              track_sig(l, tx, f.sig.data(), f.sig.size());
-              if (l2cap_payload_is_error(kProtoL2cap, f.cid, f.sig.data(), f.sig.size())) e.flags |= kFlagErr;
-              f.want = 0;
-              f.sig.clear();
-            }
-          }
-          f.remaining = f.remaining > n ? static_cast<uint32_t>(f.remaining - n) : 0;
-          if (!f.remaining) f = Tracker::Frag{};
-          break;
-        }
-        f = Tracker::Frag{};
-        if (n < 4) break;
-        const uint16_t l2len = le16(p), cid = le16(p + 2);
-        e.cid = cid;
-        if (cid < kCidDynamicStart) {
-          e.proto = proto_for_fixed_cid(cid);
-          if (cid == kCidAtt || cid == kCidLeSignaling || cid == kCidSmp) {
-            l->le = true;
-            ConnInfo& ci = conn_info_[l->info];
-            if (std::strcmp(ci.type, "acl") == 0 && ci.peer.empty()) ci.type = "le";
-          }
-        } else {
-          for (const auto& ch : l->chans) {
-            if (ch.open && (tx ? ch.rcid : ch.lcid) == cid) {
-              e.psm = ch.psm;
-              e.proto = ch.proto;
-              break;
-            }
-          }
-        }
-        const uint8_t* q = p + 4;
-        const size_t got = n - 4;
-        const bool sig = cid == kCidSignaling || cid == kCidLeSignaling;
-        if (got >= l2len) {
-          if (sig) track_sig(l, tx, q, l2len);
-          if (l2cap_payload_is_error(e.proto, cid, q, l2len)) e.flags |= kFlagErr;
-        } else {
-          f.cid = cid;
-          f.psm = e.psm;
-          f.proto = e.proto;
-          f.remaining = static_cast<uint32_t>(l2len - got);
-          if (sig && l2len <= 4096) {
-            f.want = l2len;
-            f.sig.assign(q, q + got);
-          } else if (l2cap_payload_is_error(e.proto, cid, q, got)) {
-            e.flags |= kFlagErr;
-          }
-        }
-        break;
-      }
-      case kMonScoTx:
-      case kMonScoRx:
-      case kMonIsoTx:
-      case kMonIsoRx: {
-        const bool tx = mon == kMonScoTx || mon == kMonIsoTx;
-        const bool iso = mon == kMonIsoTx || mon == kMonIsoRx;
-        e.flags |= tx ? kFlagTx : kFlagRx;
-        e.proto = iso ? kProtoIso : kProtoSco;
-        const size_t hdr = iso ? 4 : 3;
-        if (len < hdr) break;
-        e.handle = le16(d) & 0x0fff;
-        data(e.handle, tx, static_cast<uint32_t>(len - hdr), iso ? "cis" : "sco");
-        break;
-      }
-      case kMonUserLogging:
-        if (len >= 2 + 7u && d[1] >= 7 && std::strncmp(reinterpret_cast<const char*>(d + 2), "btbench", 7) == 0) {
-          e.flags |= kFlagMark;
-        }
-        break;
-      default:
-        break;
-    }
     entries_.push_back(e);
   }
   at_end_ = true;
   return true;
 }
+
 
 PacketIndex::Query* PacketIndex::query(const Filter& f, int64_t deadline_us) {
   auto it = std::find_if(queries_.begin(), queries_.end(),
@@ -1103,13 +1159,9 @@ std::shared_ptr<PacketIndex> PacketStore::get(const std::string& name, int* stat
   return idx;
 }
 
-namespace {
-
-json entry_json(PacketIndex& idx, size_t i, const std::string& summary) {
-  const IndexEntry& e = idx.at(i);
-  const double t = static_cast<double>(e.ts_us - idx.t0_us()) / 1e6;
+json packet_json(const IndexEntry& e, uint64_t n, double t, const std::string& summary) {
   const char* proto = proto_name(e.proto);
-  json j{{"n", i + 1},
+  json j{{"n", n},
          {"ts_ms", static_cast<double>(e.ts_us) / 1000.0},
          {"t", std::round(t * 1e6) / 1e6},
          {"index", e.index == kNoIndex ? json(nullptr) : json(e.index)},
@@ -1127,6 +1179,51 @@ json entry_json(PacketIndex& idx, size_t i, const std::string& summary) {
   if (e.flags & kFlagCont) j["cont"] = true;
   return j;
 }
+
+json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d, size_t len,
+                        const std::vector<json>& frame_extra) {
+  Dissection ds;
+  dissect(e, d, len, true, &ds);
+
+  json frame{{"name", "Frame"}, {"value", std::to_string(n)}, {"children", json::array()}};
+  auto& fc = frame["children"];
+  const time_t secs = static_cast<time_t>(e.ts_us / 1000000);
+  struct tm tmv {};
+  localtime_r(&secs, &tmv);
+  char tbuf[64];
+  std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tmv);
+  char ubuf[96];
+  std::snprintf(ubuf, sizeof(ubuf), "%s.%06lld", tbuf, static_cast<long long>(e.ts_us % 1000000));
+  fc.push_back({{"name", "Time"}, {"value", ubuf}});
+  for (const json& x : frame_extra) fc.push_back(x);
+  fc.push_back({{"name", "Controller"},
+                {"value", e.index == kNoIndex ? std::string("(none)") : "hci" + std::to_string(e.index)}});
+  fc.push_back({{"name", "Monitor opcode"}, {"value", std::to_string(e.mon) + " (" + mon_name(e.mon) + ")"}});
+  fc.push_back({{"name", "Length"}, {"value", std::to_string(len) + " bytes"}});
+  if (e.lat_us != kNoLat) {
+    char lb[48];
+    std::snprintf(lb, sizeof(lb), "%.3f ms", e.lat_us / 1000.0);
+    fc.push_back({{"name", "TX latency (HCI → NOCP)"}, {"value", lb}});
+  }
+  if (e.psm) fc.push_back({{"name", "Channel PSM (from its setup)"}, {"value", std::to_string(e.psm)}});
+  json fields = json::array();
+  fields.push_back(std::move(frame));
+  for (auto& x : ds.fields) fields.push_back(std::move(x));
+
+  static const char* digits = "0123456789abcdef";
+  std::string hex;
+  hex.reserve(len * 2);
+  for (size_t i = 0; i < len; ++i) {
+    hex.push_back(digits[d[i] >> 4]);
+    hex.push_back(digits[d[i] & 15]);
+  }
+  json out = packet_json(e, n, t, ds.summary);
+  out["fields"] = std::move(fields);
+  out["hex"] = std::move(hex);
+  return out;
+}
+
+namespace {
 
 // Progress fields every answer carries, so a client knows whether to ask again.
 void progress(PacketIndex& idx, const PacketIndex::Query* q, json* out) {
@@ -1189,7 +1286,9 @@ bool PacketStore::list(const std::string& name, const ListParams& p, json* out, 
   const size_t count = std::min<size_t>(p.count, 1000);
   json pkts = json::array();
   for (size_t i = start; i < m.size() && i < start + count; ++i) {
-    pkts.push_back(entry_json(*idx, m[i], idx->summary(m[i])));
+    const IndexEntry& e = idx->at(m[i]);
+    pkts.push_back(packet_json(e, m[i] + 1, static_cast<double>(e.ts_us - idx->t0_us()) / 1e6,
+                               idx->summary(m[i])));
   }
   *out = json{{"name", name}, {"filter", f.key}, {"total", m.size()}, {"start", start},
               {"packets", std::move(pkts)}};
@@ -1220,45 +1319,9 @@ bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* st
   }
   const IndexEntry e = idx->at(i);
   const std::vector<uint8_t> bytes(d, d + len);
-  Dissection ds;
-  dissect(e, bytes.data(), bytes.size(), true, &ds);
-
-  json frame{{"name", "Frame"}, {"value", std::to_string(n)}, {"children", json::array()}};
-  auto& fc = frame["children"];
-  const time_t secs = static_cast<time_t>(e.ts_us / 1000000);
-  struct tm tmv {};
-  localtime_r(&secs, &tmv);
-  char tbuf[64];
-  std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tmv);
-  char ubuf[96];
-  std::snprintf(ubuf, sizeof(ubuf), "%s.%06lld", tbuf, static_cast<long long>(e.ts_us % 1000000));
-  fc.push_back({{"name", "Time"}, {"value", ubuf}});
-  fc.push_back({{"name", "Since first packet"},
-                {"value", std::to_string(static_cast<double>(e.ts_us - idx->t0_us()) / 1e6) + " s"}});
-  fc.push_back({{"name", "Controller"},
-                {"value", e.index == kNoIndex ? std::string("(none)") : "hci" + std::to_string(e.index)}});
-  fc.push_back({{"name", "Monitor opcode"}, {"value", std::to_string(e.mon) + " (" + mon_name(e.mon) + ")"}});
-  fc.push_back({{"name", "Length"}, {"value", std::to_string(len) + " bytes"}});
-  if (e.lat_us != kNoLat) {
-    char lb[48];
-    std::snprintf(lb, sizeof(lb), "%.3f ms", e.lat_us / 1000.0);
-    fc.push_back({{"name", "TX latency (HCI → NOCP)"}, {"value", lb}});
-  }
-  if (e.psm) fc.push_back({{"name", "Channel PSM (from its setup)"}, {"value", std::to_string(e.psm)}});
-  json fields = json::array();
-  fields.push_back(std::move(frame));
-  for (auto& x : ds.fields) fields.push_back(std::move(x));
-
-  static const char* digits = "0123456789abcdef";
-  std::string hex;
-  hex.reserve(len * 2);
-  for (uint8_t b : bytes) {
-    hex.push_back(digits[b >> 4]);
-    hex.push_back(digits[b & 15]);
-  }
-  *out = entry_json(*idx, i, ds.summary);
-  (*out)["fields"] = std::move(fields);
-  (*out)["hex"] = std::move(hex);
+  const double t = static_cast<double>(e.ts_us - idx->t0_us()) / 1e6;
+  *out = packet_detail_json(e, n, t, bytes.data(), bytes.size(),
+                            {json{{"name", "Since first packet"}, {"value", std::to_string(t) + " s"}}});
   (*out)["packets_in_file"] = idx->size();
   return true;
 }
@@ -1314,7 +1377,7 @@ bool PacketStore::graph(const std::string& name, const GraphParams& p, json* out
   }
 
   // The connections, busiest first; and the one whose throughput and latency are graphed.
-  std::vector<const PacketIndex::ConnInfo*> cs;
+  std::vector<const ConnInfo*> cs;
   for (const auto& c : idx->conns()) cs.push_back(&c);
   std::sort(cs.begin(), cs.end(), [](const auto* a, const auto* b) {
     return a->tx_bytes + a->rx_bytes > b->tx_bytes + b->rx_bytes;

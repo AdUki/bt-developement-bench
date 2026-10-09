@@ -14,12 +14,15 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <list>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
+
+#include "link_seed.h"
 
 namespace btb::hci {
 
@@ -143,6 +146,60 @@ void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dis
 bool hci_cmd_has_handle(uint16_t opcode);
 bool l2cap_payload_is_error(uint8_t proto, uint16_t cid, const uint8_t* d, size_t len);
 
+// The JSON of one packet in a list (docs/monitor.md "Packet view"): n is its number in the view
+// (the frame number of a file, the sequence number of the live stream), t its time in seconds
+// since the view's first packet.
+nlohmann::json packet_json(const IndexEntry& e, uint64_t n, double t, const std::string& summary);
+// The same plus "fields" and "hex": the detail pane. The Frame node comes first; `frame_extra`
+// nodes are put into it after the time (what this view numbers or measures from).
+nlohmann::json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d,
+                                  size_t len, const std::vector<nlohmann::json>& frame_extra);
+
+// ---- Classifying packets ----
+
+// Per connection (controller index + handle; a reused handle accumulates), for the graph's
+// connection list.
+struct ConnInfo {
+  uint16_t index = 0;
+  uint16_t handle = 0;
+  const char* type = "acl";
+  std::string peer;
+  int64_t first_us = 0, last_us = 0;
+  uint64_t tx_bytes = 0, rx_bytes = 0;
+  uint32_t tx_pkts = 0, rx_pkts = 0;
+  uint32_t lat_n = 0;
+};
+
+// Turns monitor packets, in order, into IndexEntry values. It keeps the same bookkeeping as the
+// live Decoder, cut down to what the index needs: links from their connection events (or first
+// data), L2CAP channels from the signalling so a dynamic CID maps to its PSM and protocol,
+// continuation fragments, and the HCI TX → NOCP FIFO. A capture file's index runs one over the
+// file; the live packet view runs one over the monitor stream while someone watches.
+class Classifier {
+ public:
+  Classifier();
+  ~Classifier();
+  Classifier(const Classifier&) = delete;
+  Classifier& operator=(const Classifier&) = delete;
+
+  // Fills *e from one packet: everything but off, and lat_us stays kNoLat. id is the caller's
+  // name for this packet: when a later NOCP completes it, on_latency(id, µs) is called, so the
+  // caller can update wherever it keeps the entry.
+  void classify(int64_t ts_us, uint16_t index, uint16_t mon, const uint8_t* d, size_t len,
+                uint32_t id, IndexEntry* e);
+  std::function<void(uint32_t id, uint32_t lat_us)> on_latency;
+
+  // Forgets everything, then knows these links and channels (the live Decoder's view).
+  void seed(const std::vector<LinkSeed>& links);
+
+  const std::vector<ConnInfo>& conns() const;
+
+  struct State;
+
+ private:
+  std::unique_ptr<State> st_;
+};
+
 // ---- One indexed file ----
 
 class PacketIndex {
@@ -187,25 +244,11 @@ class PacketIndex {
   };
   Query* query(const Filter& f, int64_t deadline_us);
 
-  // Per connection (controller index + handle; a reused handle accumulates), maintained while
-  // indexing for the graph's connection list.
-  struct ConnInfo {
-    uint16_t index = 0;
-    uint16_t handle = 0;
-    const char* type = "acl";
-    std::string peer;
-    int64_t first_us = 0, last_us = 0;
-    uint64_t tx_bytes = 0, rx_bytes = 0;
-    uint32_t tx_pkts = 0, rx_pkts = 0;
-    uint32_t lat_n = 0;
-  };
-  const std::vector<ConnInfo>& conns() const { return conn_info_; }
-
-  struct Tracker;
+  // Maintained while indexing, for the graph's connection list.
+  const std::vector<ConnInfo>& conns() const { return cls_.conns(); }
 
  private:
   bool fill(uint64_t off, size_t n);  // makes [off, off+n) available in buf_
-  void reset();
 
   std::string path_;
   int fd_ = -1;
@@ -215,8 +258,7 @@ class PacketIndex {
   uint64_t next_off_ = 16;  // the next record to index
   bool at_end_ = false;
   std::vector<IndexEntry> entries_;
-  std::vector<ConnInfo> conn_info_;
-  std::unique_ptr<Tracker> tracker_;
+  Classifier cls_;
   std::list<Query> queries_;  // most recently used first
 
   std::vector<uint8_t> buf_;
