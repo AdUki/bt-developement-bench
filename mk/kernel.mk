@@ -21,8 +21,9 @@ KSTAGE     := $(STAGE)/linux-$(KERNEL)
 # The revision the image's kernel is built from: src/linux starts there (like the other src
 # trees, mk/dev.mk), so a first deploy changes nothing but what you then commit on top.
 LINUX_PINNED := $(call pinned,LINUX)
-# The fragment the image's kernels are configured with, too.
-KFRAGMENT  := $(ROOT)/$(YOCTO)/meta-btbench/recipes-kernel/linux/files/btbench.cfg
+# The fragments the image's kernels are configured with, too (linux-btbench's
+# BTBENCH_KERNEL_FRAGMENTS): what the bench needs, and Bluetooth logging switched on at runtime.
+KFRAGMENT  := $(addprefix $(ROOT)/$(YOCTO)/meta-btbench/recipes-kernel/linux/files/,btbench.cfg bt-debug.cfg)
 KDEFCONFIG := $(DEFCONFIG_$(KERNEL))
 KDTB       := $(firstword $(DTBS_$(KERNEL)))
 KDTS_EXTRA := $(if $(DTS_EXTRA_$(KERNEL)),$(ROOT)/$(DTS_EXTRA_$(KERNEL)))
@@ -49,20 +50,20 @@ endef
 # Fragment values that did not survive olddefconfig (renamed, gone, or a dependency missing):
 # merge_config.sh -m does not say. The linux-btbench recipe makes the same check.
 define kconfig_check
-awk 'FNR == NR { \
+cat $(KFRAGMENT) | awk 'FNR == NR { \
 	  if (match($$0, /^CONFIG_[A-Za-z0-9_]+=/)) { want[substr($$0, 1, RLENGTH - 1)] = substr($$0, RLENGTH + 1) } \
 	  else if (match($$0, /^# CONFIG_[A-Za-z0-9_]+ is not set/)) { want[$$2] = "n" } \
 	  next } \
      match($$0, /^CONFIG_[A-Za-z0-9_]+=/) { have[substr($$0, 1, RLENGTH - 1)] = substr($$0, RLENGTH + 1) } \
      END { for (s in want) { h = (s in have) ? have[s] : "n"; \
 	   if (h != want[s]) printf "  %s: requested %s, got %s\n", s, want[s], h } }' \
-	$(KFRAGMENT) $(KOUT)/.config | sort > $(KOUT)/.btbench-cfg-check; \
+	- $(KOUT)/.config | sort > $(KOUT)/.btbench-cfg-check; \
 if [ -s $(KOUT)/.btbench-cfg-check ]; then \
-  echo -e "$(BOLD)btbench.cfg values the kernel did not take:$(OFF)"; cat $(KOUT)/.btbench-cfg-check; fi
+  echo -e "$(BOLD)Fragment values the kernel did not take:$(OFF)"; cat $(KOUT)/.btbench-cfg-check; fi
 endef
 
 # What the .config was generated from; a change regenerates it (make linux-defconfig).
-KCONFIG_STAMP = $(KDEFCONFIG) $(shell md5sum < $(KFRAGMENT) | cut -c1-32)
+KCONFIG_STAMP = $(KDEFCONFIG) $(shell cat $(KFRAGMENT) | md5sum | cut -c1-32)
 
 # make clangd (mk/dev.mk): the kernel tree and its build dir.
 CLANGD_TREES += $(LINUX_TREE):$(KOUT)
@@ -133,12 +134,12 @@ src-linux-rpi: $(BUILD_CONF) ## src/linux-rpi: raspberrypi/linux at linux-raspbe
 	@echo -e "$(BOLD)$(LINUX_RPI_SRC)$(OFF) on $$(git -C $(LINUX_RPI_SRC) log -1 --format='%h %s')"
 
 .PHONY: linux-defconfig
-linux-defconfig: check-sdk ## (Re)generate the kernel .config: board defconfig + btbench.cfg
+linux-defconfig: check-sdk ## (Re)generate the kernel .config: board defconfig + btbench.cfg + bt-debug.cfg
 	@set -e; $(kmake_setup); \
 	mkdir -p $(KOUT); \
 	if [ -f $(KOUT)/.config ]; then cp $(KOUT)/.config $(KOUT)/.config.btbench-old; \
 	  echo "Previous config saved as $(KOUT)/.config.btbench-old"; fi; \
-	echo -e "$(BOLD)Config$(OFF) $(KDEFCONFIG) + btbench.cfg $(DIM)→ $(KOUT)/.config$(OFF)"; \
+	echo -e "$(BOLD)Config$(OFF) $(KDEFCONFIG) + btbench.cfg + bt-debug.cfg $(DIM)→ $(KOUT)/.config$(OFF)"; \
 	kmake -s $(KDEFCONFIG); \
 	"$(LINUX_TREE)/scripts/kconfig/merge_config.sh" -m -O $(KOUT) $(KOUT)/.config $(KFRAGMENT) >/dev/null; \
 	kmake -s olddefconfig; \
@@ -173,7 +174,7 @@ linux: check-sdk ## Build kernel, modules, dtb into build/<board>/stage/linux-<k
 	echo -e "  next: $(BOLD)make linux-test$(OFF)  (deploy as the test kernel and boot it once)"
 
 .PHONY: linux-menuconfig
-linux-menuconfig: check-sdk ## menuconfig on the kernel's .config (kept until btbench.cfg changes)
+linux-menuconfig: check-sdk ## menuconfig on the kernel's .config (kept until a fragment changes)
 	@set -e; [ -f $(KOUT)/.config ] || $(MAKE) --no-print-directory linux-defconfig
 	@set -e; $(kmake_setup); kmake menuconfig
 
@@ -257,3 +258,21 @@ linux-rollback: ## Swap the good and the previous kernel (takes effect at the ne
 .PHONY: linux-status
 linux-status: ## Kernel slots on the board: running, good, test, prev
 	@$(SSH) $(TARGET) btbench-kernel status | jq .
+
+# ---- Kernel Bluetooth logs (btbench-btdebug, the bt-debug.cfg fragment) ----------------------------
+# Areas: hci mgmt l2cap smp iso sco rfcomm bnep hidp driver all.
+
+# STOP, not OFF: OFF is the Makefile's escape that ends bold text.
+bt-debug: ## Kernel Bluetooth debug messages: AREAS="l2cap smp" on, STOP="..." off, KEEP=1 also from boot; then follows them
+	@set -e; \
+	[ -z "$(STOP)" ] || $(SSH) $(TARGET) btbench-btdebug off $(STOP); \
+	[ -z "$(AREAS)" ] || $(SSH) $(TARGET) btbench-btdebug on $(AREAS); \
+	[ -z "$(KEEP)" ] || $(SSH) $(TARGET) btbench-btdebug keep $(AREAS); \
+	$(SSH) $(TARGET) btbench-btdebug status | jq -r '.areas[] | (if .on > 0 then "on " else "   " end) + " " + .name + "  " + (.on|tostring) + "/" + (.total|tostring) + (if .kept then "  kept from boot" else "" end)'; \
+	if [ -n "$(AREAS)" ]; then \
+	  echo -e "$(DIM)Following the kernel log (Ctrl-C stops following; the messages stay on: make bt-debug-off)$(OFF)"; \
+	  $(SSH) -t $(TARGET) journalctl -k -f -n 20; \
+	fi
+
+bt-debug-off: ## Every kernel Bluetooth debug message off (and none kept from boot)
+	@$(SSH) $(TARGET) "btbench-btdebug off all && btbench-btdebug keep" && echo "Bluetooth kernel debug messages off"

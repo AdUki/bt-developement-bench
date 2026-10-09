@@ -9,7 +9,7 @@ first when an interface moves.
 |---|---|
 | system | `yocto/meta-btbench/recipes-core/{images,btbench-base,base-files}/`, `recipes-core/packagegroups/packagegroup-btbench-tools.bb`, `yocto/meta-btbench/wic/`, `tools/target/{btbench-wifi,btbench-gadget,btbench-bdaddr,btbench-data}`, `mk/system.mk`, `docs/system.md` |
 | audio + BlueZ | `recipes-connectivity/bluez5/`, `recipes-multimedia/{pipewire,wireplumber,libfreeaptx,ldacbt,btbench-audio,packagegroups}/`, `tools/target/{btbench-audio,btbench-btsnoop}`, `tools/dev/{bbvars,clangd-gen}`, `mk/dev.mk`, `docs/{audio,dev}.md` |
-| kernel | `recipes-kernel/`, `dynamic-layers/raspberrypi/recipes-{kernel,bsp}/`, `boards/dts/`, `tools/dev/mkdtb`, `tools/target/btbench-kernel`, `mk/kernel.mk`, `docs/kernel.md` |
+| kernel | `recipes-kernel/`, `dynamic-layers/raspberrypi/recipes-{kernel,bsp}/`, `boards/dts/`, `tools/dev/mkdtb`, `tools/target/btbench-kernel`, `tools/target/btbench-btdebug`, `mk/kernel.mk`, `docs/kernel.md` |
 | btbenchd | `app/` (except `app/src/hci/`, `app/tests/hci/`), `recipes-btbench/`, `tools/bench`, `tools/fake-bluez/`, `mk/app.mk`, `docs/{api,web}.md` |
 | HCI monitor | `app/src/hci/`, `app/tests/hci/`, `docs/monitor.md` |
 
@@ -88,6 +88,15 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
 - `btbench-kernel try` (reboots), `commit`, `rollback`
 - Trial files: `/boot/bench/test/<KIMAGE>` (zImage/Image), `/boot/bench/test/board.dtb` (optional),
   modules in `/lib/modules/<version>/`. `/boot/bench/prev/` the same layout.
+
+### btbench-btdebug
+- `btbench-btdebug status` → `{"available":true,"flags":"pf","areas":[{"name":"l2cap","label":"L2CAP","on":0,"total":201,"kept":false}, ...]}`:
+  per area, its dynamic-debug call sites and how many print; `total` 0 when its module is not loaded
+- `btbench-btdebug on AREA...`, `off AREA...` (areas: `hci mgmt l2cap smp iso sco rfcomm bnep hidp driver all`),
+  `keep [AREA...]` (on from boot: `/etc/modprobe.d/btbench-btdebug.conf`, `dyndbg` options per module;
+  no area removes it)
+- Needs `CONFIG_DYNAMIC_DEBUG` and debugfs (the `bt-debug.cfg` kernel fragment); the messages go to the
+  kernel log.
 
 ## btbenchd
 

@@ -709,6 +709,23 @@ cmd_kernel() {
   esac
 }
 
+# The kernel's Bluetooth debug messages by area (btbench-btdebug on the board, through the API).
+cmd_btdebug() {
+  local op=${1-status}
+  [ $# -gt 0 ] && shift
+  local areas
+  case "$op" in
+    status) get /api/system/btdebug ;;
+    on|off|keep)
+      { [ $# -gt 0 ] || [ "$op" = keep ]; } || die "usage: bench btdebug $op AREA... (hci mgmt l2cap smp iso sco rfcomm bnep hidp driver all)"
+      areas=$(printf '%s\n' "$@" | jq -R . | jq -sc .)
+      put /api/system/btdebug "{\"$op\": $areas}" ;;
+    *) die "usage: bench btdebug status|on AREA...|off AREA...|keep [AREA...]" ;;
+  esac | show '.areas[] | (if .on > 0 then "on " else "   " end) + " " + .name + "  " + (.on | tostring) + "/" + (.total | tostring) + (if .kept then "  kept from boot" else "" end)'
+  [ "$op" = on ] && echo "follow them: bench logs kernel -f"
+  return 0
+}
+
 cmd_sys() {
   get /api/system | show '
     .hostname + "  up " + ((.uptime_s / 3600 | floor | tostring) + " h " + ((.uptime_s % 3600) / 60 | floor | tostring) + " min")
@@ -732,6 +749,7 @@ cmd_logs() {
   done
   # On the board itself, journalctl is right there.
   if on_board && [[ "$URL" == *localhost* || "$URL" == *127.0.0.1* ]] && command -v journalctl >/dev/null; then
+    [ "$unit" = kernel ] && exec journalctl -k -n 100 $([ "$follow" = 1 ] && echo -f)
     [[ "$unit" == *.* ]] || unit=$unit.service
     exec journalctl -u "$unit" -n 100 $([ "$follow" = 1 ] && echo -f)
   fi
@@ -795,7 +813,7 @@ cmd_completion() {
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
   local cmds="status scan devices info pair connect disconnect trust untrust block unblock cancel remove
-    discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel sys logs bt-args run ssh help completion"
+    discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel btdebug sys logs bt-args run ssh help completion"
   if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
@@ -810,7 +828,8 @@ _bench() {
     cap) COMPREPLY=($(compgen -W "on off ls get analyze rm live" -- "$cur")) ;;
     wifi) COMPREPLY=($(compgen -W "status scan add remove ap sta off auto" -- "$cur")) ;;
     kernel) COMPREPLY=($(compgen -W "status try commit rollback" -- "$cur")) ;;
-    logs) COMPREPLY=($(compgen -W "bluetooth pipewire wireplumber btbenchd btbench-wifi btbench-btsnoop -f" -- "$cur")) ;;
+    btdebug) COMPREPLY=($(compgen -W "status on off keep hci mgmt l2cap smp iso sco rfcomm bnep hidp driver all" -- "$cur")) ;;
+    logs) COMPREPLY=($(compgen -W "bluetooth pipewire wireplumber btbenchd btbench-wifi btbench-btsnoop kernel -f" -- "$cur")) ;;
     run) COMPREPLY=($(compgen -W "l2test l2ping isotest rctest scotest btgatt-client btmgmt bluetoothctl avinfo iperf3 wpctl pw-dump pw-cli hcitool hciconfig" -- "$cur")) ;;
     info|pair|connect|disconnect|trust|untrust|block|unblock|cancel|remove|gatt)
       local addrs
@@ -873,8 +892,11 @@ ${bold}Capture and monitor${off}
 ${bold}Board${off}
   wifi status|scan|add SSID [PSK]|remove SSID|ap|sta|off|auto
   kernel status|try|commit|rollback
+  btdebug [status|on|off|keep] [AREA...]
+                                  the kernel's Bluetooth debug messages: hci mgmt l2cap smp iso sco
+                                  rfcomm bnep hidp driver all (bench logs kernel -f to follow)
   sys                             versions, services, health
-  logs [unit] [-f]                the journal (default bluetooth)
+  logs [unit] [-f]                the journal (default bluetooth; kernel: the kernel's log)
   bt-args ["-d -E ..."]           show / set bluetoothd's arguments (restarts bluetooth)
   run TOOL ARGS...                l2ping, l2test, btgatt-client, iperf3, ... on the board
   ssh [CMD]                       root@$HOST
@@ -914,6 +936,7 @@ case "$cmd" in
   mon) cmd_mon "$@" ;;
   wifi) cmd_wifi "$@" ;;
   kernel) cmd_kernel "$@" ;;
+  btdebug) cmd_btdebug "$@" ;;
   sys) cmd_sys ;;
   logs) cmd_logs "$@" ;;
   bt-args) cmd_bt_args "$@" ;;

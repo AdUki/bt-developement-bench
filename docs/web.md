@@ -189,8 +189,10 @@ behind a confirmation.
 **System** — two views. *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
 kernel, the stack's services with restart buttons, bluetoothd's command line under a
 disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
-bluetooth), and reboot. *Logs and tools*: the journal of a unit (the last 200 lines, and live with
-*follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted
+bluetooth), and reboot. *Logs and tools*: the kernel's Bluetooth debug messages by area (HCI core,
+management, L2CAP, SMP, ISO, SCO, RFCOMM, BNEP, HIDP, the controller drivers; each says how many of
+its messages print, *keep from boot*, *all off*, *show in the journal*), the journal of a unit or
+of the kernel (the last 200 lines, and live with *follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted
 tools, with live output and kill).
 
 On a PC (`make run`, `make pc`) the board-only parts — audio mode, Wi-Fi, kernel, reboot — say

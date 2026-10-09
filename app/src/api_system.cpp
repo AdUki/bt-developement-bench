@@ -111,6 +111,36 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     });
   }
 
+  // ---- Kernel Bluetooth logs (btbench-btdebug) ----------------------------------------------------
+
+  svr.Get("/api/system/btdebug", [&d](const httplib::Request&, httplib::Response& res) {
+    reply(res, d.scripts.json_cmd("btbench-btdebug", {"status"}, 15000));
+  });
+
+  // Body: {"on": ["l2cap"], "off": ["all"], "keep": ["l2cap"]} — any of them; "keep" (the areas on
+  // from boot) replaces what was kept, [] keeps nothing. Answers with the status after.
+  svr.Put("/api/system/btdebug", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    std::vector<std::pair<std::string, std::vector<std::string>>> ops;
+    for (const char* op : {"off", "on", "keep"}) {
+      if (!j.contains(op)) continue;
+      if (!j[op].is_array()) return send_error(res, 400, std::string(op) + " is a list of areas");
+      std::vector<std::string> args{op};
+      for (const json& a : j[op]) {
+        if (!a.is_string() || !bt_debug_area_ok(a.get<std::string>()))
+          return send_error(res, 400, "areas are hci, mgmt, l2cap, smp, iso, sco, rfcomm, bnep, hidp, driver or all");
+        args.push_back(a.get<std::string>());
+      }
+      // on/off without an area would only print the usage.
+      if (args.size() == 1 && std::string(op) != "keep") continue;
+      ops.emplace_back(op, std::move(args));
+    }
+    for (const auto& [op, args] : ops) {
+      const TargetScripts::Result r = d.scripts.action("btbench-btdebug", args, 15000);
+      if (r.http != 200) return reply(res, r);
+    }
+    reply(res, d.scripts.json_cmd("btbench-btdebug", {"status"}, 15000));
+  }));
+
   // ---- System -------------------------------------------------------------------------------------
 
   svr.Get("/api/system", [&d](const httplib::Request&, httplib::Response& res) { send_json(res, d.sys.full()); });

@@ -731,3 +731,5 @@ label.set-row { cursor: pointer; }
   div.set-row .num input { flex: 1; width: auto; }
   label.set-row { gap: 0.8rem; }
 }
+.kd-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0 1.2rem; margin-bottom: 0.6rem; }
+.kd-areas .set-row { border-top: 1px solid var(--line-soft); }

@@ -47,10 +47,15 @@ bool open_unit(const std::string& unit, sd_journal** out, std::string* err) {
     if (err) *err = std::string("cannot open the journal: ") + strerror(-r);
     return false;
   }
-  sd_journal_add_match(j, ("_SYSTEMD_UNIT=" + unit).c_str(), 0);
-  sd_journal_add_disjunction(j);
-  sd_journal_add_match(j, ("UNIT=" + unit).c_str(), 0);
-  sd_journal_add_match(j, "_PID=1", 0);
+  if (unit == "kernel") {
+    // The kernel's log (journalctl -k): where btbench-btdebug's Bluetooth messages go.
+    sd_journal_add_match(j, "_TRANSPORT=kernel", 0);
+  } else {
+    sd_journal_add_match(j, ("_SYSTEMD_UNIT=" + unit).c_str(), 0);
+    sd_journal_add_disjunction(j);
+    sd_journal_add_match(j, ("UNIT=" + unit).c_str(), 0);
+    sd_journal_add_match(j, "_PID=1", 0);
+  }
   *out = j;
   return true;
 }
@@ -64,7 +69,8 @@ bool journal_unit_name(const std::string& in, std::string* out) {
         c != ':')
       return false;
   }
-  *out = in.find('.') == std::string::npos ? in + ".service" : in;
+  // "kernel" is the kernel's log, not a unit.
+  *out = in == "kernel" || in.find('.') != std::string::npos ? in : in + ".service";
   return true;
 }
 

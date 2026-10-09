@@ -36,7 +36,7 @@ function renderSystem(s) {
   // The journal's unit list: the stack's services, as GET /api/system reports them.
   const units = Object.keys(s.services || {});
   if (units.length && !$('sys-j-unit').options.length) {
-    $('sys-j-unit').innerHTML = units.map(u => `<option>${esc(u)}</option>`).join('');
+    $('sys-j-unit').innerHTML = units.map(u => `<option>${esc(u)}</option>`).join('') + '<option value="kernel">Kernel log</option>';
     $('sys-j-unit').value = 'bluetooth.service';
   }
 }
@@ -124,11 +124,53 @@ function setupSystem() {
   };
 }
 
+// ---------------------------------------------------------------- kernel Bluetooth logs
+
+// The kernel's own Bluetooth debug messages (btbench-btdebug), by area. Each area says how many of
+// its call sites print; a switch turns all of them on or off.
+function renderBtDebug(s) {
+  setHTML($('kd-areas'), s.areas.map(a => {
+    const on = a.on > 0;
+    return `<label class="set-row" title="${a.on} of ${a.total} messages print">
+      <span class="set-t"><b>${esc(a.label)}</b><span class="hint">${a.total ? (on ? (a.on === a.total ? 'all ' + a.total + ' on' : a.on + ' of ' + a.total + ' on') : a.total + ' messages') : 'not loaded'}${a.kept ? ' · on from boot' : ''}</span></span>
+      <span class="switch"><input type="checkbox" data-kd="${a.name}"${on ? ' checked' : ''}${a.total ? '' : ' disabled'}><i></i></span></label>`;
+  }).join(''));
+  if (idle($('kd-keep'))) $('kd-keep').checked = s.areas.some(a => a.kept);
+  setText($('kd-msg'), '');
+}
+
+const refreshBtDebug = () => api('/system/btdebug').then(renderBtDebug).catch(e => {
+  setHTML($('kd-areas'), '');
+  setText($('kd-msg'), e.status === 503 ? 'Kernel Bluetooth logs are switched on the board only.' : e.message);
+});
+
+function setupBtDebug() {
+  const on = () => [...document.querySelectorAll('#kd-areas input[data-kd]:checked')].map(i => i.dataset.kd);
+  $('kd-areas').onchange = e => {
+    const t = e.target.closest('input[data-kd]');
+    if (!t) return;
+    const body = {[t.checked ? 'on' : 'off']: [t.dataset.kd]};
+    // Kept from boot follows what is on, while that is asked for.
+    if ($('kd-keep').checked) body.keep = on();
+    put('/system/btdebug', body).then(renderBtDebug).catch(e => { fail(e); refreshBtDebug(); });
+  };
+  $('kd-keep').onchange = e => put('/system/btdebug', {keep: e.target.checked ? on() : []}).then(renderBtDebug).catch(fail);
+  $('kd-off').onclick = () => put('/system/btdebug', {off: ['all']}).then(renderBtDebug).catch(fail);
+  $('kd-show').onclick = () => {
+    $('sys-j-unit').value = 'kernel';
+    $('sys-j-follow').checked = true;
+    $('sys-j-unit').onchange();
+    $('sys-j-follow').onchange();
+    $('sys-journal').scrollIntoView({block: 'start', behavior: 'smooth'});
+  };
+}
+
 registerTab('system', {
   topics: () => [].concat(journalFollow ? ['journal'] : [], jobSel ? ['job.' + jobSel] : []),
   show() {
     refreshSystem().then(() => { if (!$('sys-journal').textContent) loadJournal(); });
     refreshJobs();
+    refreshBtDebug();
   },
   onMessage(topic, d) {
     if (topic === 'system') renderHealth(d);
@@ -143,3 +185,4 @@ registerTab('system', {
   },
 });
 setupSystem();
+setupBtDebug();

@@ -110,6 +110,9 @@ void test_names() {
   CHECK(journal_unit_name("bluetooth", &u) && u == "bluetooth.service");
   CHECK(journal_unit_name("wpa_supplicant@wlan0.service", &u) && u == "wpa_supplicant@wlan0.service");
   CHECK(!journal_unit_name("a b", &u));
+  CHECK(journal_unit_name("kernel", &u) && u == "kernel");  // the kernel's log, not kernel.service
+  CHECK(bt_debug_area_ok("l2cap") && bt_debug_area_ok("all") && bt_debug_area_ok("driver"));
+  CHECK(!bt_debug_area_ok("bluetooth") && !bt_debug_area_ok("") && !bt_debug_area_ok("l2cap;rm"));
   CHECK(!journal_unit_name("x;reboot", &u));
   CHECK(!journal_unit_name("", &u));
   CHECK(job_allowed("l2ping"));

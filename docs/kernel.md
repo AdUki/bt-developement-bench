@@ -25,9 +25,12 @@ pin only moves when you move it, with `make bump-versions` (it takes `src/linux`
 whatever `src/linux` holds into the image without changing the pin, use
 `make image SRC=local` (externalsrc). The recipe never writes into that tree.
 
-**Configuration.** The board's upstream defconfig, plus one fragment:
-`yocto/meta-btbench/recipes-kernel/linux/files/btbench.cfg`. The same fragment is used by
-`linux-btbench`, the `linux-raspberrypi` bbappend and `make linux`. It switches on:
+**Configuration.** The board's upstream defconfig, plus two fragments in
+`yocto/meta-btbench/recipes-kernel/linux/files/`: `btbench.cfg` (what the bench needs) and
+`bt-debug.cfg` (Bluetooth logging switched on at runtime: debugfs, dynamic debug, the Bluetooth
+debugfs, printk timestamps, a 256 KiB log buffer; see "Kernel Bluetooth logs"). The same
+fragments are used by `linux-btbench` (`BTBENCH_KERNEL_FRAGMENTS`), the `linux-raspberrypi`
+bbappend and `make linux`. `btbench.cfg` switches on:
 
 - **Bluetooth.** Built as modules, so a rebuilt `bluetooth.ko` can be reloaded without a reboot.
   It covers hci_uart over serdev with the Broadcom protocol (the onboard BCM43430A1), btusb for
@@ -205,6 +208,31 @@ compatible.
 writes `/boot/tryboot.txt` (config.txt plus `os_prefix=bench/test/`) and the test slot's
 `cmdline.txt`, then runs `systemctl reboot "0 tryboot"`. It is not used by the rpi0w and is
 untested.
+
+## Kernel Bluetooth logs
+
+Every `BT_DBG` / `pr_debug` in `net/bluetooth` and `drivers/bluetooth` is compiled in and off
+(`bt-debug.cfg`), and switched at runtime through dynamic debug — by area, without a rebuild or a
+reboot. The messages, with the function's name, go to the kernel log (`dmesg`, `journalctl -k`).
+
+```bash
+make bt-debug AREAS="l2cap smp"     # on, then follow the kernel log (Ctrl-C; they stay on)
+make bt-debug STOP=l2cap            # one off
+make bt-debug AREAS=smp KEEP=1      # on now and from boot
+make bt-debug-off                   # all off, none kept
+bench btdebug on mgmt; bench logs kernel -f
+btbench-btdebug status              # on the board: per area, call sites and how many print
+```
+
+Areas: `hci` (core, events, connections, hci_sync, sockets), `mgmt`, `l2cap`, `smp`, `iso`, `sco`,
+`rfcomm`, `bnep`, `hidp`, `driver` (hci_uart, btbcm, btusb, btrtl, btintel), `all`. The console has
+the same switches in System → Logs and tools, and its journal shows "Kernel log". *Keep from boot*
+writes `dyndbg` options to `/etc/modprobe.d/btbench-btdebug.conf`, applied as the modules load.
+
+They are chatty: an A2DP stream with `l2cap` on logs thousands of lines a second, enough to load
+the Zero W's one core and change the timing being looked at. Switch on the area in question, not
+`all`. For anything finer (one function, one line) write to
+`/sys/kernel/debug/dynamic_debug/control` directly: `echo 'func l2cap_recv_frame +pfl' > …`.
 
 ## Serial console
 

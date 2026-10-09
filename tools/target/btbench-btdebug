@@ -1,0 +1,166 @@
+#!/bin/sh
+# btbench-btdebug — the kernel's Bluetooth debug messages (BT_DBG / pr_debug in net/bluetooth and
+# drivers/bluetooth) on and off at runtime, by area, through dynamic debug. They go to the kernel
+# log: dmesg, journalctl -k (-f to follow), the console's journal view ("Kernel").
+#
+#   btbench-btdebug status            JSON: every area, how many of its call sites print, what is kept
+#   btbench-btdebug on AREA...        print (with the function name) the areas' messages from now on
+#   btbench-btdebug off AREA...       stop them; "all" is every area
+#   btbench-btdebug keep [AREA...]    the same areas on from boot (modprobe.d dyndbg options);
+#                                     no area: nothing kept
+#
+# Areas: hci (core, events, connections, sync, sockets), mgmt, l2cap, smp, iso, sco, rfcomm, bnep,
+# hidp, driver (hci_uart, btbcm, btusb, btrtl, btintel), all.
+#
+# Needs CONFIG_DYNAMIC_DEBUG and debugfs (the bt-debug.cfg kernel fragment); debugfs is mounted
+# here if it is not. BT_DBG is chatty: a busy link logs thousands of lines a second, and on a
+# Zero W the logging itself changes the timing being looked at — switch on only what is needed.
+# Exit status non-zero with a one-line reason on stderr on failure; no terminal needed.
+
+set -eu
+
+DBGFS=${BTBENCH_DEBUGFS:-/sys/kernel/debug}
+CTL=$DBGFS/dynamic_debug/control
+KEEP=${BTBENCH_BTDEBUG_KEEP:-/etc/modprobe.d/btbench-btdebug.conf}
+FLAGS=pf  # print, with the function's name
+
+AREAS="hci mgmt l2cap smp iso sco rfcomm bnep hidp driver"
+
+die() { echo "btbench-btdebug: $*" >&2; exit 1; }
+
+# An area's call sites: "file <name>" (in net/bluetooth, module bluetooth) or "module <name>".
+specs() {
+	case $1 in
+	hci) echo "file:hci_core.c file:hci_event.c file:hci_conn.c file:hci_sync.c file:hci_sock.c file:hci_request.c file:hci_sysfs.c file:hci_codec.c file:hci_debugfs.c" ;;
+	mgmt) echo "file:mgmt.c file:mgmt_util.c file:mgmt_config.c" ;;
+	l2cap) echo "file:l2cap_core.c file:l2cap_sock.c" ;;
+	smp) echo "file:smp.c file:ecdh_helper.c" ;;
+	iso) echo "file:iso.c" ;;
+	sco) echo "file:sco.c" ;;
+	rfcomm) echo "module:rfcomm" ;;
+	bnep) echo "module:bnep" ;;
+	hidp) echo "module:hidp" ;;
+	driver) echo "module:hci_uart module:btbcm module:btusb module:btrtl module:btintel" ;;
+	*) return 1 ;;
+	esac
+}
+
+label() {
+	case $1 in
+	hci) echo "HCI core" ;; mgmt) echo "Management" ;; l2cap) echo "L2CAP" ;; smp) echo "SMP (pairing)" ;;
+	iso) echo "ISO" ;; sco) echo "SCO" ;; rfcomm) echo "RFCOMM" ;; bnep) echo "BNEP" ;; hidp) echo "HIDP" ;;
+	driver) echo "Controller drivers" ;;
+	esac
+}
+
+# The areas named, "all" expanded; anything else is refused before anything changes.
+expand() {
+	out=
+	for a in "$@"; do
+		if [ "$a" = all ]; then out="$out $AREAS"; continue; fi
+		specs "$a" >/dev/null || die "unknown area '$a' (one of: $AREAS all)"
+		out="$out $a"
+	done
+	echo "$out"
+}
+
+ready() {
+	if [ ! -e "$CTL" ]; then
+		grep -q " $DBGFS debugfs " /proc/mounts 2>/dev/null || mount -t debugfs debugfs "$DBGFS" 2>/dev/null || true
+	fi
+	[ -w "$CTL" ] || die "no dynamic debug control ($CTL): a kernel without CONFIG_DYNAMIC_DEBUG, or not root"
+}
+
+# One query a write: a query matching nothing (a module not loaded) fails on its own and does not
+# take the others with it.
+apply() {
+	op=$1; shift
+	for a in "$@"; do
+		for s in $(specs "$a"); do
+			echo "${s%%:*} ${s#*:} ${op}${FLAGS}" > "$CTL" 2>/dev/null || true
+		done
+	done
+}
+
+kept_areas() {
+	[ -r "$KEEP" ] || return 0
+	sed -n 's/^# areas: //p' "$KEEP"
+}
+
+status() {
+	ready
+	kept=" $(kept_areas) "
+	# One read of the control file and one pass over it for every area: the kernel formats all of
+	# its ~3500 call sites on each read, which costs a Zero W about a second.
+	table=
+	for a in $AREAS; do
+		case $kept in *" $a "*) k=true ;; *) k=false ;; esac
+		table="$table$a|$(label "$a")|$k|$(specs "$a")
+"
+	done
+	awk -v table="$table" -v flags="$FLAGS" '
+		BEGIN {
+			n = split(table, rows, "\n")
+			for (r = 1; r <= n; r++) {
+				if (rows[r] == "") continue
+				split(rows[r], c, "|")
+				na++; name[na] = c[1]; lab[na] = c[2]; kept[na] = c[3]
+				m = split(c[4], sp, " ")
+				for (i = 1; i <= m; i++) {
+					split(sp[i], kv, ":")
+					if (kv[1] == "file") byfile[kv[2]] = na; else bymod[kv[2]] = na
+				}
+			}
+		}
+		# "net/bluetooth/l2cap_core.c:123 [bluetooth]func =p \"format\""
+		{
+			f = $1; sub(/:[0-9]+$/, "", f); sub(/.*\//, "", f)
+			mod = $2; sub(/^\[/, "", mod); sub(/\].*/, "", mod)
+			i = (mod == "bluetooth" && f in byfile) ? byfile[f] : (mod in bymod) ? bymod[mod] : 0
+			if (!i) next
+			total[i]++
+			if ($3 ~ /^=.*p/) on[i]++
+		}
+		END {
+			printf "{\"available\":true,\"flags\":\"%s\",\"areas\":[", flags
+			for (i = 1; i <= na; i++)
+				printf "%s{\"name\":\"%s\",\"label\":\"%s\",\"on\":%d,\"total\":%d,\"kept\":%s}", (i > 1 ? "," : ""), name[i], lab[i], on[i], total[i], kept[i]
+			printf "]}\n"
+		}' "$CTL"
+}
+
+keep() {
+	areas=$(expand "$@")
+	if [ -z "${areas# }" ]; then
+		rm -f "$KEEP"
+		return 0
+	fi
+	mkdir -p "$(dirname "$KEEP")"
+	tmp=$KEEP.new
+	{
+		echo "# Written by btbench-btdebug: Bluetooth debug messages on from boot. Edits are replaced."
+		echo "# areas:$areas"
+		# Per module: the dyndbg option applies its queries when the module loads.
+		bt=
+		for a in $areas; do
+			for s in $(specs "$a"); do
+				case $s in
+				file:*) bt="$bt${bt:+; }file ${s#file:} +$FLAGS" ;;
+				module:*) echo "options ${s#module:} dyndbg=+$FLAGS" ;;
+				esac
+			done
+		done
+		[ -z "$bt" ] || echo "options bluetooth dyndbg=\"$bt\""
+	} > "$tmp"
+	mv "$tmp" "$KEEP"
+}
+
+cmd=${1:-status}
+[ $# -gt 0 ] && shift
+case $cmd in
+status) status ;;
+on) [ $# -gt 0 ] || die "on: which area (one of: $AREAS all)"; areas=$(expand "$@"); ready; apply + $areas ;;
+off) [ $# -gt 0 ] || die "off: which area (one of: $AREAS all)"; areas=$(expand "$@"); ready; apply - $areas ;;
+keep) keep "$@" ;;
+*) die "usage: btbench-btdebug status | on AREA... | off AREA... | keep [AREA...]" ;;
+esac

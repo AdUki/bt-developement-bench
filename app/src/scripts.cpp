@@ -1,5 +1,7 @@
 #include "scripts.h"
 
+#include <algorithm>
+
 #include <cctype>
 #include <chrono>
 #include <memory>
@@ -51,6 +53,11 @@ bool parse_script_json(const std::string& out, json* j, std::string* err) {
 }
 
 bool audio_mode_ok(const std::string& m) { return m == "pipewire" || m == "none"; }
+
+bool bt_debug_area_ok(const std::string& a) {
+  static const char* kAreas[] = {"hci", "mgmt", "l2cap", "smp", "iso", "sco", "rfcomm", "bnep", "hidp", "driver", "all"};
+  return std::any_of(std::begin(kAreas), std::end(kAreas), [&](const char* x) { return a == x; });
+}
 
 bool wifi_mode_ok(const std::string& m) { return m == "auto" || m == "sta" || m == "ap" || m == "off"; }
 

@@ -580,6 +580,19 @@
     <div class="pane" data-pane="logs">
       <div class="card">
         <div class="card-head">
+          <h3>Kernel Bluetooth logs</h3>
+          <div class="acts">
+            <button class="small-btn" id="kd-off">All off</button>
+            <button class="small-btn" id="kd-show">Show in the journal</button>
+          </div>
+        </div>
+        <p class="hint">The kernel's own debug messages (BT_DBG) by area, through dynamic debug. They are chatty: a streaming link logs thousands of lines a second and the logging changes the timing, so switch on only what you are looking at.</p>
+        <div id="kd-areas" class="kd-areas"></div>
+        <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
+        <div id="kd-msg" class="small muted"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
           <h3>Journal</h3>
           <div class="acts">
             <select id="sys-j-unit" aria-label="Unit"></select>

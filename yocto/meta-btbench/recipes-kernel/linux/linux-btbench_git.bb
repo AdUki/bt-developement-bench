@@ -34,9 +34,14 @@ SRC_URI = " \
     git://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git;protocol=https;branch=master \
     file://0001-usb-dwc2-gadget-NAK-OUT-endpoints-until-a-request-is.patch \
     file://btbench.cfg \
+    file://bt-debug.cfg \
     file://mkdtb \
     ${@'file://${BTBENCH_DTS_EXTRA_FILE}' if d.getVar('BTBENCH_DTS_EXTRA') else ''} \
 "
+# The bench's fragments, merged in this order over the board's defconfig: btbench.cfg (what the
+# bench needs) and bt-debug.cfg (Bluetooth logging switched on at runtime).
+BTBENCH_KERNEL_FRAGMENTS = "btbench.cfg bt-debug.cfg"
+
 SRCREV = "${BTBENCH_LINUX_SRCREV}"
 PV = "${BTBENCH_LINUX_PV}"
 S = "${WORKDIR}/git"
@@ -73,14 +78,18 @@ do_configure:prepend() {
 	# takes effect.
 	rm -f ${B}/.config
 	oe_runmake_call -C ${S} O=${B} ${KBUILD_DEFCONFIG}
-	${S}/scripts/kconfig/merge_config.sh -m -O ${B} ${B}/.config ${WORKDIR}/btbench.cfg
+	frags=
+	for f in ${BTBENCH_KERNEL_FRAGMENTS}; do frags="$frags ${WORKDIR}/$f"; done
+	${S}/scripts/kconfig/merge_config.sh -m -O ${B} ${B}/.config $frags
 }
 
 do_configure:append() {
 	# merge_config.sh -m does not say when a fragment value does not survive olddefconfig (a
 	# symbol renamed or gone, or a dependency missing), and the bench would then quietly lack
 	# what it was asked for. Name them in the build log.
-	btbench_config_check ${WORKDIR}/btbench.cfg ${B}/.config
+	for f in ${BTBENCH_KERNEL_FRAGMENTS}; do
+		btbench_config_check ${WORKDIR}/$f ${B}/.config $f
+	done
 }
 
 btbench_config_check() {
@@ -101,7 +110,7 @@ btbench_config_check() {
 					printf "%s: requested %s, got %s\n", sym, want[sym], h
 			}
 		}' "$1" "$2" | sort | while read -r line; do
-		bbwarn "btbench.cfg: $line"
+		bbwarn "$3: $line"
 	done
 }
 
