@@ -1,8 +1,7 @@
 #!/bin/sh
-# btbench-gadget start|stop|reconnect — the board's USB device port as seen from the PC: one
-# composite device with a network link (NCM, or ECM for hosts without an NCM driver) and a serial
-# console (ACM, /dev/ttyGS0 here, /dev/ttyACM0 on a Linux PC). btbench-gadget.service runs it at
-# boot, btbench-gadget-reconnect.service once more when boot has settled.
+# btbench-gadget start|stop — the board's USB device port as seen from the PC: one composite device
+# with a network link (NCM, or ECM for hosts without an NCM driver) and a serial console (ACM,
+# /dev/ttyGS0 here, /dev/ttyACM0 on a Linux PC). btbench-gadget.service runs it at boot.
 #
 # Built in configfs rather than with g_multi or g_ether: those need module parameters for every
 # address and cannot be told which functions to combine without a rebuild. Settings come from
@@ -131,27 +130,11 @@ start() {
     systemctl --no-block start serial-getty@ttyGS0.service
 }
 
-# Disconnect from the PC and connect again, once boot has settled
-# (btbench-gadget-reconnect.service). With KERNEL=next the link bound at boot dies at about the
-# moment boot finishes, on nearly every boot: the board's OUT endpoint stops, so it keeps sending
-# (the PC even gets its DHCP lease) but receives nothing ("Wrong NTH SIGN" in its log with NCM,
-# transmit timeouts on the PC). Every connect made after that has held. The cause is in the kernel
-# (dwc2 or u_ether) and not understood yet; rebinding as soon as the gadget is up, or once the PC
-# has enumerated it, does not help.
-reconnect() {
-    udc=$(cat "$G/UDC" 2>/dev/null)
-    [ -n "$udc" ] || return 0
-    echo "" >"$G/UDC"
-    sleep 1
-    echo "$udc" >"$G/UDC" || log "could not rebind the gadget to $udc"
-}
-
 case "${1:-}" in
     start) start ;;
     stop) stop ;;
-    reconnect) reconnect ;;
     *)
-        echo "usage: btbench-gadget start|stop|reconnect" >&2
+        echo "usage: btbench-gadget start|stop" >&2
         exit 2
         ;;
 esac

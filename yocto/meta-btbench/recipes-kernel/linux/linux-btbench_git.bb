@@ -25,8 +25,14 @@ FILESEXTRAPATHS:prepend := "${@os.path.dirname(d.getVar('BTBENCH_DTS_EXTRA')) + 
 
 BTBENCH_DTS_EXTRA_FILE = "${@os.path.basename(d.getVar('BTBENCH_DTS_EXTRA') or '')}"
 
+# The patches are fixes the bench needs and bluetooth-next does not have yet, each meant for
+# upstream; drop one once the pinned revision contains it.
+# - dwc2 NAK on OUT endpoints: without it the USB gadget's network dies at nearly every boot. The
+#   PC (ModemManager) writes to the ACM port before a getty has opened ttyGS0, and that packet
+#   blocks the receive FIFO the NCM endpoint shares with it.
 SRC_URI = " \
     git://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git;protocol=https;branch=master \
+    file://0001-usb-dwc2-gadget-NAK-OUT-endpoints-until-a-request-is.patch \
     file://btbench.cfg \
     file://mkdtb \
     ${@'file://${BTBENCH_DTS_EXTRA_FILE}' if d.getVar('BTBENCH_DTS_EXTRA') else ''} \

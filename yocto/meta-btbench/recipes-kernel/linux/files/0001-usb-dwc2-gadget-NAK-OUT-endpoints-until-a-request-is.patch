@@ -1,0 +1,65 @@
+From e274d4bfcbb86c8b6cd48a9787ad1584436472dc Mon Sep 17 00:00:00 2001
+From: Simon Mikuda <simon.mikuda@streamunlimited.com>
+Date: Fri, 9 Oct 2026 17:43:42 +0200
+Subject: [PATCH] usb: dwc2: gadget: NAK OUT endpoints until a request is
+ queued
+
+dwc2_hsotg_ep_enable() activates an OUT endpoint (USBACTEP) but sets
+SNAK only for isochronous ones. A bulk or interrupt OUT endpoint is thus
+active with NAK clear and no transfer programmed, and the core ACKs the
+host's data for it into the shared RxFIFO. In buffer DMA mode there is
+no DMA address to move that packet to, so it sits at the head of the
+RxFIFO and every other OUT endpoint stops receiving until a request is
+queued on this one.
+
+On a Raspberry Pi Zero W with an NCM + ACM composite gadget this takes
+the network down at every boot: the host (ModemManager) writes to the
+ACM port as soon as it enumerates, nothing opens ttyGS0 on the device
+until a getty starts, and in the meantime NCM receives nothing. When the
+tty is finally opened the stuck packet drains, but the NCM transfer
+behind it comes back with a wrong length ("Wrong NTH SIGN"), and by then
+the host has timed out and aborted its transfers, so the link stays
+dead.
+
+Set SNAK whenever an OUT endpoint is enabled. dwc2_hsotg_start_req()
+already clears NAK when it arms the endpoint, and the core sets NAK
+again when a transfer completes, so an OUT endpoint only accepts data
+while it has somewhere to put it.
+
+Signed-off-by: Simon Mikuda <simon.mikuda@streamunlimited.com>
+---
+ drivers/usb/dwc2/gadget.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/usb/dwc2/gadget.c b/drivers/usb/dwc2/gadget.c
+index 102169b40419..d16e94e0a2a4 100644
+--- a/drivers/usb/dwc2/gadget.c
++++ b/drivers/usb/dwc2/gadget.c
+@@ -4104,6 +4104,16 @@ static int dwc2_hsotg_ep_enable(struct usb_ep *ep,
+ 	 */
+ 	epctrl |= DXEPCTL_USBACTEP;
+ 
++	/*
++	 * NAK OUT tokens until a request is queued. An active OUT endpoint
++	 * with NAK clear accepts data into the shared RxFIFO even while it is
++	 * not enabled; in buffer DMA mode nothing takes that packet out of the
++	 * FIFO, so it blocks every other OUT endpoint until this one gets a
++	 * request. dwc2_hsotg_start_req() clears NAK when it arms the endpoint.
++	 */
++	if (!dir_in)
++		epctrl |= DXEPCTL_SNAK;
++
+ 	/* update the endpoint state */
+ 	dwc2_hsotg_set_ep_maxpacket(hsotg, hs_ep->index, mps, mc, dir_in);
+ 
+@@ -4129,7 +4139,6 @@ static int dwc2_hsotg_ep_enable(struct usb_ep *ep,
+ 			mask |= DIEPMSK_NAKMSK;
+ 			dwc2_writel(hsotg, mask, DIEPMSK);
+ 		} else {
+-			epctrl |= DXEPCTL_SNAK;
+ 			mask = dwc2_readl(hsotg, DOEPMSK);
+ 			mask |= DOEPMSK_OUTTKNEPDISMSK;
+ 			dwc2_writel(hsotg, mask, DOEPMSK);
+-- 
+2.43.0
+
