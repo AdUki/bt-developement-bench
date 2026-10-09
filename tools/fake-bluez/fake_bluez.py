@@ -1291,7 +1291,7 @@ class Player(PropObject):
              'Status': dbus.String('playing'), 'Position': dbus.UInt32(42000),
              'Device': dbus.ObjectPath(dev.path), 'Track': self.track(),
              'Repeat': dbus.String('off'), 'Shuffle': dbus.String('off'),
-             'Browsable': dbus.Boolean(True), 'Searchable': dbus.Boolean(False),
+             'Browsable': dbus.Boolean(True), 'Searchable': dbus.Boolean(True),
              # Cover art: the PSM of the phone's BIP responder (fake_obex serves the images).
              'ObexPort': dbus.UInt16(4101),
              'Playlist': dbus.ObjectPath(path + '/NowPlaying')}
@@ -1412,15 +1412,75 @@ class Player(PropObject):
         if self.status in ('forward-seek', 'reverse-seek'):
             self.set_status('playing')
 
+    # ---- browsing: /NowPlaying (the queue), /Filesystem (folders of tracks), search results ----
+    # A listing creates the MediaItem1 objects it returns, and the previous listing's go, as
+    # BlueZ does; the queue's items (self.items) stay.
+    def folder_items(self, folder):
+        fs = self.path + '/Filesystem'
+        if folder.endswith('/NowPlaying'):
+            return None
+        if folder == fs:
+            return [('folder', 'Test signals', fs + '/item1'), ('folder', 'Empty', fs + '/item2')]
+        if folder == fs + '/item1':
+            return [('audio', i, '%s/item1/item%d' % (fs, i + 1)) for i in range(len(TRACKS))]
+        return []
+
+    def drop_listing(self):
+        for o in getattr(self, 'listing', []):
+            if o.path in self.svc.root.objects:
+                self.svc.root.remove(o)
+        self.listing = []
+
     @dbus.service.method(FOLDER, in_signature='a{sv}', out_signature='a{oa{sv}}')
     def ListItems(self, flt):
-        return dbus.Dictionary({dbus.ObjectPath(i.path): dbus.Dictionary(i.ifaces[ITEM], signature='sv')
-                                for i in self.items}, signature='oa{sv}')
+        cwd = getattr(self, 'cwd', self.path + '/NowPlaying')
+        if cwd.endswith('/Search'):  # the last search's results, listed through the player
+            return dbus.Dictionary({dbus.ObjectPath(o.path): dbus.Dictionary(o.ifaces[ITEM], signature='sv')
+                                    for o in self.listing}, signature='oa{sv}')
+        listed = self.folder_items(cwd)
+        if listed is None:
+            return dbus.Dictionary({dbus.ObjectPath(i.path): dbus.Dictionary(i.ifaces[ITEM], signature='sv')
+                                    for i in self.items}, signature='oa{sv}')
+        self.drop_listing()
+        for kind, what, path in listed:
+            o = FolderItem(self.svc, path, self, what) if kind == 'folder' else Item(self.svc, path, self, what)
+            self.svc.root.add(o)
+            self.listing.append(o)
+        return dbus.Dictionary({dbus.ObjectPath(o.path): dbus.Dictionary(o.ifaces[ITEM], signature='sv')
+                                for o in self.listing}, signature='oa{sv}')
 
     @dbus.service.method(FOLDER, in_signature='o', out_signature='')
     def ChangeFolder(self, folder):
-        if not str(folder).endswith('/NowPlaying'):
+        folder = str(folder)
+        if not (folder.endswith('/NowPlaying') or folder == self.path + '/Filesystem' or
+                self.folder_items(folder) is not None and folder.startswith(self.path + '/Filesystem')):
             raise err('InvalidArguments', 'Invalid arguments in method call')
+        self.cwd = folder
+        name = folder[len(self.path):] or '/'
+        self.update(FOLDER, Name=dbus.String(name),
+                    NumberOfItems=dbus.UInt32(len(self.items if folder.endswith('/NowPlaying') else self.folder_items(folder))))
+        log('player %s: folder %s' % (self.path, name))
+
+    @dbus.service.method(FOLDER, in_signature='sa{sv}', out_signature='o')
+    def Search(self, value, flt):
+        hits = [i for i, t in enumerate(TRACKS) if str(value).lower() in (t[0] + ' ' + t[1]).lower()]
+        self.drop_listing()
+        sfolder = self.path + '/Search'
+        for i in hits:
+            o = Item(self.svc, '%s/item%d' % (sfolder, i + 1), self, i)
+            self.svc.root.add(o)
+            self.listing.append(o)
+        self.cwd = sfolder
+        log('player %s: search %r: %d hits' % (self.path, str(value), len(hits)))
+        return dbus.ObjectPath(sfolder)
+
+
+class FolderItem(PropObject):
+    def __init__(self, svc, path, player, name):
+        self.player = player
+        super().__init__(svc, path, {ITEM: {
+            'Player': dbus.ObjectPath(player.path), 'Name': dbus.String(name), 'Type': dbus.String('folder'),
+            'FolderType': dbus.String('titles'), 'Playable': dbus.Boolean(False)}}, extra_ifaces=(INTROSPECT, PROPS))
 
 
 class Item(PropObject):
@@ -1439,6 +1499,10 @@ class Item(PropObject):
     def Play(self):
         self.player.go(self.index - self.player.index)
         self.player.set_status('playing')
+
+    @dbus.service.method(ITEM, in_signature='', out_signature='')
+    def AddtoNowPlaying(self):
+        log('player %s: add %s to now playing' % (self.player.path, TRACKS[self.index][0]))
 
 
 class Media:

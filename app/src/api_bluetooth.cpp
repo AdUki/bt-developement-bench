@@ -379,7 +379,38 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     }, kPlayerTimeoutMs);
     if (!r.ok) return reply_error(res, r);
     d.bt.touch();
-    send_json(res, json{{"items", browse_items(r.reply)}});
+    // The folder now listed: the player's MediaFolder1 Name (re-read: ChangeFolder just moved it).
+    std::string name;
+    const BtCallResult n = d.bt.call(path, "org.freedesktop.DBus.Properties", "Get", [](sd_bus_message* m) {
+      return sd_bus_message_append(m, "ss", "org.bluez.MediaFolder1", "Name");
+    }, kPlayerTimeoutMs);
+    if (n.ok && !n.reply.empty() && n.reply[0].is_string()) name = n.reply[0].get<std::string>();
+    send_json(res, json{{"items", browse_items(r.reply)}, {"folder", name}});
+  }));
+
+  // Body: {"path": "<a MediaPlayer1>", "value": "text"}: MediaFolder1.Search, then the result
+  // folder's listing. A player that is not Searchable answers NotSupported (403).
+  svr.Post("/api/media/players/search", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    const std::string path = j.at("path").get<std::string>();
+    const std::string value = j.at("value").get<std::string>();
+    if (!media_object(*d.bt.objects(), path, "org.bluez.MediaFolder1"))
+      return send_error(res, 404, "no such player, or it is not browsable");
+    const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "Search", [value](sd_bus_message* m) {
+      int rc = sd_bus_message_append(m, "s", value.c_str());
+      return rc >= 0 ? append_dict(m, DDict{}) : rc;
+    }, kPlayerTimeoutMs);
+    if (!r.ok) return reply_error(res, r);
+    const std::string folder = !r.reply.empty() && r.reply[0].is_string() ? r.reply[0].get<std::string>() : path;
+    // The results are a folder of their own; some stacks list them through the player instead.
+    BtCallResult l = d.bt.call(folder, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
+      return append_dict(m, DDict{});
+    }, kPlayerTimeoutMs);
+    if (!l.ok && folder != path)
+      l = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) { return append_dict(m, DDict{}); },
+                    kPlayerTimeoutMs);
+    if (!l.ok) return reply_error(res, l);
+    d.bt.touch();
+    send_json(res, json{{"items", browse_items(l.reply)}, {"folder", "search: " + value}, {"result", folder}});
   }));
 
   // Body: {"path": "<a MediaItem1>", "action": "play|add"}: play it now, or AddtoNowPlaying.

@@ -8,7 +8,7 @@
 // click that asked for it, so autoplay rules let it play.
 
 const AUDIO_MODES = ['pipewire', 'bluealsa', 'none'];
-const au = {endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
+const au = {browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
   tick: null, radio: [], upnp: {server: null, path: []}};
 
 function renderAudio(s) {
@@ -478,16 +478,40 @@ function playerCard(p, transports) {
       ${p.repeat != null ? `<label class="row small">repeat ${selectHTML('pl-repeat', p.path, p.repeat, ['off', 'singletrack', 'alltracks', 'group'])}</label>` : ''}
       ${p.shuffle != null ? `<label class="row small">shuffle ${selectHTML('pl-shuffle', p.path, p.shuffle, ['off', 'alltracks', 'group'])}</label>` : ''}
       <button class="small-btn pl-listen" data-address="${esc(p.address)}" title="Hear what this device sends the board">listen</button>
-      ${p.browsable ? `<button class="small-btn pl-browse" data-path="${esc(p.path)}">browse</button>` : ''}
     </div>
     ${tr && tr.volume != null ? `<label class="row small">volume <input type="range" min="0" max="127" value="${tr.volume}" data-path="${esc(tr.path)}" class="grow pl-vol">
       <span class="mono">${tr.volume}</span></label>` : ''}
-    ${p.items && p.items.length ? `<div class="pl-items small">${p.items.map(i => `<div class="row between">
-        <span>${esc(i.metadata && i.metadata.title || i.name)}${i.metadata && i.metadata.artist ? ' <span class="muted">— ' + esc(i.metadata.artist) + '</span>' : ''}
-          ${i.type === 'folder' ? '<span class="muted">(folder)</span>' : ''}</span>
-        <span>${i.playable ? `<button class="small-btn pl-item" data-a="play" data-path="${esc(i.path)}">play</button>` : ''}
-          ${i.type === 'folder' ? `<button class="small-btn pl-folder" data-player="${esc(p.path)}" data-path="${esc(i.path)}">open</button>` : ''}</span></div>`).join('')}</div>` : ''}
+    ${p.browsable ? browserHTML(p) : ''}
   </div>`;
+}
+
+// AVRCP browsing: the player's folders (now playing, its file system, search results), kept per
+// player across the card rebuilds every media update causes.
+function browserHTML(p) {
+  const b = au.browse[p.path];
+  const items = b ? b.items : (p.items || []).map(i => Object.assign({title: i.metadata && i.metadata.title, artist: i.metadata && i.metadata.artist}, i));
+  const nav = `<div class="row wrap small pl-browser-nav">
+      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/NowPlaying">now playing</button>
+      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/Filesystem">files</button>
+      ${b && b.stack && b.stack.length > 1 ? `<button class="small-btn pl-back" data-path="${esc(p.path)}">back</button>` : ''}
+      ${p.searchable ? `<input class="pl-q narrow" data-path="${esc(p.path)}" placeholder="search"><button class="small-btn pl-search" data-path="${esc(p.path)}">search</button>` : ''}
+      <span class="muted mono">${esc(b ? b.folder : (p.folder ? p.folder.name : ''))}</span></div>`;
+  return `<div class="pl-items small">${nav}${items.length ? items.map(i => `<div class="row between">
+      <span>${i.type === 'folder' ? '📁 ' : ''}${esc(i.title || i.name)}${i.artist ? ' <span class="muted">— ' + esc(i.artist) + '</span>' : ''}</span>
+      <span>${i.type === 'folder' ? `<button class="small-btn pl-open" data-path="${esc(p.path)}" data-folder="${esc(i.path)}">open</button>` : ''}
+        ${i.playable ? `<button class="small-btn pl-item" data-a="play" data-path="${esc(i.path)}">play</button>
+          <button class="small-btn pl-item" data-a="add" data-path="${esc(i.path)}">add</button>` : ''}</span></div>`).join('')
+    : '<div class="muted">nothing listed</div>'}</div>`;
+}
+
+function browse(player, folder, push) {
+  const b = au.browse[player] || (au.browse[player] = {stack: [], items: [], folder: ''});
+  return post('/media/players/browse', folder ? {path: player, folder} : {path: player}).then(r => {
+    if (push !== false) b.stack.push(folder);
+    b.items = r.items;
+    b.folder = r.folder || folder || '';
+    if (au.media) renderPlayers(au.media);
+  }).catch(fail);
 }
 
 function renderPlayers(m) {
@@ -555,6 +579,25 @@ function renderMedia(m) {
         <td>${esc(e.codec.name)}</td><td class="small">${esc(e.codec.summary)} <span class="mono muted">${esc(e.capabilities)}</span></td>
         <td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div>`
     : '<div class="small muted">No remote endpoints (connect an A2DP device).</div>');
+}
+
+// AVDTP browsing: ask a device for its stream endpoints over a signalling channel of our own.
+function probeAvdtp() {
+  const addr = $('av-dev').value;
+  if (!addr) return;
+  setHTML($('av-result'), '<span class="muted">probing (pages the device)…</span>');
+  post(`/media/avdtp/${addr}`).then(r => setHTML($('av-result'), `<div class="small muted">${r.seps.length} stream endpoints, ${r.took_ms} ms</div>
+    <div class="scroll-x"><table class="tbl"><tr><th>SEID</th><th>role</th><th>media</th><th>in use</th><th>codec</th><th>capabilities</th></tr>
+    ${r.seps.map(sp => `<tr><td>${sp.seid}</td><td>${esc(sp.role)}</td><td>${esc(sp.media_type)}</td><td>${sp.in_use ? pill('in use', 'warn') : ''}</td>
+      <td>${sp.codec ? `<b>${esc(sp.codec.name)}</b> <span class="small">${esc(sp.codec.summary || '')}</span>` : esc(sp.error || '—')}</td>
+      <td class="small">${(sp.capabilities || []).filter(c => c.category !== 7).map(c => esc(c.name) + (c.type ? ' (' + esc(c.type) + ')' : '')).join(', ')}
+        <span class="mono muted">${esc(((sp.capabilities || []).find(c => c.category === 7) || {}).hex || '')}</span></td></tr>`).join('')}</table></div>`))
+    .catch(e => setHTML($('av-result'), `<span class="bad-text">${esc(e.message)}</span>`));
+}
+
+function avdtpDevices() {
+  api('/bluetooth').then(b => fillSelect($('av-dev'), b.devices.filter(d => d.paired || d.connected || d.rssi != null)
+    .map(d => ({value: d.address, label: `${d.alias} (${d.address})${d.connected ? ' — connected' : ''}`})))).catch(() => {});
 }
 
 function refreshMedia() { return api('/media').then(renderMedia).catch(fail); }
@@ -641,12 +684,30 @@ function setupAudio() {
     if (b && b.dataset.a !== 'fast-forward' && b.dataset.a !== 'rewind') playerAction(b.dataset.path, b.dataset.a);
     const ls = e.target.closest('.pl-listen');
     if (ls) listenToDevice(ls.dataset.address);
-    const br = e.target.closest('.pl-browse');
-    if (br) post('/media/players/browse', {path: br.dataset.path}).then(refreshMedia).catch(fail);
-    const fo = e.target.closest('.pl-folder');
-    if (fo) post('/media/players/browse', {path: fo.dataset.player, folder: fo.dataset.path}).then(refreshMedia).catch(fail);
+    const nav = e.target.closest('.pl-nav, .pl-open');
+    if (nav) {
+      if (nav.classList.contains('pl-nav')) au.browse[nav.dataset.path] = {stack: [], items: [], folder: ''};
+      browse(nav.dataset.path, nav.dataset.folder);
+    }
+    const back = e.target.closest('.pl-back');
+    if (back) {
+      const b = au.browse[back.dataset.path];
+      b.stack.pop();
+      browse(back.dataset.path, b.stack[b.stack.length - 1], false);
+    }
+    const sr = e.target.closest('.pl-search');
+    if (sr) {
+      const q = $('au-players').querySelector(`.pl-q[data-path="${CSS.escape(sr.dataset.path)}"]`);
+      post('/media/players/search', {path: sr.dataset.path, value: q ? q.value : ''}).then(r => {
+        const b = au.browse[sr.dataset.path] || (au.browse[sr.dataset.path] = {stack: []});
+        b.stack.push(r.result);
+        b.items = r.items;
+        b.folder = r.folder;
+        if (au.media) renderPlayers(au.media);
+      }).catch(fail);
+    }
     const it = e.target.closest('.pl-item');
-    if (it) post('/media/items', {path: it.dataset.path, action: 'play'}).catch(fail);
+    if (it) post('/media/items', {path: it.dataset.path, action: it.dataset.a}).then(() => toast(it.dataset.a === 'add' ? 'added to now playing' : 'playing')).catch(fail);
   };
   // Seeking runs while the button is held, as on a remote: pressed starts it, released resumes play.
   pl.onpointerdown = e => {
@@ -656,6 +717,8 @@ function setupAudio() {
     const up = () => { window.removeEventListener('pointerup', up); playerAction(b.dataset.path, 'play'); };
     window.addEventListener('pointerup', up);
   };
+
+  $('av-probe').onclick = probeAvdtp;
 
   // The codec picker.
   $('cd-refresh').onclick = refreshCodecs;
@@ -777,6 +840,7 @@ registerTab('audio', {
     refreshMedia();
     refreshEndpoints(false);
     refreshCodecs();
+    avdtpDevices();
     refreshStreams();
     api('/audio/radio').then(renderRadio).catch(() => {});
     api('/audio/upnp/servers').then(renderUpnpServers).catch(() => {});
