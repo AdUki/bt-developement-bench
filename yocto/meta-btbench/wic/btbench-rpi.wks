@@ -1,0 +1,21 @@
+# Raspberry Pi SD card: boot (FAT) + root (ext4, writable) + data (ext4).
+#
+#   boot  256 MB. The firmware, U-Boot and the good kernel, plus room for the kernel trial flow's
+#         /boot/bench/test and /boot/bench/prev (a kernel and its dtb each).
+#   root  The rootfs, with IMAGE_ROOTFS_EXTRA_SPACE (btbench-image.bb) free for deploys.
+#   data  The bench's state (docs/system.md). Small here so the image flashes fast; btbench-data
+#         grows it to the end of the card at first boot, which is why it is the last partition.
+#
+# The mountpoints only name the partitions for wic: base-files' fstab mounts /boot and /data (by
+# label), and wic's own fstab update is off (btbench-image.bb).
+#
+# The kernel finds its root by PARTUUID (CMDLINE_ROOT_PARTITION in yocto/conf/boards/*.conf), which
+# for an msdos table is the disk identifier plus the partition number. This wic has no option to
+# set the identifier, so btbench-image.bb writes it into the MBR (BTBENCH_DISKID) after wic made
+# the image: the root is always PARTUUID=b7be4c4e-02.
+
+part /boot --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot --active --align 4096 --size 256
+part /     --source rootfs            --ondisk mmcblk0 --fstype=ext4 --label root --align 4096
+part /data                            --ondisk mmcblk0 --fstype=ext4 --label data --align 4096 --size 64
+
+bootloader --ptable msdos

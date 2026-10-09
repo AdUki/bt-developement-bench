@@ -1,0 +1,17 @@
+[Unit]
+Description=Wi-Fi: join a stored network, or open the setup AP
+After=btbench-data.service data.mount systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/btbench-wifi run
+# SIGTERM to the script alone: it takes hostapd, dnsmasq and the AP's network config down itself
+# and stops wpa_supplicant@wlan0; whatever is left after that is killed with the unit.
+KillMode=mixed
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

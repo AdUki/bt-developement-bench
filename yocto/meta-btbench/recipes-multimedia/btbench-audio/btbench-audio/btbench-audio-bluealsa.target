@@ -1,0 +1,7 @@
+# Audio mode "bluealsa": BlueALSA, ALSA PCMs per Bluetooth link (btbench-audio set bluealsa).
+# See btbench-audio-pipewire.target for how the modes exclude each other.
+[Unit]
+Description=Audio mode: BlueALSA
+Conflicts=btbench-audio-pipewire.target btbench-audio-none.target
+After=btbench-audio-pipewire.target btbench-audio-none.target
+Wants=bluealsa.service

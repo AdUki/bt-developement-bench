@@ -1,0 +1,79 @@
+#!/bin/sh
+# btbench-data — get /data ready for the bench. btbench-data.service runs it at every boot, before
+# sysinit.target, so every service after it finds its directories there. Two jobs:
+#
+# 1. Grow the data partition, and its filesystem, to fill the card. The image carries a small
+#    /data (64 MB) so that it flashes in seconds whatever the card's size; the first boot takes the
+#    rest of the card. It is the last partition on the card, so growing it moves nothing. This is
+#    how cloud-utils' growpart does it: sfdisk rewrites the partition's end without asking the
+#    kernel to re-read the table (it cannot while /data is mounted), partx tells the kernel about
+#    the one partition that changed, and resize2fs grows the mounted ext4 online. On every later
+#    boot it finds nothing to do and costs a few reads of /sys.
+#
+# 2. Create the directories the bench keeps on /data (docs/contracts.md): btbench (settings and
+#    Wi-Fi networks), btsnoop (the HCI capture ring), bluetooth (BlueZ's pairings).
+#
+# Never fails the boot: a /data that cannot grow is still a working /data. Every problem is logged
+# and the script exits 0.
+
+log() { echo "btbench-data: $*"; }
+
+grow() {
+    if ! mountpoint -q /data; then
+        log "/data is not mounted: not growing it (the bench keeps its state on the root" \
+            "filesystem until it is)"
+        return
+    fi
+
+    dev=$(findmnt -no SOURCE /data)
+    part=${dev##*/}
+    sys=/sys/class/block/$part
+    if [ ! -e "$sys/partition" ]; then
+        log "$dev is not a partition: leaving it alone"
+        return
+    fi
+    disk=$(basename "$(readlink -f "$sys/..")")
+    nr=$(cat "$sys/partition")
+    start=$(cat "$sys/start")
+    end=$((start + $(cat "$sys/size")))
+    total=$(cat "/sys/class/block/$disk/size")
+
+    # Only the last partition on the disk can grow into the free space behind it.
+    for p in /sys/class/block/"$disk"/"$disk"*; do
+        [ -e "$p/start" ] || continue
+        if [ "$(cat "$p/start")" -gt "$start" ]; then
+            log "$dev is not the last partition on /dev/$disk: leaving it alone"
+            return
+        fi
+    done
+
+    # /sys counts 512-byte sectors whatever the device's own sector size. Less than 16 MiB left
+    # behind the partition means it was grown before (sfdisk rounds the end to the 1 MiB grain).
+    if [ $((total - end)) -ge 32768 ]; then
+        log "growing $dev to the end of /dev/$disk"
+        if ! echo ",+" | sfdisk -q --no-reread --no-tell-kernel -N "$nr" "/dev/$disk"; then
+            log "sfdisk could not grow partition $nr of /dev/$disk"
+            return
+        fi
+        if ! partx -u -n "$nr" "/dev/$disk"; then
+            log "partx could not update the kernel's view of $dev; it grows at the next boot"
+            return
+        fi
+    fi
+
+    # Always, not only right after the partition grew: a boot cut short between the two steps
+    # leaves a big partition with a small filesystem, and this finishes the job. When the
+    # filesystem already fills the partition, resize2fs says so and changes nothing.
+    out=$(resize2fs "$dev" 2>&1)
+    case "$out" in
+        *"Nothing to do"*) ;;
+        *) log "$(echo "$out" | tail -n 1)" ;;
+    esac
+}
+
+grow
+
+# Pairings are link keys: root only. The Wi-Fi networks hold their keys too.
+mkdir -p /data/btbench/wifi /data/btsnoop /data/bluetooth
+chmod 700 /data/bluetooth /data/btbench/wifi
+exit 0

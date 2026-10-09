@@ -1,0 +1,141 @@
+#!/bin/sh
+# btbench-gadget start|stop — the board's USB device port as seen from the PC: one composite device
+# with a network link (NCM, or ECM for hosts without an NCM driver) and a serial console (ACM,
+# /dev/ttyGS0 here, /dev/ttyACM0 on a Linux PC). btbench-gadget.service runs it at boot.
+#
+# Built in configfs rather than with g_multi or g_ether: those need module parameters for every
+# address and cannot be told which functions to combine without a rebuild. Settings come from
+# /etc/btbench (rendered by btbench-base at build time): GADGET (ncm|ecm|off) from the device conf,
+# GADGET_UDC (the device controller, e.g. 20980000.usb on a Pi Zero) from the board. GADGET=off or
+# a board without a UDC leaves the port alone — on the Zero W that is how it stays a USB host, for a
+# Bluetooth dongle.
+#
+# The MAC addresses are derived from the board's serial number, so the PC sees the same interface
+# (and NetworkManager keeps the same connection profile) across reboots and reflashes. Both are
+# locally administered unicast addresses: 02:bb:... is the board's end, 06:bb:... the PC's.
+#
+# networkd configures usb0 (10-usb0.network: 10.55.0.1/24 with a DHCP server for the PC).
+
+GADGET=ecm
+GADGET_UDC=
+HOSTNAME=btbench
+[ -r /etc/btbench/board.env ] && . /etc/btbench/board.env
+[ -r /etc/btbench/device.env ] && . /etc/btbench/device.env
+
+CONFIGFS=/sys/kernel/config
+G=$CONFIGFS/usb_gadget/btbench
+
+log() { echo "btbench-gadget: $*"; }
+
+board_serial() {
+    s=$(tr -d '\000' 2>/dev/null </proc/device-tree/serial-number)
+    [ -n "$s" ] || s=$(sed -n 's/^Serial[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo)
+    [ -n "$s" ] || s=$(cat /etc/machine-id 2>/dev/null)
+    echo "$s" | tr 'A-F' 'a-f' | tr -cd '0-9a-f'
+}
+
+# Unbind and take the gadget apart, in the reverse order of building it: configfs refuses to
+# remove a directory that something still links to.
+stop() {
+    [ -d "$G" ] || return 0
+    [ -z "$(cat "$G/UDC" 2>/dev/null)" ] || echo "" >"$G/UDC"
+    for l in "$G"/configs/*/*; do
+        [ -L "$l" ] && rm -f "$l"
+    done
+    for d in "$G"/configs/*/strings/* "$G"/configs/* "$G"/functions/* "$G"/strings/*; do
+        [ -d "$d" ] && rmdir "$d"
+    done
+    rmdir "$G"
+}
+
+start() {
+    case "$GADGET" in
+        ncm | ecm) ;;
+        off | "")
+            log "GADGET=off: the USB port is left to the board"
+            return 0
+            ;;
+        *)
+            log "unknown GADGET=$GADGET (ncm, ecm or off): the USB port is left alone"
+            return 0
+            ;;
+    esac
+    if [ -z "$GADGET_UDC" ]; then
+        log "this board has no USB device controller (GADGET_UDC is empty)"
+        return 0
+    fi
+
+    # Built-in or modules, depending on the kernel's config: when they are modules, libcomposite
+    # brings configfs' usb_gadget directory and each function module loads when its directory is
+    # created below.
+    modprobe -q libcomposite 2>/dev/null
+    mountpoint -q "$CONFIGFS" || mount -t configfs none "$CONFIGFS"
+    if [ ! -d "$CONFIGFS/usb_gadget" ]; then
+        log "the kernel has no USB gadget configfs (CONFIG_USB_CONFIGFS): no gadget"
+        return 0
+    fi
+
+    # dwc2 registers the controller when it probes, which can come after this unit starts.
+    i=0
+    while [ ! -e "/sys/class/udc/$GADGET_UDC" ]; do
+        i=$((i + 1))
+        if [ "$i" -gt 10 ]; then
+            log "no USB device controller $GADGET_UDC after 10 s (is the port in host mode?)"
+            return 0
+        fi
+        sleep 1
+    done
+
+    stop
+
+    serial=$(board_serial)
+    t=$(echo "$serial" | sed 's/.*\(........\)$/\1/; s/\(..\)\(..\)\(..\)\(..\)/\1:\2:\3:\4/')
+
+    mkdir -p "$G" || return 0
+    cd "$G" || return 0
+    # Linux Foundation's id for a multifunction composite gadget; the class triple says
+    # "interface association descriptors", which Windows and macOS need to bind two functions.
+    echo 0x1d6b >idVendor
+    echo 0x0104 >idProduct
+    echo 0x0100 >bcdDevice
+    echo 0x0200 >bcdUSB
+    echo 0xef >bDeviceClass
+    echo 0x02 >bDeviceSubClass
+    echo 0x01 >bDeviceProtocol
+    mkdir -p strings/0x409
+    echo "$serial" >strings/0x409/serialnumber
+    echo "bt-developement-bench" >strings/0x409/manufacturer
+    echo "btbench $HOSTNAME" >strings/0x409/product
+
+    mkdir -p configs/c.1/strings/0x409
+    echo "$GADGET + ACM" >configs/c.1/strings/0x409/configuration
+    echo 250 >configs/c.1/MaxPower
+
+    mkdir -p "functions/$GADGET.usb0" functions/acm.GS0
+    echo "02:bb:$t" >"functions/$GADGET.usb0/dev_addr"
+    echo "06:bb:$t" >"functions/$GADGET.usb0/host_addr"
+    # The network function first: hosts that only look at the first interface still find it.
+    ln -s "functions/$GADGET.usb0" configs/c.1/
+    ln -s functions/acm.GS0 configs/c.1/
+
+    if ! echo "$GADGET_UDC" >UDC; then
+        log "could not bind the gadget to $GADGET_UDC"
+        return 0
+    fi
+    log "$GADGET + serial console on $GADGET_UDC (board 02:bb:$t, PC 06:bb:$t)"
+
+    # A login on the serial function. Started here, not enabled in getty.target: ttyGS0 exists
+    # only while the gadget does, and a getty enabled for it would wait for the device and fail
+    # on every boot with GADGET=off.
+    systemctl --no-block start serial-getty@ttyGS0.service
+}
+
+case "${1:-}" in
+    start) start ;;
+    stop) stop ;;
+    *)
+        echo "usage: btbench-gadget start|stop" >&2
+        exit 2
+        ;;
+esac
+exit 0

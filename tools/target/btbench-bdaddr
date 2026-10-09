@@ -1,0 +1,142 @@
+#!/bin/sh
+# btbench-bdaddr — get the Bluetooth controller ready for bluetoothd, which starts right after this
+# (btbench-bdaddr.service is pulled in by bluetooth.service and ordered before it). Two jobs:
+#
+# 1. Keep the pairings on /data. BlueZ files its link keys under /var/lib/bluetooth; this
+#    bind-mounts /data/bluetooth over it, so all of the bench's state lives on one partition you
+#    can inspect, back up or wipe on its own, and an rsync deploy of a BlueZ stage tree (which
+#    carries its own var/lib/bluetooth) cannot touch the bonds. Whatever the root filesystem had
+#    there before the first boot with /data is moved over once.
+#
+# 2. Give the controller an address of its own. The Pi's BCM43430A1 has no address programmed:
+#    with RPi-Distro's patch file loaded it reports the chip default 43:43:A1:12:1F:AC (a Pi 3B+'s
+#    BCM4345C0 43:45:C0:00:1F:AC), without one AA:AA:AA:AA:AA:AA. The two kernels treat that
+#    differently:
+#      - mainline btbcm knows AA:AA:AA:AA:AA:AA (and a few others) as "no address" and marks the
+#        controller unconfigured; it then reads local-bd-address from the device tree, which the
+#        Pi firmware fills in only where the tree has a `bluetooth` alias for it. Without one the
+#        controller stays unconfigured — bluetoothd does not even see it — until an address is set
+#        over mgmt;
+#      - btbcm does not know 43:43:A1:12:1F:AC at all, so the controller comes up configured
+#        with the shared default address, on either kernel. Every board then has the same
+#        address, and BlueZ files its pairings under the adapter's address.
+#    Either way the fix is the same mgmt command (Set Public Address, `btmgmt public-addr`), and it
+#    is only sent when the controller is unconfigured or reports one of those defaults. A real
+#    address — from the device tree, the firmware or the chip — is left alone. The new address is
+#    derived from the board's serial number the way RPi-Distro's bthelper does it, so a board gets
+#    the address it would have under Raspberry Pi OS. The kernel only takes a new address while the
+#    controller is powered off, which it is until bluetoothd starts.
+#
+# Never fails the boot: Bluetooth is one feature of the board, not a reason to lose the others.
+# Every problem is logged and the script exits 0.
+
+STATE=/var/lib/bluetooth
+SAVED=/data/bluetooth
+
+BT_HCI=hci0
+[ -r /etc/btbench/board.env ] && . /etc/btbench/board.env
+HCI=${BT_HCI:-hci0}
+INDEX=${HCI#hci}
+
+log() { echo "btbench-bdaddr: $*"; }
+
+# --- 1. pairings ---------------------------------------------------------------------------
+if mountpoint -q "$STATE"; then
+    : # already in place (the service was restarted)
+elif ! mountpoint -q /data; then
+    log "/data is not mounted: the pairings stay on the root filesystem this boot"
+else
+    mkdir -p "$SAVED" "$STATE"
+    if [ -z "$(ls -A "$SAVED")" ] && [ -n "$(ls -A "$STATE")" ]; then
+        cp -a "$STATE/." "$SAVED/" && log "moved the existing pairings to $SAVED"
+    fi
+    # Link keys are secrets; cp -a gives the directory the mode of the one it came from.
+    chmod 700 "$SAVED"
+    if mount --bind "$SAVED" "$STATE"; then
+        log "pairings are kept in $SAVED"
+    else
+        log "could not bind $SAVED over $STATE: the pairings stay on the root filesystem"
+    fi
+fi
+
+# --- 2. address ----------------------------------------------------------------------------
+if ! command -v btmgmt >/dev/null; then
+    log "no btmgmt in the image: cannot check the controller's address"
+    exit 0
+fi
+
+# btmgmt talks to the kernel's management socket and needs no bluetoothd. Bounded all the same: a
+# tool that hangs here would hold bluetoothd back with it.
+mgmt() { timeout 10 btmgmt "$@" </dev/null 2>/dev/null; }
+
+# What the kernel says about the controller: "unconfigured", its address, or nothing while it is
+# still loading its firmware (hci0 is registered before the chip's patch file is downloaded and
+# its address read, which takes a few seconds over the UART).
+controller() {
+    if mgmt config | grep -q "^$HCI:[[:space:]]*Unconfigured controller"; then
+        echo unconfigured
+        return
+    fi
+    mgmt --index "$INDEX" info |
+        sed -n 's/^[[:space:]]*addr \([0-9A-Fa-f:]\{17\}\) .*/\1/p' | head -n 1
+}
+
+addr=""
+i=0
+while [ "$i" -lt 30 ]; do
+    if [ -e "/sys/class/bluetooth/$HCI" ]; then
+        addr=$(controller)
+        [ -n "$addr" ] && break
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+if [ -z "$addr" ]; then
+    log "no Bluetooth controller $HCI answered within 30 s: leaving it alone"
+    exit 0
+fi
+
+case "$addr" in
+    unconfigured | 43:4[35]:??:??:1F:AC | AA:AA:AA:AA:AA:AA | 00:00:00:00:00:00) ;;
+    *)
+        log "$HCI has address $addr"
+        exit 0
+        ;;
+esac
+
+# The serial number as the firmware puts it in the device tree (U-Boot copies it into a tree it
+# loads itself, so a trial kernel sees it too); /proc/cpuinfo has the same on ARM.
+serial=$(tr -d '\000' 2>/dev/null </proc/device-tree/serial-number)
+[ -n "$serial" ] || serial=$(sed -n 's/^Serial[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo)
+tail6=${serial#"${serial%??????}"}
+case "$tail6" in
+    [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+    *)
+        log "$HCI has no address of its own ($addr) and there is no serial number to derive one from"
+        exit 0
+        ;;
+esac
+b1=$(echo "$tail6" | cut -c1-2)
+b2=$(echo "$tail6" | cut -c3-4)
+b3=$(echo "$tail6" | cut -c5-6)
+new=$(printf 'B8:27:EB:%02X:%02X:%02X' $((0x$b1 ^ 0xaa)) $((0x$b2 ^ 0xaa)) $((0x$b3 ^ 0xaa)))
+
+# Its exit status says little: the address read back below is what says whether it worked.
+mgmt --index "$INDEX" public-addr "$new" >/dev/null
+
+# Setting it makes the kernel run the controller's setup again (an unconfigured one becomes a
+# configured one), during which it drops out of the management interface. Wait for it to come back
+# with the new address before bluetoothd starts.
+now=""
+i=0
+while [ "$i" -lt 10 ]; do
+    now=$(controller)
+    if [ "$now" = "$new" ]; then
+        log "$HCI address set to $new (was $addr)"
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+log "$HCI did not come back with $new within 10 s (reads ${now:-nothing})"
+exit 0

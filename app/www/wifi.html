@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>btbench Wi-Fi</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<!-- The page a phone shows when it joins the board's setup AP (the daemon redirects every foreign
+     host here in AP mode), and /wifi otherwise. Only this, wifi.js and style.css: a captive-portal
+     sheet is a small browser on a slow link. -->
+<body class="wifi-page">
+<header><h1>btbench · Wi-Fi setup</h1><a class="pill link" href="/">console</a></header>
+<main><div id="wifi-root"></div></main>
+<script src="/wifi.js"></script>
+<script>mountWifi(document.getElementById('wifi-root'), {period: 4000}).start();</script>
+</body>
+</html>

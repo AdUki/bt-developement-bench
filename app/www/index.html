@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>btbench</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1><span id="hostname">btbench</span></h1>
+  <div class="status">
+    <span id="pill-bt" class="pill">bluetooth …</span>
+    <span id="pill-ws" class="pill">connecting</span>
+    <span id="pill-power" class="pill" hidden></span>
+    <a class="pill link" href="/api" target="_blank" rel="noopener">API</a>
+  </div>
+</header>
+
+<nav id="tabs">
+  <a href="#devices" class="tab" data-tab="devices">Devices</a>
+  <a href="#le" class="tab" data-tab="le">LE</a>
+  <a href="#audio" class="tab" data-tab="audio">Audio</a>
+  <a href="#monitor" class="tab" data-tab="monitor">Monitor</a>
+  <a href="#capture" class="tab" data-tab="capture">Capture</a>
+  <a href="#wifi" class="tab" data-tab="wifi">Wi-Fi</a>
+  <a href="#kernel" class="tab" data-tab="kernel">Kernel</a>
+  <a href="#system" class="tab" data-tab="system">System</a>
+</nav>
+
+<main>
+  <!-- ======================================================== Devices -->
+  <section id="devices" class="panel">
+    <div class="card" id="adapter-card">
+      <div class="row between">
+        <h3>Adapter <span id="ad-name" class="mono muted small"></span></h3>
+        <span id="ad-msg" class="small bad-text"></span>
+      </div>
+      <div class="grid">
+        <label class="check"><input type="checkbox" id="ad-powered"> Powered</label>
+        <label class="check"><input type="checkbox" id="ad-discoverable"> Discoverable</label>
+        <label class="check"><input type="checkbox" id="ad-pairable"> Pairable</label>
+        <label>Discoverable timeout (s) <input type="number" id="ad-disc-timeout" min="0" max="65535"></label>
+        <label>Alias <input type="text" id="ad-alias" maxlength="248"></label>
+        <label>Agent
+          <select id="ag-policy">
+            <option value="auto">auto (accept everything but passkey entry)</option>
+            <option value="ask">ask (every question comes here)</option>
+          </select>
+        </label>
+        <label>IO capability
+          <select id="ag-cap">
+            <option>KeyboardDisplay</option><option>DisplayYesNo</option><option>DisplayOnly</option>
+            <option>KeyboardOnly</option><option>NoInputNoOutput</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row wrap">
+        <h3>Discovery</h3>
+        <label>Transport <select id="sc-transport"><option>auto</option><option>le</option><option>bredr</option></select></label>
+        <label>RSSI ≥ <input type="number" id="sc-rssi" placeholder="any" min="-127" max="20" class="narrow"></label>
+        <label>Seconds <input type="number" id="sc-secs" value="30" min="0" max="3600" class="narrow"></label>
+        <button id="sc-toggle" class="primary">Scan</button>
+        <span id="sc-state" class="small muted"></span>
+      </div>
+    </div>
+
+    <div class="row between"><h2>Devices</h2><input type="search" id="dev-filter" placeholder="filter name/address"></div>
+    <div id="dev-list" class="list"></div>
+  </section>
+
+  <!-- ======================================================== LE -->
+  <section id="le" class="panel">
+    <h2>Advertisers in range</h2>
+    <div id="le-adv-view" class="list"></div>
+
+    <h2>GATT explorer</h2>
+    <div class="card">
+      <div class="row wrap">
+        <label>Device <select id="gx-dev"></select></label>
+        <button id="gx-load">Load</button>
+        <button id="gx-connect">Connect</button>
+        <span id="gx-state" class="small muted"></span>
+      </div>
+      <div id="gx-tree"></div>
+      <h4>Notifications <button class="small-btn" id="gx-clear">clear</button></h4>
+      <pre id="gx-log" class="log"></pre>
+    </div>
+
+    <h2>Advertising</h2>
+    <div class="card">
+      <form id="adv-form" class="grid">
+        <label>Type <select name="type"><option>peripheral</option><option>broadcast</option></select></label>
+        <label>Local name <input name="local_name" maxlength="29" placeholder="btbench"></label>
+        <label>Service UUIDs <input name="service_uuids" placeholder="180d, 180f"></label>
+        <label>Manufacturer data <input name="manufacturer_data" placeholder="0xffff:0102 (id:hex, …)"></label>
+        <label>Service data <input name="service_data" placeholder="fe2c:00 (uuid:hex, …)"></label>
+        <label>Appearance <input name="appearance" placeholder="0x0341"></label>
+        <label>Min interval (ms) <input name="min_interval_ms" type="number" min="20" max="10240"></label>
+        <label>Max interval (ms) <input name="max_interval_ms" type="number" min="20" max="10240"></label>
+        <label>TX power (dBm) <input name="tx_power" type="number" min="-127" max="20"></label>
+        <label>Timeout (s) <input name="timeout_s" type="number" min="0" max="65535"></label>
+        <label>Includes <input name="includes" placeholder="tx-power, appearance, local-name"></label>
+        <label class="check"><input name="discoverable" type="checkbox" checked> Discoverable</label>
+        <div class="row"><button type="submit" class="primary">Advertise</button></div>
+      </form>
+      <div id="adv-mgr" class="small muted"></div>
+      <div id="adv-list" class="list"></div>
+    </div>
+
+    <h2>Local GATT server</h2>
+    <div class="card">
+      <div class="row wrap">
+        <span id="gs-state" class="pill">none</span>
+        <button id="gs-apply" class="primary">Apply</button>
+        <button id="gs-example">Example</button>
+        <button id="gs-clear" class="danger">Remove</button>
+        <span id="gs-err" class="small bad-text"></span>
+      </div>
+      <textarea id="gs-json" rows="14" spellcheck="false" class="mono"></textarea>
+      <h4>Values</h4>
+      <div id="gs-values"></div>
+      <h4>Events <button class="small-btn" id="gs-log-clear">clear</button></h4>
+      <pre id="gs-log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- ======================================================== Audio -->
+  <section id="audio" class="panel">
+    <div class="card">
+      <div class="row wrap">
+        <h3>Audio stack</h3>
+        <span id="au-mode" class="pill">…</span>
+        <span id="au-buttons"></span>
+        <label class="check"><input type="checkbox" id="au-restart-bt"> restart bluetoothd too</label>
+      </div>
+      <div id="au-services" class="small muted"></div>
+      <div id="au-msg" class="small"></div>
+    </div>
+    <h2>Transports</h2>
+    <div id="au-transports" class="list"></div>
+    <h2>Remote endpoints</h2>
+    <div id="au-endpoints" class="list"></div>
+    <h2>Players</h2>
+    <div id="au-players" class="list"></div>
+  </section>
+
+  <!-- ======================================================== Monitor -->
+  <section id="monitor" class="panel">
+    <div id="mon-msg" class="small bad-text"></div>
+    <div class="card">
+      <div class="row wrap">
+        <h3>Connections</h3>
+        <span id="mon-source" class="small muted"></span>
+      </div>
+      <div class="scroll-x"><table id="mon-conns" class="tbl"></table></div>
+      <div id="mon-adapters" class="small muted"></div>
+    </div>
+    <div class="card" id="mon-detail" hidden>
+      <div class="row between"><h3 id="mon-title"></h3><span id="mon-now" class="small mono"></span></div>
+      <h4>Throughput (kbit/s, last 2 min) <span class="legend"><i class="c-tx"></i>TX <i class="c-rx"></i>RX</span></h4>
+      <canvas id="mon-tput" class="graph"></canvas>
+      <h4>TX latency (ms) <span class="legend"><i class="c-p50"></i>p50 <i class="c-p95"></i>p95</span> · in flight <i class="c-fl"></i></h4>
+      <canvas id="mon-lat" class="graph"></canvas>
+      <h4>Latency histogram since connect (1 ms buckets)</h4>
+      <canvas id="mon-hist" class="graph short"></canvas>
+      <div id="mon-channels"></div>
+    </div>
+    <div class="card">
+      <div class="row wrap">
+        <h3>Events</h3>
+        <input id="mon-mark-text" placeholder="mark text (lands in btmon/btsnoop/Wireshark)">
+        <button id="mon-mark">Mark</button>
+      </div>
+      <pre id="mon-events" class="log tall"></pre>
+    </div>
+    <div class="card small">
+      Live capture in Wireshark, on your PC:
+      <pre class="mono" id="mon-ws-cmd"></pre>
+    </div>
+  </section>
+
+  <!-- ======================================================== Capture -->
+  <section id="capture" class="panel">
+    <div class="card">
+      <div class="row wrap">
+        <h3>btsnoop ring</h3>
+        <span id="cap-state" class="pill">…</span>
+        <button id="cap-toggle">…</button>
+        <span id="cap-dir" class="small muted mono"></span>
+      </div>
+      <div id="cap-msg" class="small bad-text"></div>
+    </div>
+    <div class="scroll-x"><table id="cap-files" class="tbl"></table></div>
+    <div class="card" id="cap-analyze" hidden>
+      <div class="row between"><h3 id="cap-an-title"></h3><button class="small-btn" id="cap-an-close">close</button></div>
+      <pre id="cap-an-text" class="log tall"></pre>
+    </div>
+  </section>
+
+  <!-- ======================================================== Wi-Fi -->
+  <section id="wifi" class="panel">
+    <div id="wifi-root"></div>
+  </section>
+
+  <!-- ======================================================== Kernel -->
+  <section id="kernel" class="panel">
+    <div class="card" id="k-card"></div>
+    <div class="card">
+      <div class="row wrap">
+        <button id="k-try" class="primary">Try the test kernel (reboots)</button>
+        <button id="k-commit">Commit test → good</button>
+        <button id="k-rollback" class="danger">Roll back</button>
+      </div>
+      <div id="k-msg" class="small"></div>
+    </div>
+  </section>
+
+  <!-- ======================================================== System -->
+  <section id="system" class="panel">
+    <div class="cols">
+      <div class="card"><h3>Health</h3><div id="sys-health"></div></div>
+      <div class="card"><h3>Versions</h3><div id="sys-versions"></div></div>
+    </div>
+    <div class="card"><h3>Services</h3><div id="sys-services"></div></div>
+    <div class="card">
+      <h3>bluetoothd arguments</h3>
+      <div class="row wrap">
+        <input id="sys-btargs" class="mono grow" placeholder="-d -E">
+        <label class="check"><input type="checkbox" id="sys-btargs-restart" checked> restart bluetooth</label>
+        <button id="sys-btargs-save" class="primary">Save</button>
+      </div>
+      <div id="sys-btargs-msg" class="small muted"></div>
+    </div>
+    <div class="card">
+      <div class="row wrap">
+        <h3>Journal</h3>
+        <select id="sys-j-unit"></select>
+        <button id="sys-j-load">Last 200</button>
+        <label class="check"><input type="checkbox" id="sys-j-follow"> follow</label>
+        <button class="small-btn" id="sys-j-clear">clear</button>
+      </div>
+      <pre id="sys-journal" class="log tall"></pre>
+    </div>
+    <div class="card">
+      <div class="row wrap">
+        <h3>Jobs</h3>
+        <select id="job-cmd"></select>
+        <input id="job-args" class="mono grow" placeholder="arguments, e.g. -c 5 AA:BB:CC:DD:EE:FF">
+        <button id="job-start" class="primary">Run</button>
+      </div>
+      <div id="job-list" class="list"></div>
+      <pre id="job-out" class="log tall"></pre>
+    </div>
+    <div class="card">
+      <div class="row wrap"><h3>Power</h3><button id="sys-reboot" class="danger">Reboot the board</button></div>
+    </div>
+  </section>
+</main>
+
+<!-- The agent's question, on every tab. -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <h3 id="modal-title">Pairing</h3>
+    <div id="modal-body"></div>
+    <div class="row wrap" id="modal-actions"></div>
+    <div class="small muted" id="modal-left"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="app.js"></script>
+<script src="devices.js"></script>
+<script src="le.js"></script>
+<script src="audio.js"></script>
+<script src="monitor.js"></script>
+<script src="capture.js"></script>
+<script src="wifi.js"></script>
+<script src="kernel.js"></script>
+<script src="system.js"></script>
+<script>startConsole();</script>
+</body>
+</html>

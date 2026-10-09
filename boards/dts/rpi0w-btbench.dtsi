@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Raspberry Pi Zero W: what the bench adds to mainline's bcm2835-rpi-zero-w.dts.
+ *
+ * Compiled in after the board's dts by tools/dev/mkdtb (make linux, and the linux-btbench recipe
+ * for the image), so everything here can refer to the board's labels. The mainline kernel has no
+ * use for the firmware's overlays (dtoverlay= in config.txt): whatever the bench would have taken
+ * from them belongs in here.
+ *
+ * Already in the mainline dts, so not repeated: the Bluetooth controller on uart0
+ * (brcm,bcm43438-bt, shutdown-gpios on GPIO45, RTS/CTS on GPIO30-33), the Wi-Fi on sdhci
+ * (brcm,bcm4329-fmac, power sequence on GPIO41), and the dwc2 FIFO sizes for device mode
+ * (bcm283x-rpi-usb-otg.dtsi).
+ */
+
+/*
+ * The data micro-USB port is the dev link: a USB device to the PC (configfs gadget, NCM + ACM).
+ * Mainline leaves it in "otg" mode, which depends on ID pin detection; "peripheral" makes it a
+ * device whatever the cable. For a USB host (a Bluetooth dongle with an LE Audio capable
+ * controller) set "host" here, or "otg" with an OTG adapter, and turn the gadget off.
+ */
+&usb {
+	dr_mode = "peripheral";
+};
+
+/*
+ * pstore/ramoops: the kernel log of a crashed or hung boot survives the reset in this region
+ * and is read back from /sys/fs/pstore on the next boot. 0x0b000000 is where the downstream
+ * ramoops overlay puts it, clear of everything the firmware and U-Boot load: the zImage at
+ * 0x80000 and its decompressed copy at 0x8000, U-Boot's script and device tree at
+ * 0x2400000-0x2700000, U-Boot itself at the top of RAM.
+ * no-map keeps it out of the kernel's cached linear mapping: ramoops maps it uncached, and ARMv6
+ * must not see the same RAM with two cache attributes.
+ *
+ * 1 MiB: console 256 KiB (the whole log buffer, LOG_BUF_SHIFT=18), pmsg 128 KiB (userspace,
+ * /dev/pmsg0), and five 128 KiB oops/panic dumps.
+ */
+&rmem {
+	ramoops@b000000 {
+		compatible = "ramoops";
+		reg = <0x0b000000 0x100000>;
+		no-map;
+		record-size = <0x20000>;
+		console-size = <0x40000>;
+		pmsg-size = <0x20000>;
+	};
+};

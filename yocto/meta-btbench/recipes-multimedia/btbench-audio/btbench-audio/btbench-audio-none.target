@@ -1,0 +1,7 @@
+# Audio mode "none": bluetoothd alone, no audio stack registering endpoints or HFP profiles —
+# for bluetoothctl's endpoint/transport commands and BlueZ's test/ scripts
+# (btbench-audio set none). See btbench-audio-pipewire.target for how the modes exclude each other.
+[Unit]
+Description=Audio mode: none (bluetoothd only)
+Conflicts=btbench-audio-pipewire.target btbench-audio-bluealsa.target
+After=btbench-audio-pipewire.target btbench-audio-bluealsa.target

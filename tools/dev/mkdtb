@@ -1,0 +1,66 @@
+#!/bin/bash
+# mkdtb — compile a board's dtb from the kernel's dts with the bench's dtsi compiled in.
+#
+#   mkdtb <kernel-src> <arch> <dts> <extra.dtsi> <out.dtb>
+#   mkdtb ~/src/linux arm broadcom/bcm2835-rpi-zero-w.dts boards/dts/rpi0w-btbench.dtsi board.dtb
+#
+# <dts> is relative to <kernel-src>/arch/<arch>/boot/dts. The result is what the kernel's own
+# dtbs target would make of a dts that ended in `#include "<extra.dtsi>"`: the same preprocessor
+# flags and include paths (scripts/Makefile.dtbs), symbols (-@) for runtime overlays. Nothing is
+# written into the kernel tree; the temporary files go next to <out.dtb>.
+#
+# Used by `make linux` and by the linux-btbench recipe, so the image's device tree and a dev
+# build's are made the same way.
+#
+# Environment:
+#   DTC  the dtc to use; default: the one a kernel build left in the output tree is the best
+#        choice (KBUILD_OUTPUT/scripts/dtc/dtc), so the callers pass it; otherwise dtc on PATH
+#   CPP  the C preprocessor; default cpp (the kernel uses the host compiler's, HOSTCC -E)
+
+set -euo pipefail
+
+usage() {
+	sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+	exit 2
+}
+
+[ $# -eq 5 ] || usage
+
+src=$(realpath "$1")
+arch=$2
+dts=$3
+extra=$(realpath "$4")
+out=$5
+
+dtsdir=$src/arch/$arch/boot/dts
+board=$dtsdir/$dts
+
+[ -f "$board" ] || { echo "mkdtb: no $board" >&2; exit 1; }
+[ -f "$extra" ] || { echo "mkdtb: no $extra" >&2; exit 1; }
+
+DTC=${DTC:-dtc}
+CPP=${CPP:-cpp}
+command -v "${DTC%% *}" >/dev/null || { echo "mkdtb: $DTC not found (apt install device-tree-compiler)" >&2; exit 1; }
+
+mkdir -p "$(dirname "$out")"
+wrap=$out.btbench.dts
+pre=$out.btbench.pre.dts
+trap 'rm -f "$wrap" "$pre"' EXIT
+
+# The board's dts first, so the dtsi can refer to its labels and override what it set.
+printf '#include "%s"\n#include "%s"\n' "$board" "$extra" > "$wrap"
+
+# scripts/dtc/include-prefixes is the kernel's one include dir for dts files: <dt-bindings/...>
+# and <arm/...>-style cross-arch includes. Quoted includes resolve next to the including file.
+# shellcheck disable=SC2086 # CPP may carry options (the SDK's and bitbake's do)
+$CPP -nostdinc -I "$src/scripts/dtc/include-prefixes" \
+	-undef -D__DTS__ -x assembler-with-cpp -o "$pre" "$wrap"
+
+# The warnings the kernel turns off at its default W= level; dtc's diagnostics for the dtsi are
+# still printed.
+# shellcheck disable=SC2086
+$DTC -@ -I dts -O dtb -b 0 -o "$out" \
+	-i "$(dirname "$board")" -i "$src/scripts/dtc/include-prefixes" \
+	-Wno-unique_unit_address -Wno-unit_address_vs_reg -Wno-avoid_unnecessary_addr_size \
+	-Wno-alias_paths -Wno-interrupt_map -Wno-simple_bus_reg \
+	"$pre"

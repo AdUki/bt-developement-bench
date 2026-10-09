@@ -1,0 +1,761 @@
+#!/bin/bash
+# btbench-wifi — the board's Wi-Fi: a client of the networks you gave it, or its own setup AP when
+# none of them answers.
+#
+#   btbench-wifi status                 JSON: state, policy, network, address, the AP, the stored
+#                                       networks and the last error
+#   btbench-wifi scan                   JSON: the networks in range; while the AP is up, the list
+#                                       taken just before it came up
+#   btbench-wifi add <ssid> [<psk>]     store a network (without a psk: an open one) and try it now
+#   btbench-wifi remove <ssid>
+#   btbench-wifi mode auto|sta|ap|off   kept on /data across reboots
+#   btbench-wifi run                    the state machine (btbench-wifi.service)
+#
+# Policy auto (the default):
+#   1. With networks stored, start wpa_supplicant@wlan0 and give it 45 s to associate and get an
+#      address over DHCP (networkd).
+#   2. With none, or none answering: scan once (the AP cannot scan, and the setup page needs the
+#      list), then open the setup AP: hostapd as btbench-XXXX (the end of the serial number, WPA2,
+#      AP_PSK from the device conf) on channel 6, networkd's DHCP server on 10.42.0.1/24, and
+#      dnsmasq answering every DNS name with 10.42.0.1, so a phone that joins is sent to the page.
+#   3. In AP mode, try the networks again every 10 min, and at once when one is added. A failed
+#      try comes back to the AP and says why in last_error.
+#   4. A client that loses its network for more than 5 min falls back to the AP.
+# sta, ap and off pin the radio: a client that keeps trying, the AP, or nothing at all (for
+# Bluetooth measurements without Wi-Fi coexistence in the way).
+#
+# The radio does one thing at a time. brcmfmac can in principle run an AP next to a client, but on
+# the BCM43430 the combination is unreliable, and a bench that drops off the network now and then
+# is worse than one that tells you which mode it is in.
+#
+# The networks live in /data/btbench/wifi/wpa_supplicant-wlan0.conf, which wpa_supplicant@wlan0
+# reads (its drop-in from btbench-base points it there). This script owns that file: SSIDs are
+# written in hex and passphrases as the key derived from them, so no SSID or password can break its
+# syntax. It is seeded on first use with the network from the device conf.
+#
+# CLI commands talk to the running state machine with SIGUSR1 ("look again"); its state is in
+# /run/btbench/wifi.json (the status JSON, rewritten on every change).
+
+set -u
+
+IFACE=wlan0
+DATA=/data/btbench/wifi
+CONF=$DATA/wpa_supplicant-$IFACE.conf
+POLICY_FILE=$DATA/policy
+# Per process: the CLI and the state machine may both rewrite the file.
+CONF_NEW=$CONF.$$.new
+LOCK=$DATA/.lock
+SEED=/etc/btbench/wifi-seed.env
+RUN=/run/btbench
+STATUS=$RUN/wifi.json
+STATE=$RUN/wifi-state.json
+SCAN_CACHE=$RUN/wifi-scan.json
+PIDFILE=$RUN/wifi.pid
+HOSTAPD_CONF=$RUN/hostapd.conf
+AP_NETWORK=/run/systemd/network/25-$IFACE-ap.network
+WPA_UNIT=wpa_supplicant@$IFACE.service
+AP_IP=10.42.0.1
+
+STA_TIMEOUT=45
+STA_LOST_MAX=300
+AP_RETRY=600
+POLL=5
+
+WIFI_COUNTRY=
+AP_PSK=
+[ -r /etc/btbench/device.env ] && . /etc/btbench/device.env
+
+log() { echo "btbench-wifi: $*" >&2; }
+die() {
+    echo "btbench-wifi: $*" >&2
+    exit 1
+}
+
+usage() {
+    echo "usage: btbench-wifi status|scan|add <ssid> [<psk>]|remove <ssid>|mode auto|sta|ap|off|run" >&2
+    exit 2
+}
+
+# --- helpers -------------------------------------------------------------------------------
+
+board_serial() {
+    local s
+    s=$(tr -d '\000' 2>/dev/null </proc/device-tree/serial-number)
+    [ -n "$s" ] || s=$(sed -n 's/^Serial[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo)
+    [ -n "$s" ] || s=$(cat /etc/machine-id 2>/dev/null)
+    s=${s,,}
+    printf '%s' "${s//[^0-9a-f]/}"
+}
+
+ap_ssid() {
+    local s
+    s=$(board_serial)
+    [ ${#s} -ge 4 ] || s=0000$s
+    printf 'btbench-%s' "${s: -4}"
+}
+
+hex_encode() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }
+hex_decode() { printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')"; }
+
+iface_ip() {
+    ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null |
+        awk '{ split($4, a, "/"); print a[1]; exit }'
+}
+
+read_policy() {
+    local p
+    p=$(cat "$POLICY_FILE" 2>/dev/null)
+    case "$p" in
+        auto | sta | ap | off) echo "$p" ;;
+        *) echo auto ;;
+    esac
+}
+
+# The state machine's pid, if it runs (a stale pid file may name an unrelated process by now).
+daemon_pid() {
+    local p
+    p=$(cat "$PIDFILE" 2>/dev/null) || return 1
+    [ -n "$p" ] && grep -q "btbench-wifi" "/proc/$p/cmdline" 2>/dev/null && echo "$p"
+}
+
+poke() {
+    local p
+    p=$(daemon_pid) && kill -USR1 "$p"
+    return 0
+}
+
+# --- the networks file ---------------------------------------------------------------------
+
+# The SSIDs of the network blocks, one per line in file order (wpa_supplicant numbers its networks
+# the same way, which is how the connected one is named), decoded from hex or from a quoted string
+# written by hand.
+conf_ssids() {
+    [ -r "$CONF" ] || return 0
+    local v
+    awk '/^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { inb = 1; s = ""; next }
+         inb && /^[[:space:]]*ssid[[:space:]]*=/ { sub(/^[[:space:]]*ssid[[:space:]]*=[[:space:]]*/, ""); s = $0; next }
+         inb && /^[[:space:]]*\}/ { print s; inb = 0 }' "$CONF" |
+        while IFS= read -r v; do
+            case "$v" in
+                \"*\")
+                    v=${v#\"}
+                    v=${v%\"}
+                    ;;
+                *) v=$(hex_decode "$v") ;;
+            esac
+            printf '%s\n' "$v"
+        done
+}
+
+has_networks() { conf_ssids | grep -q .; }
+
+# The file without the blocks for one SSID.
+conf_without() {
+    local target=$1 i=0 drop="" s
+    while IFS= read -r s; do
+        [ "$s" = "$target" ] && drop+=" $i"
+        i=$((i + 1))
+    done < <(conf_ssids)
+    awk -v drop="$drop" '
+        BEGIN { n = split(drop, a, " "); for (i = 1; i <= n; i++) skip[a[i]] = 1; b = -1 }
+        /^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { b++; inb = 1 }
+        !(inb && (b in skip)) { print }
+        inb && /^[[:space:]]*\}/ { inb = 0 }' "$CONF"
+}
+
+conf_replace() {
+    chmod 600 "$CONF_NEW" && mv -f "$CONF_NEW" "$CONF"
+}
+
+valid_country() { [[ $WIFI_COUNTRY =~ ^[A-Z0-9]{2}$ ]]; }
+
+# Creates the file on first use, seeded with the device conf's network, and keeps its country in
+# step with the device conf (the regulatory domain decides which channels the radio may use).
+conf_init() {
+    mkdir -p "$DATA"
+    chmod 700 "$DATA"
+    if [ ! -s "$CONF" ]; then
+        {
+            echo "# Managed by btbench-wifi (add/remove). SSIDs are hex, keys are derived."
+            echo "ctrl_interface=/run/wpa_supplicant"
+            echo "update_config=0"
+            echo "p2p_disabled=1"
+            ! valid_country || echo "country=$WIFI_COUNTRY"
+        } >"$CONF_NEW"
+        conf_replace
+        local WIFI_SSID="" WIFI_PSK=""
+        [ -r "$SEED" ] && . "$SEED"
+        if [ -n "$WIFI_SSID" ]; then
+            conf_add "$WIFI_SSID" "$WIFI_PSK"
+            log "created $CONF with the device conf's network"
+        else
+            log "created $CONF (no networks yet)"
+        fi
+    elif valid_country && ! grep -qx "country=$WIFI_COUNTRY" "$CONF"; then
+        { grep -v '^country=' "$CONF"; } | awk -v c="country=$WIFI_COUNTRY" '
+            { print } /^update_config=/ && !done { print c; done = 1 }
+            END { if (!done) print c }' >"$CONF_NEW"
+        conf_replace
+    fi
+}
+
+conf_add() {
+    local ssid=$1 psk=$2 key
+    if [ -z "$psk" ]; then
+        key=$'\tkey_mgmt=NONE'
+    elif [[ $psk =~ ^[0-9a-fA-F]{64}$ ]]; then
+        key=$'\tpsk='$psk
+    else
+        # From stdin, not argv: the passphrase would show in ps.
+        key=$(printf '%s\n' "$psk" | wpa_passphrase "$ssid" 2>/dev/null |
+            sed -n 's/^[[:space:]]*psk=\([0-9a-f]\{64\}\)$/\1/p')
+        [ -n "$key" ] || die "wpa_passphrase could not derive a key"
+        key=$'\tpsk='$key
+    fi
+    {
+        conf_without "$ssid"
+        # scan_ssid: also find it when it hides its SSID.
+        printf 'network={\n\tssid=%s\n\tscan_ssid=1\n%s\n}\n' "$(hex_encode "$ssid")" "$key"
+    } >"$CONF_NEW"
+    conf_replace
+}
+
+# --- status --------------------------------------------------------------------------------
+
+# The state machine's own view (state, connected SSID, last error) merged with what can be read
+# live: the policy, the stored networks, wlan0's address.
+status_json() {
+    local d nets=()
+    if daemon_pid >/dev/null && [ -r "$STATE" ]; then
+        d=$(cat "$STATE")
+    else
+        d='{"state":"off","ssid":null,"last_error":"btbench-wifi.service is not running"}'
+    fi
+    mapfile -t nets < <(conf_ssids)
+    jq -n --argjson d "$d" --arg policy "$(read_policy)" --arg ip "$(iface_ip)" \
+        --arg apssid "$(ap_ssid)" --arg apip "$AP_IP" '{
+            state: $d.state,
+            policy: $policy,
+            ssid: $d.ssid,
+            ip: (if $ip == "" then null else $ip end),
+            ap: {ssid: $apssid, ip: $apip},
+            networks: ($ARGS.positional | map(select(length > 0))),
+            last_error: $d.last_error
+        }' --args "${nets[@]}"
+}
+
+# --- scanning ------------------------------------------------------------------------------
+
+# iw's scan output as one line per BSS: SSID (escaped by iw as \xNN), signal, frequency and
+# security, separated by \037 (a tab would collapse an empty field). Retried, since the scan is
+# refused while wpa_supplicant runs one of its own; failing that, the last results the kernel has.
+iw_scan() {
+    local out="" i
+    for i in 1 2 3; do
+        out=$(iw dev "$IFACE" scan 2>/dev/null) && break
+        sleep 2
+    done
+    [ -n "$out" ] || out=$(iw dev "$IFACE" scan dump 2>/dev/null)
+    printf '%s\n' "$out" | awk '
+        function flush() {
+            if (!have) return
+            if (sae && !psk) sec = "wpa3"
+            else if (rsn || wpa) sec = "wpa2"
+            else if (priv) sec = "wep"
+            else sec = "open"
+            printf "%s\037%d\037%d\037%s\n", ssid, sig, freq, sec
+        }
+        /^BSS / { flush(); have = 1; ssid = ""; sig = -100; freq = 0; rsn = wpa = priv = sae = psk = 0; sect = ""; next }
+        /^\t[^\t]/ { sect = "" }
+        /^\tfreq:/ { freq = int($2) }
+        /^\tsignal:/ { sig = int($2) }
+        /^\tcapability:/ && /Privacy/ { priv = 1 }
+        /^\tSSID:/ { ssid = substr($0, 8) }
+        /^\tRSN:/ { rsn = 1; sect = "rsn" }
+        /^\tWPA:/ { wpa = 1; sect = "wpa" }
+        sect == "rsn" && /Authentication suites:/ { if (/SAE/) sae = 1; if (/PSK|802\.1X/) psk = 1 }
+        END { flush() }'
+}
+
+# The scan as JSON: one entry per SSID (its strongest BSS), strongest first, hidden ones left out.
+# SSIDs are decoded here and control characters dropped; jq turns bytes that are not UTF-8 into
+# U+FFFD, so the output is always valid JSON.
+scan_json() {
+    local esc sig freq sec ssid
+    iw_scan | while IFS=$'\037' read -r esc sig freq sec; do
+        ssid=$(printf '%b' "$esc" | tr -d '\000-\037')
+        [ -n "$ssid" ] && printf '%s\037%s\037%s\037%s\n' "$ssid" "$sig" "$freq" "$sec"
+    done | jq -R -s '[split("\n")[] | select(length > 0) | split("\u001f") | select(length == 4)
+            | {ssid: .[0], signal_dbm: (.[1] | tonumber), freq: (.[2] | tonumber), security: .[3]}]
+        | group_by(.ssid) | map(max_by(.signal_dbm)) | sort_by(-.signal_dbm)'
+}
+
+scan_to_cache() {
+    local tmp=$SCAN_CACHE.$$
+    if scan_json >"$tmp" && [ -s "$tmp" ]; then
+        mv -f "$tmp" "$SCAN_CACHE"
+    else
+        rm -f "$tmp"
+    fi
+}
+
+# --- CLI -----------------------------------------------------------------------------------
+
+lock() {
+    mkdir -p "$DATA"
+    exec 9>"$LOCK"
+    flock 9
+}
+
+cmd_status() { status_json; }
+
+cmd_scan() {
+    local st=off
+    daemon_pid >/dev/null && st=$(jq -r .state "$STATE" 2>/dev/null)
+    case "$st" in
+        sta | connecting)
+            [ -e "/sys/class/net/$IFACE" ] || die "no $IFACE"
+            scan_to_cache
+            ;;
+    esac
+    if [ -s "$SCAN_CACHE" ]; then
+        cat "$SCAN_CACHE"
+    else
+        echo '[]'
+    fi
+}
+
+cmd_add() {
+    [ $# -ge 1 ] && [ $# -le 2 ] || usage
+    local ssid=$1 psk=${2:-} n
+    n=$(printf '%s' "$ssid" | wc -c)
+    [ "$n" -ge 1 ] && [ "$n" -le 32 ] || die "an SSID is 1 to 32 bytes"
+    [[ $ssid != *[[:cntrl:]]* ]] || die "the SSID has control characters"
+    if [ -n "$psk" ] && ! [[ $psk =~ ^[0-9a-fA-F]{64}$ ]]; then
+        n=$(printf '%s' "$psk" | wc -c)
+        [ "$n" -ge 8 ] && [ "$n" -le 63 ] || die "a WPA passphrase is 8 to 63 characters"
+        [[ $psk != *[[:cntrl:]]* ]] || die "the passphrase has control characters"
+    fi
+    lock
+    conf_init
+    conf_add "$ssid" "$psk"
+    poke
+}
+
+cmd_remove() {
+    [ $# -eq 1 ] || usage
+    lock
+    conf_ssids | grep -qxF -- "$1" || die "no stored network $1"
+    conf_without "$1" >"$CONF_NEW"
+    conf_replace
+    poke
+}
+
+cmd_mode() {
+    [ $# -eq 1 ] || usage
+    case "$1" in
+        auto | sta | ap | off) ;;
+        *) usage ;;
+    esac
+    mkdir -p "$DATA"
+    echo "$1" >"$POLICY_FILE.new" && mv -f "$POLICY_FILE.new" "$POLICY_FILE"
+    poke
+}
+
+# --- the state machine ---------------------------------------------------------------------
+
+cur_state=off
+cur_ssid=""
+last_error=""
+policy=auto
+kick=0
+SLEEP_PID=""
+HOSTAPD_PID=""
+DNSMASQ_PID=""
+
+write_status() {
+    jq -n --arg state "$cur_state" --arg ssid "$cur_ssid" --arg err "$last_error" '{
+        state: $state,
+        ssid: (if $ssid == "" then null else $ssid end),
+        last_error: (if $err == "" then null else $err end)
+    }' >"$STATE.new" && mv -f "$STATE.new" "$STATE"
+    status_json >"$STATUS.new" && mv -f "$STATUS.new" "$STATUS"
+}
+
+set_state() {
+    [ "$cur_state" = "$1" ] || log "state $1${cur_ssid:+ ($cur_ssid)}${last_error:+ — $last_error}"
+    cur_state=$1
+    write_status
+}
+
+# Sleeps, but wakes on a poke (SIGUSR1 interrupts wait). Never longer than POLL at a time, which
+# also bounds the cost of a poke that lands between the check and the wait.
+wait_event() {
+    [ "$kick" = 1 ] && return 0
+    sleep "$1" &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null
+    kill "$SLEEP_PID" 2>/dev/null
+    SLEEP_PID=""
+}
+
+# After a poke: false when the policy changed (the caller returns to the main loop), true
+# otherwise, with the networks re-read by a running wpa_supplicant.
+handle_kick() {
+    [ "$kick" = 1 ] || return 0
+    kick=0
+    write_status
+    [ "$(read_policy)" = "$policy" ] || return 1
+    if systemctl -q is-active "$WPA_UNIT"; then
+        wpa_cli -i "$IFACE" -p /run/wpa_supplicant reconfigure >/dev/null 2>&1
+    fi
+    return 0
+}
+
+# True when associated and holding an address; names the network in cur_ssid.
+sta_connected() {
+    local st id
+    st=$(wpa_cli -i "$IFACE" -p /run/wpa_supplicant status 2>/dev/null) || return 1
+    grep -qx 'wpa_state=COMPLETED' <<<"$st" || return 1
+    [ -n "$(iface_ip)" ] || return 1
+    id=$(sed -n 's/^id=//p' <<<"$st")
+    if [[ $id =~ ^[0-9]+$ ]]; then
+        cur_ssid=$(conf_ssids | sed -n "$((id + 1))p")
+    else
+        cur_ssid=$(sed -n 's/^ssid=//p' <<<"$st")
+    fi
+    return 0
+}
+
+stop_child() {
+    [ -n "$1" ] || return 0
+    kill "$1" 2>/dev/null
+    wait "$1" 2>/dev/null
+}
+
+stop_ap() {
+    stop_child "$DNSMASQ_PID"
+    DNSMASQ_PID=""
+    stop_child "$HOSTAPD_PID"
+    HOSTAPD_PID=""
+    if [ -e "$AP_NETWORK" ]; then
+        rm -f "$AP_NETWORK"
+        networkctl reload 2>/dev/null
+        networkctl reconfigure "$IFACE" 2>/dev/null
+    fi
+    # A client needs the interface back in managed mode, which hostapd does not always restore.
+    if iw dev "$IFACE" info 2>/dev/null | grep -q 'type AP'; then
+        ip link set "$IFACE" down
+        iw dev "$IFACE" set type managed 2>/dev/null
+    fi
+}
+
+stop_sta() {
+    systemctl stop "$WPA_UNIT" 2>/dev/null
+}
+
+start_sta() {
+    stop_ap
+    ip link set "$IFACE" up 2>/dev/null
+    # Restarted rather than started: it reads the networks file only when it starts.
+    systemctl restart "$WPA_UNIT"
+    # brcmfmac's power save adds tens of ms to every packet the board receives; on a bench that is
+    # reached over ssh and measured with iperf3 that is all cost and no gain.
+    iw dev "$IFACE" set power_save off 2>/dev/null
+    cur_ssid=""
+    set_state connecting
+}
+
+# Starts the client and waits up to STA_TIMEOUT for a connection. 0: connected, 1: not, 2: the
+# policy changed.
+try_sta() {
+    local t0=$SECONDS
+    # Already connected (the policy went from sta to auto or back): nothing to try.
+    [ "$cur_state" = sta ] && sta_connected && return 0
+    start_sta
+    while [ $((SECONDS - t0)) -lt "$STA_TIMEOUT" ]; do
+        wait_event 2
+        handle_kick || return 2
+        if sta_connected; then
+            last_error=""
+            set_state sta
+            return 0
+        fi
+        if ! systemctl -q is-active "$WPA_UNIT"; then
+            last_error="wpa_supplicant did not start (journalctl -u $WPA_UNIT)"
+            return 1
+        fi
+    done
+    last_error="none of the stored networks answered within $STA_TIMEOUT s"
+    return 1
+}
+
+# Watches the client. With "fallback" (policy auto) returns 0 once the network has been gone for
+# STA_LOST_MAX, or no networks are left; 2 when the policy changed.
+sta_watch() {
+    local lost="" ip="" now
+    while :; do
+        wait_event "$POLL"
+        handle_kick || return 2
+        if [ "$1" = fallback ] && ! has_networks; then
+            last_error="no stored networks"
+            return 0
+        fi
+        if sta_connected; then
+            lost=""
+            now=$(iface_ip)
+            if [ "$cur_state" != sta ] || [ "$now" != "$ip" ]; then
+                ip=$now
+                set_state sta
+            fi
+            continue
+        fi
+        if [ -z "$lost" ]; then
+            lost=$SECONDS
+            cur_ssid=""
+            set_state connecting
+        fi
+        systemctl -q is-active "$WPA_UNIT" || systemctl restart "$WPA_UNIT"
+        if [ "$1" = fallback ] && [ $((SECONDS - lost)) -ge "$STA_LOST_MAX" ]; then
+            last_error="lost the network for $STA_LOST_MAX s"
+            return 0
+        fi
+    done
+}
+
+write_hostapd_conf() {
+    local n
+    n=$(printf '%s' "$AP_PSK" | wc -c)
+    if [ "$n" -lt 8 ] || [ "$n" -gt 63 ]; then
+        last_error="AP_PSK in the device conf must be 8 to 63 characters"
+        return 1
+    fi
+    {
+        echo "interface=$IFACE"
+        echo "driver=nl80211"
+        echo "ctrl_interface=/run/hostapd"
+        echo "ssid=$(ap_ssid)"
+        if valid_country; then
+            echo "country_code=$WIFI_COUNTRY"
+            echo "ieee80211d=1"
+        fi
+        echo "hw_mode=g"
+        echo "channel=6"
+        echo "ieee80211n=1"
+        echo "wmm_enabled=1"
+        echo "auth_algs=1"
+        echo "wpa=2"
+        echo "wpa_key_mgmt=WPA-PSK"
+        echo "rsn_pairwise=CCMP"
+        echo "wpa_passphrase=$AP_PSK"
+    } >"$HOSTAPD_CONF"
+    chmod 600 "$HOSTAPD_CONF"
+}
+
+# Scans, then brings the AP up. False (state off, last_error set) when it could not.
+go_ap() {
+    local i
+    stop_ap
+    stop_sta
+    ip link set "$IFACE" up 2>/dev/null
+    scan_to_cache
+    write_hostapd_conf || {
+        set_state off
+        return 1
+    }
+
+    # networkd applies the first .network file in name order that matches, whatever its
+    # directory: 25-wlan0-ap comes before the client's 30-wlan0, so it wins while it exists. The
+    # DHCP server hands out the board as router and DNS server, so a phone's captive
+    # portal check lands on dnsmasq and from there on the board's page.
+    mkdir -p "${AP_NETWORK%/*}"
+    cat >"$AP_NETWORK" <<EOF
+# Written by btbench-wifi while the setup AP is up.
+[Match]
+Name=$IFACE
+
+[Network]
+Address=$AP_IP/24
+DHCPServer=yes
+MulticastDNS=yes
+ConfigureWithoutCarrier=yes
+
+[DHCPServer]
+PoolOffset=10
+PoolSize=100
+EmitDNS=yes
+DNS=$AP_IP
+
+[Link]
+RequiredForOnline=no
+EOF
+    networkctl reload
+
+    hostapd "$HOSTAPD_CONF" &
+    HOSTAPD_PID=$!
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 1
+        if ! kill -0 "$HOSTAPD_PID" 2>/dev/null; then
+            wait "$HOSTAPD_PID" 2>/dev/null
+            HOSTAPD_PID=""
+            break
+        fi
+        hostapd_cli -p /run/hostapd -i "$IFACE" status 2>/dev/null | grep -qx 'state=ENABLED' && break
+    done
+    if [ -z "$HOSTAPD_PID" ]; then
+        last_error="hostapd did not start (journalctl -u btbench-wifi)"
+        stop_ap
+        set_state off
+        return 1
+    fi
+    networkctl reconfigure "$IFACE"
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        [ "$(iface_ip)" = "$AP_IP" ] && break
+        sleep 1
+    done
+
+    # DNS only: networkd is the DHCP server. Bound to wlan0's address alone (--bind-dynamic also
+    # copes with the address arriving late), so systemd-resolved keeps 127.0.0.53/54 to itself.
+    dnsmasq --keep-in-foreground --conf-file=/dev/null --log-facility=- \
+        --port=53 --interface="$IFACE" --except-interface=lo --bind-dynamic \
+        --no-dhcp-interface="$IFACE" --no-resolv --no-hosts --address="/#/$AP_IP" &
+    DNSMASQ_PID=$!
+
+    cur_ssid=""
+    set_state ap
+}
+
+# Holds the AP. With "retry" (policy auto) returns 0 when it is time to try the stored networks
+# (every AP_RETRY, or at once when one was added); 1 when hostapd died; 2 when the policy changed.
+ap_hold() {
+    local t0=$SECONDS
+    while :; do
+        wait_event "$POLL"
+        if [ "$kick" = 1 ]; then
+            kick=0
+            write_status
+            [ "$(read_policy)" = "$policy" ] || return 2
+            [ "$1" = retry ] && has_networks && return 0
+        fi
+        if [ -n "$HOSTAPD_PID" ] && ! kill -0 "$HOSTAPD_PID" 2>/dev/null; then
+            wait "$HOSTAPD_PID" 2>/dev/null
+            HOSTAPD_PID=""
+            last_error="hostapd exited"
+            return 1
+        fi
+        if [ -n "$DNSMASQ_PID" ] && ! kill -0 "$DNSMASQ_PID" 2>/dev/null; then
+            log "dnsmasq exited: phones will not find the setup page by themselves"
+            DNSMASQ_PID=""
+        fi
+        if [ "$1" = retry ] && [ $((SECONDS - t0)) -ge "$AP_RETRY" ] && has_networks; then
+            return 0
+        fi
+    done
+}
+
+go_off() {
+    stop_ap
+    stop_sta
+    ip link set "$IFACE" down 2>/dev/null
+    cur_ssid=""
+    set_state off
+}
+
+# Waits for a poke that changes the policy.
+hold() {
+    while :; do
+        wait_event "$POLL"
+        if [ "$kick" = 1 ]; then
+            kick=0
+            write_status
+            [ "$(read_policy)" = "$policy" ] || return
+        fi
+    done
+}
+
+cleanup() {
+    [ -z "$SLEEP_PID" ] || kill "$SLEEP_PID" 2>/dev/null
+    stop_ap
+    systemctl --no-block stop "$WPA_UNIT" 2>/dev/null
+    rm -f "$PIDFILE"
+}
+
+cmd_run() {
+    local r
+    mkdir -p "$RUN"
+    exec 8>"$RUN/wifi.lock"
+    flock -n 8 || die "already running"
+    # Traps first: SIGUSR1's default action would kill a state machine poked too early.
+    trap 'kick=1' USR1
+    trap 'cleanup; exit 0' TERM INT
+    echo $$ >"$PIDFILE"
+
+    # Under the CLI's lock: an `add` may be creating the same file right now.
+    lock
+    conf_init
+    exec 9>&-
+    while [ ! -e "/sys/class/net/$IFACE" ]; do
+        last_error="no $IFACE (Wi-Fi driver or firmware missing?)"
+        set_state off
+        wait_event 10
+        kick=0
+    done
+    last_error=""
+
+    while :; do
+        policy=$(read_policy)
+        kick=0
+        log "policy $policy"
+        case "$policy" in
+            off)
+                last_error=""
+                go_off
+                hold
+                ;;
+            ap)
+                last_error=""
+                if go_ap; then
+                    ap_hold none
+                    [ $? = 2 ] && continue
+                fi
+                wait_event 10
+                ;;
+            sta)
+                try_sta
+                [ $? = 2 ] && continue
+                sta_watch none
+                ;;
+            auto)
+                if has_networks; then
+                    try_sta
+                    r=$?
+                    [ $r = 2 ] && continue
+                    if [ $r = 0 ]; then
+                        sta_watch fallback
+                        [ $? = 2 ] && continue
+                    fi
+                fi
+                if go_ap; then
+                    ap_hold retry
+                else
+                    wait_event 30
+                fi
+                ;;
+        esac
+    done
+}
+
+# --- main ----------------------------------------------------------------------------------
+
+[ $# -ge 1 ] || usage
+cmd=$1
+shift
+case "$cmd" in
+    status) cmd_status "$@" ;;
+    scan) cmd_scan "$@" ;;
+    add) cmd_add "$@" ;;
+    remove) cmd_remove "$@" ;;
+    mode) cmd_mode "$@" ;;
+    run) cmd_run "$@" ;;
+    *) usage ;;
+esac

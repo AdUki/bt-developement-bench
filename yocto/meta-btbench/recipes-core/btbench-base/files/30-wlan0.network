@@ -1,0 +1,17 @@
+# Wi-Fi as a client (btbench-wifi in STA mode; wpa_supplicant@wlan0 associates, networkd does
+# DHCP). While the setup AP is up, btbench-wifi's /run/systemd/network/25-wlan0-ap.network sorts
+# first and takes the interface over.
+[Match]
+Name=wlan0
+
+[Network]
+DHCP=ipv4
+MulticastDNS=yes
+
+[DHCPv4]
+# Identify by MAC, not by the DUID systemd derives from /etc/machine-id: the machine-id is new
+# with every flashed image, the MAC is burned into the chip. The board keeps its lease (and a
+# reservation made for it on the router) across reflashes.
+ClientIdentifier=mac
+# The hostname is the device conf's, not whatever the network's DHCP server would call it.
+UseHostname=no

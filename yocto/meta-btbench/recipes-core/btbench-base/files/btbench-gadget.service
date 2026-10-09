@@ -1,0 +1,16 @@
+[Unit]
+Description=USB gadget to the PC: Ethernet (usb0) and a serial console (ttyGS0)
+# Early, without waiting for sysinit: the gadget is how you reach a board whose boot went wrong.
+DefaultDependencies=no
+After=sys-kernel-config.mount systemd-modules-load.service systemd-udevd.service
+Before=network.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/btbench-gadget start
+ExecStop=/usr/bin/btbench-gadget stop
+
+[Install]
+WantedBy=sysinit.target

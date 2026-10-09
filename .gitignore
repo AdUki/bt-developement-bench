@@ -1,0 +1,23 @@
+# Per-machine settings
+/bench.conf
+/yocto/conf/site.conf
+/yocto/meta-btbench/conf/btbench-device.conf
+
+# Yocto: cloned layers, build dirs, caches
+/yocto/layers/
+/yocto/build-*/
+/yocto/downloads/
+/yocto/sstate-cache/
+
+# Installed SDKs, dev trees, out-of-tree builds
+/sdk/
+/src/
+/build/
+
+# btbenchd host build
+/app/build/
+/app/compile_commands.json
+
+# Python bytecode (tools/fake-bluez)
+__pycache__/
+*.pyc

@@ -1,0 +1,61 @@
+# btbench boot script: meta-raspberrypi's boot, plus a one-shot trial of /boot/bench/test/.
+#
+# `btbench-kernel try` sets bench_try=1 in uboot.env (fw_setenv) and reboots. This script clears
+# it and saves the environment *before* it loads the test kernel, so whatever that kernel does
+# (panic, hang, no network), the next reset boots the good kernel: a panic reboots by itself
+# (panic=10), a hang is ended by the SoC watchdog armed below, anything else by a power cycle.
+#
+# The firmware has loaded config.txt's device tree at ${fdt_addr} and put the kernel command line
+# (cmdline.txt) into its /chosen/bootargs. Both slots boot with that command line; the test slot
+# adds panic=10, btbench.slot=test and whatever is in the env variable bench_bootargs
+# (fw_setenv bench_bootargs "dyndbg=..."). The test slot's own device tree, if it has one,
+# replaces the firmware's, and U-Boot writes bootargs into its /chosen when it boots.
+
+if test "${bench_try}" = "1"; then
+	setenv bench_try 0
+	# Never boot the test kernel without having made sure the next boot will not.
+	if saveenv; then
+		echo "btbench: trial boot of bench/test/ (this boot only)"
+		fdt addr ${fdt_addr} && fdt get value bootargs /chosen bootargs
+		setenv bootargs "${bootargs} panic=10 btbench.slot=test ${bench_bootargs}"
+		# The firmware's board serial (the source of the bench's Bluetooth address); it is put into
+		# the test slot's device tree, which does not have it otherwise.
+		setenv bench_serial
+		fdt get value bench_serial / serial-number
+
+		if fatload @@BOOT_MEDIA@@ 0:1 ${kernel_addr_r} bench/test/@@KERNEL_IMAGETYPE@@; then
+			setenv bench_fdt ${fdt_addr}
+			if test -e @@BOOT_MEDIA@@ 0:1 bench/test/board.dtb; then
+				if fatload @@BOOT_MEDIA@@ 0:1 ${fdt_addr_r} bench/test/board.dtb; then
+					setenv bench_fdt ${fdt_addr_r}
+					fdt addr ${fdt_addr_r}
+					fdt resize 4096
+					if test -n "${bench_serial}"; then
+						fdt set / serial-number "${bench_serial}"
+					fi
+				fi
+			fi
+
+			# The SoC watchdog (16 s at most), for a kernel that hangs before systemd takes the
+			# watchdog over; the kernel's bcm2835_wdt keeps it fed from its probe on. A U-Boot
+			# without the wdt command or driver just skips this.
+			if wdt dev watchdog@7e100000; then
+				wdt start 15000
+			fi
+
+			@@KERNEL_BOOTCMD@@ ${kernel_addr_r} - ${bench_fdt}
+
+			wdt stop
+			echo "btbench: the test kernel did not start; booting the good one"
+		else
+			echo "btbench: no bench/test/@@KERNEL_IMAGETYPE@@; booting the good kernel"
+		fi
+	else
+		echo "btbench: could not save the environment; not booting the test kernel"
+	fi
+fi
+
+fdt addr ${fdt_addr} && fdt get value bootargs /chosen bootargs
+fatload @@BOOT_MEDIA@@ 0:1 ${kernel_addr_r} @@KERNEL_IMAGETYPE@@
+if test ! -e @@BOOT_MEDIA@@ 0:1 uboot.env; then saveenv; fi;
+@@KERNEL_BOOTCMD@@ ${kernel_addr_r} - ${fdt_addr}

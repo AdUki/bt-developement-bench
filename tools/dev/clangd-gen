@@ -1,0 +1,88 @@
+#!/bin/bash
+# clangd-gen — make clangd understand a dev tree that is cross-compiled with the Yocto SDK.
+#
+#   tools/dev/clangd-gen <srcdir> [<builddir>] [--sdk DIR]
+#
+# The compile_commands.json of a make bluez/pipewire/wireplumber build (symlinked into the
+# source tree) holds the SDK's GCC command lines. clangd parses them with clang, which refuses
+# a few GCC-only flags outright ("unknown argument") and drops the whole file's diagnostics
+# with them. This writes <srcdir>/.clangd, which removes those flags before clangd sees them:
+#
+#   -mthumb-interwork, -fcanon-prefix-map, -mtls-dialect=*, -fzero-call-used-regs=*
+#                         clang errors on these for ARM
+#   -fstack-clash-protection, -feliminate-unused-debug-types
+#                         accepted but unused, a warning on every file
+#   -f{macro,debug,file}-prefix-map=*
+#                         harmless, but they point into the SDK and only add noise
+#
+# The ARM tune flags (-marm -mfpu=vfp -mfloat-abi=hard -mcpu=arm1176jzf-s) stay: clang knows
+# them, and they are what makes clangd see the right target.
+#
+# clangd also needs to be allowed to ask the cross gcc for its target and system headers, which
+# is a clangd command-line flag (--query-driver) rather than a .clangd setting; the glob for it
+# is printed at the end. Add it to your editor's clangd arguments once.
+
+set -euo pipefail
+
+usage() {
+	echo "Usage: $(basename "$0") <srcdir> [<builddir>] [--sdk DIR]" >&2
+	exit 2
+}
+
+src=""
+build=""
+sdk=""
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--sdk) [ $# -ge 2 ] || usage; sdk=$2; shift 2 ;;
+	--sdk=*) sdk=${1#*=}; shift ;;
+	-h|--help) usage ;;
+	-*) echo "Unknown option: $1" >&2; usage ;;
+	*)
+		if [ -z "$src" ]; then src=$1
+		elif [ -z "$build" ]; then build=$1
+		else usage
+		fi
+		shift ;;
+	esac
+done
+
+[ -n "$src" ] || usage
+[ -d "$src" ] || { echo "clangd-gen: $src is not a directory." >&2; exit 1; }
+src=$(cd "$src" && pwd)
+
+db_line=""
+if [ -n "$build" ]; then
+	build=$(cd "$build" 2>/dev/null && pwd) || {
+		echo "clangd-gen: build dir $build does not exist (yet)." >&2; exit 1; }
+	[ -f "$build/compile_commands.json" ] || \
+		echo "clangd-gen: note: no compile_commands.json in $build yet; build first." >&2
+	db_line="  CompilationDatabase: $build"
+fi
+
+{
+	echo "# Written by tools/dev/clangd-gen (bt-developement-bench); rerun 'make clangd' to refresh."
+	echo "# Removes the GCC-only flags of the Yocto cross compiler that clang rejects."
+	echo "CompileFlags:"
+	[ -z "$db_line" ] || echo "$db_line"
+	echo "  Remove:"
+	for f in -mthumb-interwork -fcanon-prefix-map "-mtls-dialect=*" "-fzero-call-used-regs=*" \
+		 -fstack-clash-protection -feliminate-unused-debug-types \
+		 "-fmacro-prefix-map=*" "-fdebug-prefix-map=*" "-ffile-prefix-map=*"; do
+		echo "    - \"$f\""
+	done
+	echo "  Add:"
+	echo "    - \"-Wno-unknown-warning-option\""
+	echo "    - \"-Wno-unused-command-line-argument\""
+} > "$src/.clangd"
+
+echo "wrote $src/.clangd"
+
+# The cross compilers live in sysroots/<host>/usr/bin/<target>/ of an installed SDK.
+base="${sdk:-<sdk dir>}/sysroots/*/usr/bin/*"
+glob="$base/*-gcc,$base/*-g++"
+if [ -n "$sdk" ] && ! compgen -G "$sdk/sysroots/*/usr/bin/*/*-gcc" >/dev/null; then
+	echo "clangd-gen: note: no cross gcc under $sdk yet (make sdk)." >&2
+fi
+echo "clangd needs:  --query-driver=$glob"

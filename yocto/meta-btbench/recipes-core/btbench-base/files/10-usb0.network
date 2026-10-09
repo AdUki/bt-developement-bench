@@ -1,0 +1,24 @@
+# The USB gadget link to the PC (btbench-gadget). The board is 10.55.0.1 and hands the PC an
+# address of its own over DHCP, so plugging the cable in is all the PC needs.
+#
+# No router and no DNS server in the lease: the PC keeps its own default route and resolver, and
+# only 10.55.0.0/24 goes over the cable. NetworkManager treats the link like any wired one; its
+# profile sticks, since the PC's end of the link has a fixed MAC (derived from the board's serial).
+[Match]
+Name=usb0
+
+[Network]
+Address=10.55.0.1/24
+DHCPServer=yes
+# <hostname>.local, answered by systemd-resolved.
+MulticastDNS=yes
+
+[DHCPServer]
+PoolOffset=2
+PoolSize=8
+EmitRouter=no
+EmitDNS=no
+
+[Link]
+# The link is up only while a PC is plugged in; boot must not wait for it.
+RequiredForOnline=no

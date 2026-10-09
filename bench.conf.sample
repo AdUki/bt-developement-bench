@@ -1,0 +1,26 @@
+# bt-developement-bench — per-machine settings for the Makefile.
+#
+# Copy to bench.conf (not tracked by git) and edit, or let `make configure` write it.
+# Every value here can also be given on the make command line: make bluez BOARD=rpi4.
+
+# Which board (boards/<name>.mk).
+BOARD ?= rpi0w
+
+# Which kernel the image boots and `make linux` builds:
+#   next  bluetooth-next from src/linux (default; the image kernel comes from the same tree)
+#   rpi   linux-raspberrypi (the Raspberry Pi fork), for comparison
+KERNEL ?= next
+
+# Where the board is reachable. 10.55.0.1 is the USB gadget link (data micro-USB port to the
+# PC); btbench.local works over Wi-Fi as well.
+TARGET ?= root@10.55.0.1
+
+# Upstream checkouts that `make src` makes git worktrees from (src/<comp>, branch "bench").
+# A missing one is cloned fresh instead.
+BLUEZ_UPSTREAM       ?= $(HOME)/projects/bluez
+PIPEWIRE_UPSTREAM    ?= $(HOME)/projects/pipewire
+WIREPLUMBER_UPSTREAM ?= $(HOME)/projects/wireplumber
+LINUX_UPSTREAM       ?= $(HOME)/projects/linux
+
+# Override a dev tree entirely (it is then used as is, not created by `make src`):
+# BLUEZ_SRC ?= $(HOME)/projects/bluez-topic

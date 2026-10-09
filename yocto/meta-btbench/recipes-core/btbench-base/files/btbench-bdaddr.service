@@ -1,0 +1,16 @@
+[Unit]
+Description=Keep Bluetooth pairings on /data and give the controller its own address
+# Pulled in by bluetooth.service itself ([Install] below) and ordered before it: the pairings must be
+# in /var/lib/bluetooth, and the controller must have its address, before bluetoothd reads either.
+# bluetooth.service is started by udev the moment hci0 appears, which can be well before
+# multi-user.target; this way the ordering holds however it is started.
+After=btbench-data.service data.mount
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/btbench-bdaddr
+
+[Install]
+WantedBy=bluetooth.service

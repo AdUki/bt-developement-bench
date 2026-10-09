@@ -1,0 +1,178 @@
+#!/bin/bash
+# bbvars — cache how bitbake configures a recipe, so a build outside bitbake (make bluez,
+# make pipewire, ...) configures the dev tree the same way the image's package was.
+#
+#   tools/dev/bbvars <recipe> [--builddir DIR] [--out FILE]
+#
+# Runs `bitbake -e <recipe>` (a parse, no build) and writes a bash file to source:
+#
+#   BB_PN=bluez5
+#   BB_PV=5.87+git
+#   BB_KIND=autotools                        autotools | meson
+#   BB_CONFARGS=( --enable-test ... )        EXTRA_OECONF (autotools) or EXTRA_OEMESON (meson)
+#   BB_NOINST_TOOLS=( tools/btgatt-client )  NOINST_TOOLS: build-relative paths (bluez5 only)
+#
+# BB_CONFARGS is the recipe's own options, PACKAGECONFIG included: poky's autotools and meson
+# classes append PACKAGECONFIG_CONFARGS to EXTRA_OECONF / EXTRA_OEMESON, so it is not added a
+# second time here. What bitbake adds around them (CONFIGUREOPTS, MESONOPTS: --host, --prefix,
+# the cross file) is left out on purpose: the SDK's environment provides its own equivalents.
+# Arguments that name a path of the bitbake build (TMPDIR, WORKDIR, the recipe sysroot) are
+# dropped with a warning, since none of those exist for a build with the SDK. A --buildtype
+# from a meson recipe is dropped too: the dev build picks its own (debugoptimized).
+#
+# The values are split the way the shell running bitbake's configure would split them, so
+# -Dsession-managers='[]' arrives as -Dsession-managers=[].
+#
+# Build dir: --builddir, else $BBVARS_BUILDDIR, else the bitbake environment this runs in
+# (the Makefile calls it through $(BB), which has sourced oe-init-build-env already), else
+# yocto/build-$BOARD (BOARD defaults to rpi0w).
+
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+
+usage() {
+	echo "Usage: $(basename "$0") <recipe> [--builddir DIR] [--out FILE]" >&2
+	exit 2
+}
+
+recipe=""
+builddir="${BBVARS_BUILDDIR:-}"
+out=""
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--builddir) [ $# -ge 2 ] || usage; builddir=$2; shift 2 ;;
+	--builddir=*) builddir=${1#*=}; shift ;;
+	--out) [ $# -ge 2 ] || usage; out=$2; shift 2 ;;
+	--out=*) out=${1#*=}; shift ;;
+	-h|--help) usage ;;
+	-*) echo "Unknown option: $1" >&2; usage ;;
+	*) [ -z "$recipe" ] || usage; recipe=$1; shift ;;
+	esac
+done
+
+[ -n "$recipe" ] || usage
+
+# The output path is taken before oe-init-build-env changes the working directory.
+if [ -n "$out" ]; then
+	case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+fi
+
+# Use the bitbake environment we were started in when it is the one asked for (or none was
+# asked for); otherwise set one up for the build dir.
+if [ -z "$builddir" ] && [ -n "${BUILDDIR:-}" ] && command -v bitbake >/dev/null; then
+	builddir=$BUILDDIR
+fi
+[ -n "$builddir" ] || builddir="$ROOT/yocto/build-${BOARD:-rpi0w}"
+case "$builddir" in /*) ;; *) builddir="$PWD/$builddir" ;; esac
+
+if [ ! -f "$builddir/conf/local.conf" ]; then
+	echo "bbvars: $builddir is not a configured build dir (no conf/local.conf)." >&2
+	echo "        'make image' or 'make bitbake' sets it up." >&2
+	exit 1
+fi
+
+if [ "${BUILDDIR:-}" != "$builddir" ] || ! command -v bitbake >/dev/null; then
+	# oe-init-build-env reads its own location from BASH_SOURCE and takes no options; the
+	# build dir's auto.conf sets MACHINE, so it does not have to be in the environment.
+	set +u
+	# shellcheck disable=SC1091
+	. "$ROOT/yocto/layers/poky/oe-init-build-env" "$builddir" >/dev/null
+	set -u
+fi
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+if ! bitbake -e "$recipe" > "$tmp" 2> "$tmp.err"; then
+	cat "$tmp.err" >&2
+	rm -f "$tmp.err"
+	echo "bbvars: 'bitbake -e $recipe' failed in $builddir." >&2
+	exit 1
+fi
+rm -f "$tmp.err"
+
+python3 -I - "$recipe" "$tmp" "$builddir" "${out:-/dev/stdout}" <<'EOF'
+import re
+import shlex
+import sys
+import time
+
+recipe, envfile, builddir, out = sys.argv[1:5]
+
+# bitbake -e writes each variable as VAR="value" (or export VAR="value") with " escaped as \",
+# $ as \$, and each newline in the value as " \" plus a newline.
+start = re.compile(r'^(?:export )?([A-Za-z0-9_+.:/-]+)="(.*)$')
+values = {}
+with open(envfile, errors="replace") as f:
+    lines = iter(f.read().split("\n"))
+    for line in lines:
+        m = start.match(line)
+        if not m:
+            continue
+        name, rest = m.group(1), m.group(2)
+        parts = [rest]
+        while parts[-1].endswith(" \\"):
+            parts[-1] = parts[-1][:-2]
+            try:
+                parts.append(next(lines))
+            except StopIteration:
+                break
+        val = "\n".join(parts)
+        if val.endswith('"'):
+            val = val[:-1]
+        val = val.replace('\\"', '"').replace("\\$", "$")
+        values[name] = val
+
+def get(name):
+    return values.get(name, "")
+
+if "MESONOPTS" in values:
+    kind, confvar = "meson", "EXTRA_OEMESON"
+elif "CONFIGUREOPTS" in values:
+    kind, confvar = "autotools", "EXTRA_OECONF"
+else:
+    sys.exit("bbvars: %s inherits neither autotools nor meson; nothing to cache." % recipe)
+
+# Paths that only exist inside this bitbake build.
+host_paths = [p for p in (get("WORKDIR"), get("STAGING_DIR"), get("TMPDIR"), get("TOPDIR"))
+              if p]
+host_paths.append("recipe-sysroot")
+
+args = []
+for a in shlex.split(get(confvar)):
+    if any(p in a for p in host_paths):
+        print("bbvars: dropped %s (a path of the bitbake build)" % a, file=sys.stderr)
+        continue
+    if kind == "meson" and (a.startswith("--buildtype") or a.startswith("-Dbuildtype")):
+        continue
+    args.append(a)
+
+tools = shlex.split(get("NOINST_TOOLS"))
+
+def arr(items):
+    if not items:
+        return "()"
+    return "(\n" + "".join("  %s\n" % shlex.quote(i) for i in items) + ")"
+
+text = (
+    "# Written by tools/dev/bbvars from `bitbake -e %s` in %s\n"
+    "# on %s. Regenerated by make when the recipe or its config changes; do not edit.\n"
+    "BB_PN=%s\n"
+    "BB_PV=%s\n"
+    "BB_KIND=%s\n"
+    "BB_CONFARGS=%s\n"
+    "BB_NOINST_TOOLS=%s\n"
+) % (recipe, builddir, time.strftime("%Y-%m-%d %H:%M:%S"),
+     shlex.quote(get("PN")), shlex.quote(get("PV")), kind, arr(args), arr(tools))
+
+if out == "/dev/stdout":
+    sys.stdout.write(text)
+else:
+    tmp = out + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    import os
+    os.replace(tmp, out)
+EOF

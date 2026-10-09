@@ -1,0 +1,50 @@
+# =============================================================================
+#  bt-developement-bench — device settings
+#
+#  Template. `make configure` copies this to btbench-device.conf and edits that
+#  copy, which is NOT tracked by git: it holds a root password and a Wi-Fi PSK
+#  in the clear, and git history keeps whatever it is once given.
+#
+#  Baked into the image at build time. After editing:  make image
+# =============================================================================
+
+# --- Identity ----------------------------------------------------------------
+# The board answers on <hostname>.local (mDNS, on the USB link and Wi-Fi).
+BTBENCH_HOSTNAME ?= "btbench"
+
+# --- Login -------------------------------------------------------------------
+# Root password, in the clear (bitbake hashes it into /etc/shadow). Keep the board on the USB
+# link or a lab network: the web API has no authentication.
+BTBENCH_ROOT_PASSWORD ?= "btbench"
+# A public key authorized for root. The deploy targets (make deploy-*, make linux-test) log in
+# with it; without one every deploy asks for the password.
+BTBENCH_SSH_PUBKEY ?= ""
+
+# --- Wi-Fi -------------------------------------------------------------------
+# A first network to join. Empty is fine: with no network that answers, the board opens its setup
+# AP (btbench-XXXX, password below) and its page at http://10.42.0.1 adds one. Networks added
+# there are kept on the board (/data), across deploys and kernel swaps.
+BTBENCH_WIFI_SSID ?= ""
+BTBENCH_WIFI_PSK ?= ""
+BTBENCH_WIFI_COUNTRY ?= "SK"
+BTBENCH_AP_PSK ?= "btbench-setup"
+
+# --- USB gadget --------------------------------------------------------------
+# What the data micro-USB port offers the PC: ecm (Linux, macOS) or ncm (also Windows 11), each
+# with a serial console (ttyGS0) next to it; off leaves the port to the board (USB host, e.g. for
+# a Bluetooth dongle). ecm is the default: on the Zero W's mainline dwc2, NCM enumerated and got
+# DHCP through, then the PC's cdc_ncm stalled ("transmit queue timed out") on the first real
+# traffic.
+BTBENCH_GADGET ?= "ecm"
+
+# --- Audio -------------------------------------------------------------------
+# The audio stack at first boot: pipewire, bluealsa or none (bluetoothd alone). Switch at any
+# time with `bench audio <mode>`; the choice is kept on the board.
+BTBENCH_AUDIO_MODE ?= "pipewire"
+# aptX and LDAC (libfreeaptx, ldacbt) in PipeWire and BlueALSA.
+BTBENCH_EXTRA_CODECS ?= "0"
+# AAC (fdk-aac, LICENSE_FLAGS "commercial"; accepting it is yours to decide).
+BTBENCH_AAC ?= "0"
+
+# --- Web console -------------------------------------------------------------
+BTBENCH_HTTP_PORT ?= "80"

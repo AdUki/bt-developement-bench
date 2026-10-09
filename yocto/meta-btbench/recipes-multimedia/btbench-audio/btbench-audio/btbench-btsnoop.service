@@ -1,0 +1,16 @@
+# The always-on HCI capture: a ring of btmon files in /data/btsnoop (see /usr/bin/btbench-btsnoop
+# for the settings; override them in /data/btbench/btsnoop.env). btbenchd lists, downloads and
+# analyses the files, and stops and starts this unit for PUT /api/capture.
+[Unit]
+Description=btmon capture ring in /data/btsnoop
+RequiresMountsFor=/data
+After=local-fs.target
+
+[Service]
+EnvironmentFile=-/data/btbench/btsnoop.env
+ExecStart=/usr/bin/btbench-btsnoop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

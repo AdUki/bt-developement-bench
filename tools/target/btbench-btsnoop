@@ -1,0 +1,116 @@
+#!/bin/sh
+# btbench-btsnoop — the always-on HCI capture: a ring of btmon files (btbench-btsnoop.service).
+#
+# Every HCI packet of every controller, plus the kernel's and bluetoothd's monitor-channel
+# messages, goes to $DIR/hci-<YYYYmmdd-HHMMSS>.btsnoop; the newest file is the one being written.
+# When it passes ROTATE_SIZE, a new btmon starts on the next file and the old one is stopped a
+# second later, so there is no gap (a few packets land in both files). Files beyond ROTATE_COUNT
+# are deleted, oldest first.
+#
+# Upstream btmon has no rotation of its own (--write-rotate-* is an out-of-tree patch), hence this
+# script around plain `btmon -w`.
+#
+# Settings, from the environment (the unit reads /data/btbench/btsnoop.env if it exists):
+#   BTSNOOP_DIR     where the files go (default /data/btsnoop)
+#   ROTATE_SIZE     bytes, or with a K/M/G suffix (default 16M)
+#   ROTATE_COUNT    files kept, the one being written included (default 8)
+#   CHECK_INTERVAL  seconds between size checks (default 5)
+#   BTMON_ARGS      extra btmon options, e.g. "-i 0" to capture one controller only
+
+set -u
+
+DIR=${BTSNOOP_DIR:-/data/btsnoop}
+ROTATE_SIZE=${ROTATE_SIZE:-16M}
+ROTATE_COUNT=${ROTATE_COUNT:-8}
+CHECK_INTERVAL=${CHECK_INTERVAL:-5}
+BTMON_ARGS=${BTMON_ARGS:-}
+
+die() {
+	echo "btbench-btsnoop: $*" >&2
+	exit 1
+}
+
+to_bytes() {
+	case "$1" in
+	*[kK]) echo $((${1%?} * 1024)) ;;
+	*[mM]) echo $((${1%?} * 1024 * 1024)) ;;
+	*[gG]) echo $((${1%?} * 1024 * 1024 * 1024)) ;;
+	*) echo $(($1)) ;;
+	esac
+}
+
+ROTATE_BYTES=$(to_bytes "$ROTATE_SIZE") || die "bad ROTATE_SIZE '$ROTATE_SIZE'"
+[ "$ROTATE_BYTES" -gt 0 ] || die "bad ROTATE_SIZE '$ROTATE_SIZE'"
+[ "$ROTATE_COUNT" -ge 1 ] 2>/dev/null || die "bad ROTATE_COUNT '$ROTATE_COUNT'"
+command -v btmon > /dev/null || die "btmon not found"
+mkdir -p "$DIR" || die "cannot create $DIR"
+
+cur_pid=""
+cur_file=""
+
+# Starts btmon on a fresh file; sets new_pid and new_file. btmon decodes what it captures to
+# stdout as well, which nobody reads here: /dev/null, not the journal.
+start_btmon() {
+	new_file=$DIR/hci-$(date +%Y%m%d-%H%M%S).btsnoop
+	while [ -e "$new_file" ]; do
+		sleep 1
+		new_file=$DIR/hci-$(date +%Y%m%d-%H%M%S).btsnoop
+	done
+	# shellcheck disable=SC2086 # BTMON_ARGS is a list of options
+	btmon -w "$new_file" $BTMON_ARGS < /dev/null > /dev/null 2>&1 &
+	new_pid=$!
+	sleep 1
+	kill -0 "$new_pid" 2>/dev/null || die "btmon -w $new_file exited at once"
+}
+
+# Deletes the oldest captures beyond ROTATE_COUNT. The names sort by time.
+prune() {
+	n=$(ls -1 "$DIR"/hci-*.btsnoop 2>/dev/null | wc -l)
+	[ "$n" -gt "$ROTATE_COUNT" ] || return 0
+	ls -1 "$DIR"/hci-*.btsnoop | sort | head -n $((n - ROTATE_COUNT)) |
+	while read -r f; do
+		[ "$f" = "$cur_file" ] || rm -f "$f"
+	done
+}
+
+stop() {
+	if [ -n "$cur_pid" ]; then
+		kill "$cur_pid" 2>/dev/null
+		wait "$cur_pid" 2>/dev/null
+	fi
+	exit 0
+}
+trap stop TERM INT HUP
+
+start_btmon
+cur_pid=$new_pid
+cur_file=$new_file
+prune
+echo "btbench-btsnoop: writing $cur_file (rotate at $ROTATE_BYTES bytes, keep $ROTATE_COUNT)"
+
+while :; do
+	# In the background, so a TERM is handled at once rather than after the sleep.
+	sleep "$CHECK_INTERVAL" &
+	wait $!
+
+	if ! kill -0 "$cur_pid" 2>/dev/null; then
+		wait "$cur_pid"
+		die "btmon exited (status $?) while writing $cur_file"
+	fi
+
+	# A capture deleted from under btmon (btbenchd's DELETE, or by hand) is rotated away as well:
+	# btmon would go on filling an unlinked file nobody can read.
+	size=$(stat -c %s "$cur_file" 2>/dev/null || echo -1)
+	if [ "$size" -ge 0 ] && [ "$size" -lt "$ROTATE_BYTES" ]; then
+		continue
+	fi
+
+	old_pid=$cur_pid
+	start_btmon
+	cur_pid=$new_pid
+	cur_file=$new_file
+	kill "$old_pid" 2>/dev/null
+	wait "$old_pid" 2>/dev/null
+	prune
+	echo "btbench-btsnoop: rotated to $cur_file"
+done

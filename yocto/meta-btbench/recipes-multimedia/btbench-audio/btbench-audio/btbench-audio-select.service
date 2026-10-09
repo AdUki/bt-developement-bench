@@ -1,0 +1,12 @@
+# Starts the audio mode stored on the board (/data/btbench/audio-mode, else the image's default).
+# The stacks' own units are not enabled: this is the only thing that starts one at boot.
+[Unit]
+Description=Start the stored audio mode (btbench-audio)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/btbench-audio boot
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=btbenchd: the Bluetooth bench's daemon and web console
+Documentation=http://localhost/api
+# It talks to BlueZ over D-Bus and waits for it if it is not there; ordered after it so the first
+# read of the adapter finds one.
+After=network.target bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/btbenchd --port @PORT@
+# The jobs runner's wpctl / pw-dump reach the system-wide PipeWire through this.
+Environment=PIPEWIRE_RUNTIME_DIR=/run/pipewire
+# Root, deliberately: the HCI monitor socket needs CAP_NET_RAW, the API restarts bluetooth.service
+# and writes /data/btbench, and the bench is a lab instrument on the gadget link or the lab LAN.
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

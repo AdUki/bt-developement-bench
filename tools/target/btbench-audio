@@ -1,0 +1,157 @@
+#!/bin/sh
+# btbench-audio — which audio stack runs on the board: pipewire, bluealsa or none.
+#
+#   btbench-audio get                       the running mode (the stored one when none runs)
+#   btbench-audio status                    JSON: {"mode":..,"modes":[..],"services":{..}}
+#   btbench-audio set <mode> [--restart-bt] switch, and remember it across reboots
+#   btbench-audio boot                      start the stored mode (btbench-audio-select.service)
+#
+# Each mode is a systemd target (btbench-audio-<mode>.target) that wants its stack's services.
+# The targets conflict with each other and the services are PartOf= their target, so starting one
+# target stops the other stack: PipeWire and BlueALSA both register A2DP endpoints and HFP
+# profiles with bluetoothd and must never run side by side. "none" is bluetoothd alone, for
+# bluetoothctl's endpoint/transport commands or BlueZ's test/ scripts.
+#
+# The mode is kept in /data/btbench/audio-mode. Without it, AUDIO_MODE from
+# /etc/btbench/device.env, then the image's default (BTBENCH_AUDIO_MODE at build time).
+#
+# Called by btbenchd and `bench`: no terminal, JSON on stdout, a one-line reason on stderr and a
+# non-zero exit on failure.
+
+set -u
+
+MODES="pipewire bluealsa none"
+STATE_DIR=${BTBENCH_DATA_DIR:-/data/btbench}
+MODE_FILE=$STATE_DIR/audio-mode
+DEVICE_ENV=/etc/btbench/device.env
+# Replaced by the btbench-audio recipe with BTBENCH_AUDIO_MODE.
+DEFAULT_MODE="@DEFAULT_MODE@"
+
+# Profiles whose connections belong to the audio stack: A2DP source/sink/AVDTP, HSP HS/AG,
+# HFP HF/AG, ASCS, BASS, PACS, CAS. Their links are dropped before the stack goes away.
+AUDIO_UUIDS='0000(110a|110b|110d|1108|1112|111e|111f|184e|184f|1850|1853)-'
+
+die() {
+	echo "btbench-audio: $*" >&2
+	exit 1
+}
+
+is_mode() {
+	case " $MODES " in
+	*" $1 "*) return 0 ;;
+	esac
+	return 1
+}
+
+stored_mode() {
+	m=""
+	[ -r "$MODE_FILE" ] && m=$(tr -d ' \t\r\n' < "$MODE_FILE")
+	if ! is_mode "$m" && [ -r "$DEVICE_ENV" ]; then
+		m=$(sed -n 's/^AUDIO_MODE=["'\'']\{0,1\}\([a-z]*\).*/\1/p' "$DEVICE_ENV" | tail -n 1)
+	fi
+	is_mode "$m" || m=$DEFAULT_MODE
+	is_mode "$m" || m=pipewire
+	echo "$m"
+}
+
+active_mode() {
+	for m in $MODES; do
+		if systemctl -q is-active "btbench-audio-$m.target" 2>/dev/null; then
+			echo "$m"
+			return 0
+		fi
+	done
+	return 1
+}
+
+current_mode() {
+	active_mode || stored_mode
+}
+
+service_state() {
+	s=$(systemctl is-active "$1.service" 2>/dev/null)
+	echo "${s:-unknown}"
+}
+
+# Drop the links that carry audio, so the device reconnects to the new stack's endpoints instead
+# of keeping a transport whose owner is about to vanish.
+disconnect_audio() {
+	systemctl -q is-active bluetooth.service 2>/dev/null || return 0
+	command -v bluetoothctl > /dev/null || return 0
+
+	timeout 10 bluetoothctl devices Connected 2>/dev/null |
+	while read -r kind addr _; do
+		[ "$kind" = Device ] || continue
+		timeout 10 bluetoothctl info "$addr" 2>/dev/null | grep -qiE "$AUDIO_UUIDS" || continue
+		timeout 15 bluetoothctl disconnect "$addr" > /dev/null 2>&1 ||
+			echo "btbench-audio: could not disconnect $addr" >&2
+	done
+}
+
+cmd_status() {
+	mode=$(current_mode)
+	modes=""
+	for m in $MODES; do
+		modes="$modes${modes:+,}\"$m\""
+	done
+	printf '{"mode":"%s","modes":[%s],"services":{"pipewire":"%s","wireplumber":"%s","bluealsa":"%s"}}\n' \
+		"$mode" "$modes" "$(service_state pipewire)" "$(service_state wireplumber)" \
+		"$(service_state bluealsa)"
+}
+
+cmd_set() {
+	[ $# -ge 1 ] || die "usage: btbench-audio set <$(echo $MODES | tr ' ' '|')> [--restart-bt]"
+	mode=$1
+	shift
+	is_mode "$mode" || die "unknown mode '$mode' (one of: $MODES)"
+
+	restart_bt=0
+	for a in "$@"; do
+		case "$a" in
+		--restart-bt) restart_bt=1 ;;
+		*) die "unknown option '$a'" ;;
+		esac
+	done
+
+	mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
+	printf '%s\n' "$mode" > "$MODE_FILE.tmp" && mv -f "$MODE_FILE.tmp" "$MODE_FILE" ||
+		die "cannot write $MODE_FILE"
+
+	[ "$(active_mode)" = "$mode" ] || disconnect_audio
+
+	systemctl start "btbench-audio-$mode.target" ||
+		die "starting btbench-audio-$mode.target failed (journalctl -b -u btbench-audio-$mode.target)"
+
+	# bluetoothd forgets the old stack's endpoints and profiles as their owner leaves the bus, but
+	# a restart also clears whatever state that stack had left on the devices and the adapter.
+	if [ "$restart_bt" = 1 ]; then
+		systemctl restart bluetooth.service || die "restarting bluetooth.service failed"
+	fi
+}
+
+cmd_boot() {
+	mode=$(stored_mode)
+	# --no-block: this runs inside a unit during boot; the target's services start on their own.
+	systemctl start --no-block "btbench-audio-$mode.target" ||
+		die "starting btbench-audio-$mode.target failed"
+}
+
+case "${1:-}" in
+get)
+	current_mode
+	;;
+status)
+	cmd_status
+	;;
+set)
+	shift
+	cmd_set "$@"
+	;;
+boot)
+	cmd_boot
+	;;
+*)
+	echo "usage: btbench-audio get | status | set <$(echo $MODES | tr ' ' '|')> [--restart-bt]" >&2
+	exit 2
+	;;
+esac

@@ -1,0 +1,12 @@
+# Template for yocto/build-<board>/conf/bblayers.conf. The Makefile fills the placeholder below
+# with the absolute paths of the cloned layers — the shared ones plus the BSP layer of the
+# selected BOARD — so this file stays portable across checkouts.
+
+POKY_BBLAYERS_CONF_VERSION = "2"
+
+BBPATH = "${TOPDIR}"
+BBFILES ?= ""
+
+BBLAYERS ?= " \
+@LAYERS@
+"

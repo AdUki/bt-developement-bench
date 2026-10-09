@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Drives the fake BlueZ started by tools/fake-bluez/run: plays the other side of the radio link.
+#
+#   ctl incoming-pair 5C:E9:1E:22:40:01   # the Pixel pairs with us (agent RequestConfirmation)
+#   ctl incoming-pair F8:DF:15:0A:11:3C   # the JBL pairs with us (agent RequestAuthorization)
+#   ctl incoming-pair 00:1A:7D:DA:71:13   # the old speaker (agent RequestPinCode; it wants 1234)
+#   ctl display C7:3B:52:10:9A:1E         # agent DisplayPasskey, as a keyboard pairing does
+#   ctl drop F8:DF:15:0A:11:3C            # the link drops: out of range for 15 s
+#   ctl start-stream F8:DF:15:0A:11:3C    # its A2DP transport goes active / idle
+#   ctl stop-stream F8:DF:15:0A:11:3C
+#   ctl advs                              # what is registered with LEAdvertisingManager1
+#   ctl app-read 2a37                     # a remote device reads / writes / subscribes to a
+#   ctl app-write 12345678-1234-5678-1234-56789abcdef1 6869   # characteristic of the bench's
+#   ctl app-subscribe 2a37                # own GATT server (its values are logged by the fake)
+#   ctl reset                             # back to the initial world
+#   ctl objects                           # GetManagedObjects of org.bluez
+#   ctl busctl ...                        # anything else, on the private bus
+set -euo pipefail
+
+addr_file=${FAKE_BLUEZ_ADDR_FILE:-${XDG_RUNTIME_DIR:-/tmp}/fake-bluez.addr}
+[ -f "$addr_file" ] || { echo "no fake running ($addr_file missing): start tools/fake-bluez/run" >&2; exit 1; }
+addr=$(cat "$addr_file")
+
+bc() { busctl --address="$addr" "$@"; }
+hook() { bc --timeout=90 call org.bluez /org/btbench/fake org.btbench.Fake1 "$@"; }
+
+cmd=${1:-}; shift || true
+case "$cmd" in
+  incoming-pair) hook IncomingPair s "$1" ;;
+  display)       hook Display s "$1" ;;
+  drop)          hook DropLink s "$1" ;;
+  start-stream)  hook StartStream s "$1" ;;
+  stop-stream)   hook StopStream s "$1" ;;
+  advs)          hook Advertisements | sed -e 's/^s "//' -e 's/"$//' -e 's/\\n/\n/g' ;;
+  app-read)      hook AppRead s "$1" ;;
+  app-write)     hook AppWrite ss "$1" "$2" ;;
+  app-subscribe) hook AppSubscribe s "$1" ;;
+  reset)         hook Reset ;;
+  objects)       bc --json=pretty call org.bluez / org.freedesktop.DBus.ObjectManager GetManagedObjects ;;
+  busctl)        bc "$@" ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

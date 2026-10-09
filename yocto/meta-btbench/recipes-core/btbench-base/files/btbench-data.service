@@ -1,0 +1,16 @@
+[Unit]
+Description=Grow /data to fill the card and create the bench's directories on it
+# Before sysinit.target, so every ordinary service finds /data/btbench, /data/btsnoop and
+# /data/bluetooth in place. /data is mounted nofail (see base-files' fstab), and a nofail mount is
+# not ordered before local-fs.target: hence the explicit After=data.mount.
+DefaultDependencies=no
+After=data.mount local-fs.target systemd-remount-fs.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/btbench-data
+
+[Install]
+WantedBy=sysinit.target

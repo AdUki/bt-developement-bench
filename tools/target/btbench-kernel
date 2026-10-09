@@ -1,0 +1,283 @@
+#!/bin/sh
+# btbench-kernel — kernel trials on the board: boot a test kernel once, keep it or go back.
+#
+#   btbench-kernel status            JSON: running kernel, slot, the three slots' versions
+#   btbench-kernel try [--no-reboot] boot /boot/bench/test/ once (reboots now)
+#   btbench-kernel commit [--force]  make the test kernel the good one (the good one becomes prev)
+#   btbench-kernel rollback          swap the good and the previous kernel (reboot to run it)
+#   btbench-kernel prune             remove /lib/modules/*btbench* no slot uses any more
+#
+# Slots, on the FAT boot partition:
+#   good  /boot/<KIMAGE> and the device tree the firmware loads (/boot/<basename of DTBS>);
+#         what every normal boot runs
+#   test  /boot/bench/test/{<KIMAGE>,board.dtb,version}, put there by `make linux-deploy`
+#   prev  /boot/bench/prev/, the same layout: the good kernel before the last commit
+# The kernel release of the good slot is kept in /boot/bench/good.version (the image's kernel
+# has none until the first `try`: it is read from uname -r while the good kernel runs).
+# Modules live side by side in /lib/modules/<release>.
+#
+# TRY_METHOD (/etc/btbench/board.env):
+#   uboot-oneshot  fw_setenv bench_try=1; boot.scr clears it (saveenv) before it boots the test
+#                  slot, so the next reset, whatever caused it, boots the good kernel
+#   tryboot        the Raspberry Pi firmware's one-shot tryboot.txt (os_prefix=bench/test/);
+#                  needs the downstream kernel to pass the reboot flag. Untested.
+#
+# Which slot is running: btbench.slot=test on the kernel command line (the trial boot adds it).
+# Exit status non-zero with a one-line reason on stderr on failure; no terminal needed.
+
+set -eu
+
+BOOT=${BTBENCH_BOOT:-/boot}
+MODULES=${BTBENCH_MODULES:-/lib/modules}
+BOARD_ENV=${BTBENCH_BOARD_ENV:-/etc/btbench/board.env}
+CMDLINE=${BTBENCH_CMDLINE:-/proc/cmdline}
+
+KIMAGE=zImage
+DTBS=
+TRY_METHOD=uboot-oneshot
+# shellcheck disable=SC1090
+[ -r "$BOARD_ENV" ] && . "$BOARD_ENV"
+
+BENCH=$BOOT/bench
+TEST=$BENCH/test
+PREV=$BENCH/prev
+GOOD_VERSION=$BENCH/good.version
+# The device tree the firmware loads for the good slot (config.txt device_tree=, or its default).
+GOOD_DTB=
+for d in $DTBS; do
+	GOOD_DTB=$BOOT/$(basename "$d")
+	break
+done
+
+die() {
+	echo "btbench-kernel: $*" >&2
+	exit 1
+}
+
+# A JSON string, or null for an empty one. Versions and method names need no more escaping than
+# backslash and quote.
+jstr() {
+	if [ -z "$1" ]; then
+		printf null
+	else
+		printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+	fi
+}
+
+running() { uname -r; }
+
+slot() {
+	case " $(cat "$CMDLINE" 2>/dev/null) " in
+	*" btbench.slot=test "*) echo test ;;
+	*) echo good ;;
+	esac
+}
+
+# The good slot's kernel release: the running one while it runs, else what was recorded.
+good_version() {
+	if [ "$(slot)" = good ]; then
+		running
+	elif [ -r "$GOOD_VERSION" ]; then
+		cat "$GOOD_VERSION"
+	fi
+}
+
+slot_version() {
+	[ -r "$1/version" ] && cat "$1/version"
+	return 0
+}
+
+present() { [ -f "$1/$KIMAGE" ]; }
+
+pending_try() {
+	case $TRY_METHOD in
+	uboot-oneshot) [ "$(fw_printenv -n bench_try 2>/dev/null)" = 1 ] ;;
+	*) return 1 ;;
+	esac
+}
+
+record_good_version() {
+	if [ "$(slot)" = good ]; then
+		mkdir -p "$BENCH"
+		running > "$GOOD_VERSION.new" && mv "$GOOD_VERSION.new" "$GOOD_VERSION"
+	fi
+}
+
+# Copy a file onto the FAT partition so that a power cut leaves either the old or the new one:
+# a full copy next to it, then a rename.
+put() {
+	cp "$1" "$2.new"
+	sync
+	mv "$2.new" "$2"
+}
+
+cmd_status() {
+	t=false; present "$TEST" && t=true
+	p=false; present "$PREV" && p=true
+	pt=false; pending_try && pt=true
+	printf '{"running":%s,"slot":%s,"method":%s,"pending_try":%s,' \
+		"$(jstr "$(running)")" "$(jstr "$(slot)")" "$(jstr "$TRY_METHOD")" "$pt"
+	printf '"good":{"version":%s},' "$(jstr "$(good_version)")"
+	printf '"test":{"present":%s,"version":%s},' "$t" "$(jstr "$(slot_version "$TEST")")"
+	printf '"prev":{"present":%s,"version":%s}}\n' "$p" "$(jstr "$(slot_version "$PREV")")"
+}
+
+cmd_try() {
+	reboot=1
+	case ${1:-} in
+	--no-reboot) reboot=0 ;;
+	"") ;;
+	*) die "try: unknown option $1" ;;
+	esac
+
+	present "$TEST" || die "no test kernel in $TEST/$KIMAGE (make linux-deploy)"
+	record_good_version
+
+	case $TRY_METHOD in
+	uboot-oneshot)
+		command -v fw_setenv >/dev/null || die "fw_setenv missing (libubootenv-bin)"
+		# U-Boot creates uboot.env on the first boot through it (boot.scr's saveenv).
+		[ -f "$BOOT/uboot.env" ] || die "no $BOOT/uboot.env yet: boot once through U-Boot first"
+		fw_setenv bench_try 1 || die "fw_setenv bench_try 1 failed"
+		[ "$(fw_printenv -n bench_try 2>/dev/null)" = 1 ] || die "bench_try did not stick in uboot.env"
+		;;
+	tryboot)
+		[ -f "$BOOT/cmdline.txt" ] || die "no $BOOT/cmdline.txt"
+		# The firmware loads everything with os_prefix prepended: cmdline.txt and the dtb too.
+		printf '%s panic=10 btbench.slot=test\n' "$(tr -d '\n' < "$BOOT/cmdline.txt")" > "$TEST/cmdline.txt"
+		if [ -n "$GOOD_DTB" ]; then
+			if [ -f "$TEST/board.dtb" ]; then
+				cp "$TEST/board.dtb" "$TEST/$(basename "$GOOD_DTB")"
+			elif [ -f "$GOOD_DTB" ]; then
+				cp "$GOOD_DTB" "$TEST/"
+			fi
+		fi
+		{
+			echo "# Written by btbench-kernel try: boot bench/test/ once (tryboot)."
+			echo "[all]"
+			echo "include config.txt"
+			echo "os_prefix=bench/test/"
+			echo "kernel=$KIMAGE"
+		} > "$BOOT/tryboot.txt"
+		;;
+	*)
+		die "TRY_METHOD=$TRY_METHOD: this board has no trial boot"
+		;;
+	esac
+	sync
+
+	if [ "$reboot" = 0 ]; then
+		echo "trial armed ($TRY_METHOD): the next boot runs $TEST/$KIMAGE" >&2
+		return 0
+	fi
+	echo "rebooting into the test kernel ($TRY_METHOD)" >&2
+	case $TRY_METHOD in
+	tryboot) systemctl reboot "0 tryboot" ;;
+	*) systemctl reboot ;;
+	esac
+}
+
+cmd_commit() {
+	force=0
+	case ${1:-} in
+	--force) force=1 ;;
+	"") ;;
+	*) die "commit: unknown option $1" ;;
+	esac
+
+	present "$TEST" || die "no test kernel in $TEST/$KIMAGE"
+	if [ "$(slot)" != test ] && [ "$force" = 0 ]; then
+		die "not running the test kernel (slot good): try it first, or commit --force"
+	fi
+	[ -f "$BOOT/$KIMAGE" ] || die "no good kernel $BOOT/$KIMAGE"
+
+	if [ "$(slot)" = test ]; then
+		newver=$(running)
+	else
+		newver=$(slot_version "$TEST")
+	fi
+	oldver=$(good_version)
+
+	# good → prev
+	rm -rf "$PREV.new"
+	mkdir -p "$PREV.new"
+	cp "$BOOT/$KIMAGE" "$PREV.new/$KIMAGE"
+	[ -n "$GOOD_DTB" ] && [ -f "$GOOD_DTB" ] && cp "$GOOD_DTB" "$PREV.new/board.dtb"
+	[ -n "$oldver" ] && echo "$oldver" > "$PREV.new/version"
+	sync
+	rm -rf "$PREV"
+	mv "$PREV.new" "$PREV"
+
+	# test → good
+	put "$TEST/$KIMAGE" "$BOOT/$KIMAGE"
+	if [ -f "$TEST/board.dtb" ] && [ -n "$GOOD_DTB" ]; then
+		put "$TEST/board.dtb" "$GOOD_DTB"
+	fi
+	if [ -n "$newver" ]; then
+		echo "$newver" > "$GOOD_VERSION.new" && mv "$GOOD_VERSION.new" "$GOOD_VERSION"
+	else
+		rm -f "$GOOD_VERSION"
+	fi
+	rm -f "$TEST/$KIMAGE" "$TEST/board.dtb" "$TEST/version" "$TEST/cmdline.txt"
+	sync
+
+	echo "committed: good ${newver:-?} (was ${oldver:-?}, now prev)" >&2
+}
+
+cmd_rollback() {
+	present "$PREV" || die "no previous kernel in $PREV"
+	[ -f "$BOOT/$KIMAGE" ] || die "no good kernel $BOOT/$KIMAGE"
+
+	goodver=$(good_version)
+	prevver=$(slot_version "$PREV")
+
+	# good → swap, prev → good, swap → prev: a second rollback undoes the first.
+	rm -rf "$BENCH/swap"
+	mkdir -p "$BENCH/swap"
+	cp "$BOOT/$KIMAGE" "$BENCH/swap/$KIMAGE"
+	[ -n "$GOOD_DTB" ] && [ -f "$GOOD_DTB" ] && cp "$GOOD_DTB" "$BENCH/swap/board.dtb"
+	[ -n "$goodver" ] && echo "$goodver" > "$BENCH/swap/version"
+	sync
+
+	put "$PREV/$KIMAGE" "$BOOT/$KIMAGE"
+	if [ -f "$PREV/board.dtb" ] && [ -n "$GOOD_DTB" ]; then
+		put "$PREV/board.dtb" "$GOOD_DTB"
+	fi
+	if [ -n "$prevver" ]; then
+		echo "$prevver" > "$GOOD_VERSION.new" && mv "$GOOD_VERSION.new" "$GOOD_VERSION"
+	else
+		rm -f "$GOOD_VERSION"
+	fi
+	rm -rf "$PREV"
+	mv "$BENCH/swap" "$PREV"
+	sync
+
+	echo "rolled back: good ${prevver:-?}, prev ${goodver:-?}; reboot to run it" >&2
+}
+
+cmd_prune() {
+	gv=$(good_version)
+	if [ -z "$gv" ]; then
+		echo "prune: the good kernel's release is not known yet (run once in the good slot); skipped" >&2
+		return 0
+	fi
+	keep=" $(running) $gv $(slot_version "$TEST") $(slot_version "$PREV") "
+	for dir in "$MODULES"/*btbench*; do
+		[ -d "$dir" ] || continue
+		case $keep in
+		*" $(basename "$dir") "*) continue ;;
+		esac
+		echo "prune: removing $dir" >&2
+		rm -rf "$dir"
+	done
+}
+
+case ${1:-} in
+status) cmd_status ;;
+try) shift; cmd_try "$@" ;;
+commit) shift; cmd_commit "$@" ;;
+rollback) cmd_rollback ;;
+prune) cmd_prune ;;
+-h | --help | help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0" ;;
+*) die "usage: btbench-kernel status|try|commit|rollback|prune (--help)" ;;
+esac
