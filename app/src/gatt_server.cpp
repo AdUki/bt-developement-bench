@@ -5,6 +5,7 @@
 #include <systemd/sd-bus.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 
 #include "dbus_export.h"
@@ -70,6 +71,19 @@ bool read_value(const json& j, std::vector<uint8_t>* out, std::string* err, cons
   return true;
 }
 
+bool read_handle(const json& j, uint16_t* out, std::string* err, const std::string& what) {
+  if (!j.contains("handle") || j["handle"].is_null()) return true;
+  long v = -1;
+  if (j["handle"].is_number_integer()) v = j["handle"].get<long>();
+  else if (j["handle"].is_string()) v = std::strtol(j["handle"].get<std::string>().c_str(), nullptr, 0);
+  if (v < 1 || v > 0xFFFF) {
+    *err = what + ": handle is 1..0xffff";
+    return false;
+  }
+  *out = static_cast<uint16_t>(v);
+  return true;
+}
+
 bool read_uuid(const json& j, std::string* out, std::string* err, const std::string& what) {
   *out = uuid_full(j.at("uuid").get<std::string>());
   if (out->empty()) {
@@ -93,12 +107,14 @@ bool gatt_app_from_json(const json& j, GattAppDef* out, std::string* err) {
       GattServiceDef s;
       const std::string sw = "service " + std::to_string(si++);
       if (!read_uuid(sj, &s.uuid, err, sw)) return false;
+      if (!read_handle(sj, &s.handle, err, sw)) return false;
       s.primary = sj.value("primary", true);
       int ci = 0;
       for (const json& cj : sj.value("characteristics", json::array())) {
         GattCharDef c;
         const std::string cw = sw + " characteristic " + std::to_string(ci++);
         if (!read_uuid(cj, &c.uuid, err, cw)) return false;
+        if (!read_handle(cj, &c.handle, err, cw)) return false;
         if (!read_flags(cj, &c.flags, err, cw)) return false;
         if (c.flags.empty()) {
           *err = cw + ": no flags (read, write, notify, ...)";
@@ -127,6 +143,7 @@ bool gatt_app_from_json(const json& j, GattAppDef* out, std::string* err) {
           GattDescDef ds;
           const std::string dw = cw + " descriptor " + std::to_string(di++);
           if (!read_uuid(dj, &ds.uuid, err, dw)) return false;
+          if (!read_handle(dj, &ds.handle, err, dw)) return false;
           // BlueZ makes the CCC itself for a characteristic that notifies; one defined here too
           // would be a second.
           if (uuid_short(ds.uuid) == "2902") {
@@ -156,14 +173,20 @@ json gatt_app_json(const GattAppDef& d) {
     json chars = json::array();
     for (const GattCharDef& c : s.characteristics) {
       json descs = json::array();
-      for (const GattDescDef& ds : c.descriptors)
-        descs.push_back(json{{"uuid", uuid_short(ds.uuid)}, {"flags", ds.flags}, {"value", to_hex(ds.value)}});
+      for (const GattDescDef& ds : c.descriptors) {
+        json dj{{"uuid", uuid_short(ds.uuid)}, {"flags", ds.flags}, {"value", to_hex(ds.value)}};
+        if (ds.handle) dj["handle"] = ds.handle;
+        descs.push_back(std::move(dj));
+      }
       json cj{{"uuid", uuid_short(c.uuid)}, {"flags", c.flags}, {"value", to_hex(c.value)},
               {"descriptors", descs}};
+      if (c.handle) cj["handle"] = c.handle;
       if (c.counter) cj["counter"] = json{{"period_ms", c.period_ms}};
       chars.push_back(std::move(cj));
     }
-    services.push_back(json{{"uuid", uuid_short(s.uuid)}, {"primary", s.primary}, {"characteristics", chars}});
+    json sj{{"uuid", uuid_short(s.uuid)}, {"primary", s.primary}, {"characteristics", chars}};
+    if (s.handle) sj["handle"] = s.handle;
+    services.push_back(std::move(sj));
   }
   return json{{"services", services}};
 }
@@ -204,7 +227,8 @@ struct GattServer::Obj {
   std::string parent;  // the service of a characteristic, the characteristic of a descriptor
   bool primary = true;
   std::vector<std::string> flags;
-  // Under srv->m_.
+  // Under srv->m_. What was asked for, then what BlueZ allocated (it sets the property).
+  uint16_t handle = 0;
   std::vector<uint8_t> value;
   bool notifying = false;
   // Bus thread only.
@@ -234,9 +258,22 @@ int obj_get(sd_bus*, const char*, const char*, const char* property, sd_bus_mess
     return r;
   }
   std::lock_guard<std::mutex> lk(o->srv->values_mutex());
+  if (p == "Handle") return sd_bus_message_append(reply, "q", o->handle);
   if (p == "Value") return append_bytes(reply, o->value);
   if (p == "Notifying") return sd_bus_message_append(reply, "b", static_cast<int>(o->notifying));
   return -ENOENT;
+}
+
+int obj_set_handle(sd_bus*, const char*, const char*, const char*, sd_bus_message* value, void* userdata,
+                   sd_bus_error*) {
+  auto* o = static_cast<GattServer::Obj*>(userdata);
+  uint16_t h = 0;
+  const int r = sd_bus_message_read(value, "q", &h);
+  if (r < 0) return r;
+  std::lock_guard<std::mutex> lk(o->srv->values_mutex());
+  if (o->handle && o->handle != h) LOG_WARN("gatt-server: {} asked for handle {:#06x}, BlueZ gave {:#06x}", o->path, o->handle, h);
+  o->handle = h;
+  return 0;
 }
 
 // The options dict of ReadValue/WriteValue: the offset, and which device asks (for the log and the
@@ -358,6 +395,7 @@ void GattServer::build(sd_bus* bus) {
     so->iface = kServiceIface;
     so->uuid = s.uuid;
     so->primary = s.primary;
+    so->handle = s.handle;
     const std::string spath = so->path;
     objs.push_back(std::move(so));
     for (size_t ci = 0; ci < s.characteristics.size(); ++ci) {
@@ -370,6 +408,7 @@ void GattServer::build(sd_bus* bus) {
       co->parent = spath;
       co->flags = c.flags;
       co->value = c.value;
+      co->handle = c.handle;
       co->counter = c.counter;
       co->period_ms = c.period_ms;
       co->width = c.value.empty() ? 1 : c.value.size();
@@ -386,6 +425,7 @@ void GattServer::build(sd_bus* bus) {
         dobj->parent = cpath;
         dobj->flags = d.flags;
         dobj->value = d.value;
+        dobj->handle = d.handle;
         objs.push_back(std::move(dobj));
       }
     }
@@ -393,6 +433,7 @@ void GattServer::build(sd_bus* bus) {
   for (auto& o : objs) {
     auto vt = std::make_unique<VtableBuilder>();
     vt->prop("UUID", "s", obj_get, false);
+    vt->writable("Handle", "q", obj_get, obj_set_handle);
     if (o->iface == kServiceIface) {
       vt->prop("Primary", "b", obj_get, false);
     } else if (o->iface == kCharIface) {
@@ -521,7 +562,7 @@ json GattServer::state() const {
   json values = json::array();
   for (const auto& o : objs_) {
     if (o->iface == kServiceIface) continue;
-    values.push_back(json{{"path", o->path}, {"uuid", uuid_short(o->uuid)}, {"value", to_hex(o->value)},
+    values.push_back(json{{"path", o->path}, {"uuid", uuid_short(o->uuid)}, {"handle", o->handle}, {"value", to_hex(o->value)},
                           {"text", printable(o->value)}, {"notifying", o->notifying}});
   }
   return json{{"defined", defined_},

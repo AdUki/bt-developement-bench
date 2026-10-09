@@ -30,7 +30,8 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 | `gatt.notify` | `{address, path, handle, uuid, value, text, ts}` | every value change BlueZ reports: notifications, indications, and the result of reads |
 | `obex` | the body of `GET /api/obex` | on a change (a session, a transfer's progress, an incoming push), at most 4 Hz |
 | `audio.streams` | the body of `GET /api/audio/streams` (levels, titles) | 4 Hz while a stream runs, once more when the last ends |
-| `gatt.server` | `{op: "read\|write\|notify-on\|notify-off", path, uuid, value, offset, device}` | a remote device using the local GATT server |
+| `gatt.server` | `{op: "read\|write\|notify-on\|notify-off", path, uuid, value, offset, device}` | a remote device using the local GATT server (or the HID remote's) |
+| `hid.input` | `{address, device, event, type: "key\|rel\|abs", code, name, value, ts}` | an input event of a Bluetooth keyboard, remote or mouse connected to the board (`value` 1 down, 0 up, 2 repeat) |
 | `system` | the body of `GET /api/system/health` | 1 Hz |
 | `journal` | `{ts, prio, unit, ident, pid, msg}` | each new entry of the followed unit (`PUT /api/system/journal`) |
 | `job.<id>` | `{stream: "out\|err", line}`, then `{exit, killed}` | a job's output |
@@ -216,6 +217,33 @@ subscribed client is notified of it (an echo). BlueZ adds the CCC descriptors it
 `GET /api/le/gatt-server/example` — the example above; `DELETE /api/le/gatt-server` unregisters it.
 Remote reads and writes are reported on the `gatt.server` topic.
 
+### HID remote (HID over GATT, device role)
+
+The board as a Bluetooth LE remote control: a HID service (Report Map with a Consumer Control
+report, ID 1, and a boot-layout keyboard report, ID 2; HID Information, Control Point, Protocol
+Mode), Battery and Device Information (PnP ID), registered as a second GATT application under
+`/org/btbench/hid`, and an advertisement (appearance 0x0180 *Remote Control*, the HID UUID, its
+name) — both only while it is on. Hosts pair before they read the report map (it is
+encrypted-read), like with any HID device.
+
+| route | what |
+|---|---|
+| `GET /api/le/hid` | `{enabled, name, gatt: {state, error}, advertisement: {id, state, error}, subscribed: {consumer, keyboard}, battery, last: {key, action, ts}, keys: {consumer: [...], keyboard: [...]}}`; `subscribed` says a host turned on the report's notifications |
+| `PUT /api/le/hid` `{"enabled": true, "name": "btbench remote"}` | on (409 with BlueZ's reason if it refused the service or the advertisement), `{"enabled": false}` off; `{"battery": 0..100}` the level hosts show |
+| `POST /api/le/hid/key` `{"key": "volume_up", "action": "tap", "hold_ms": 80}` | `action` `tap` (press, hold, release), `down` or `up`. `key`: a name from `keys` — `play_pause`, `next`, `previous`, `volume_up`, `mute`, `home`, `back`, `menu`, `power`, …; `up`, `down`, `left`, `right`, `enter`, `escape`, … — one character (`a`, `7`), or a raw usage `consumer:0xcd` / `keyboard:0x28`. A key held down more than 10 s is released by itself; 409 while the remote is off |
+| `POST /api/le/hid/type` `{"text": "hello"}` | types printable ASCII (US layout), up to 256 characters |
+
+### HID host: input devices on the board
+
+BlueZ's input plugin (HoG for LE, HIDP for classic) makes a paired keyboard, remote or mouse a
+kernel input device; these routes show them and what they send. The event devices are read only
+while someone subscribes to `hid.input`, or with `media_keys` on.
+
+| route | what |
+|---|---|
+| `GET /api/hid` | `{media_keys, reading, devices: [{address, name, adapter, vendor, product, version, hid, nodes: [{event, name, hidraw}], report_descriptor (hex), summary: {applications: [{page, usage, name, report_ids}], reports: [{id, input_bits, output_bits, feature_bits}], items, bytes}}], recent: [the last 100 events]}` |
+| `PUT /api/hid` `{"media_keys": true}` | a connected device's play/pause, stop, next, previous and volume keys drive the connected phone's AVRCP player (the playing one first) and its link volume; kept in `/data/btbench/hid.json`, on by default |
+
 ## Media
 
 `GET /api/media` — the remote stream endpoints, the transports and the AVRCP players, in every
@@ -318,7 +346,7 @@ processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` with BlueALSA or none, `
 | `sweep` | `from`, `to` Hz, `seconds`, `log` (default true), `repeat` (default true), `level_db` |
 | `noise` | `color`: `white`, `pink` or `brown`; `level_db` is the RMS (default -20) |
 | `silence` | — |
-| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest), `title` (a name for the label) |
+| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest), `title` (a name for the label), `playlist`: `[{url, title}, ...]` (up to 500) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]` |
 | `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
 
 `sink` is `null` (listeners only), or `{"type": "pipewire", "target": ""}` (a node name, "" the
@@ -334,7 +362,8 @@ first), is the spec as normalised plus:
 {"id": 3, "label": "tone 1 kHz → bluez_output.F8_DF_15_0A_11_3C.1", "node": "btbench-stream-3",
  "state": "running", "error": "", "started_ms": 1791557330192, "ended_ms": null, "seconds": 12.3,
  "listeners": 1, "level": {"peak_db": [-12.0, -12.0], "rms_db": [-15.0, -15.0], "clipped": 0},
- "meta": {"name": "Groove Salad: ...", "title": "Artist - Song", "url": "<the URL played>"}}
+ "meta": {"name": "Groove Salad: ...", "title": "Artist - Song", "url": "<the URL played>"},
+ "track": 0, "track_seconds": 12.3, "paused": false}
 ```
 
 `state`: `starting`, `running`, `ended` (a file or sweep finished; a stream that plays nowhere and
@@ -342,12 +371,14 @@ was not listened to for 30 s ends too, saying so in `error`), `failed` (`error` 
 last words: a refused URL, a sink that went away), `stopped`. `level` is the last 250 ms after the
 gain. `meta` carries an ICY stream's station name and current title (from the decoder, or —
 when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to. `node` is
-the PipeWire stream's name (`wpctl status`, `pw-top`).
+the PipeWire stream's name (`wpctl status`, `pw-top`). A URL stream's `track` is its position in
+`source.playlist` (`meta.title` is that item's title), `track_seconds` how much of it has played;
+the stream ends after the last track.
 
 | route | what |
 |---|---|
 | `GET /api/audio/streams/{id}` | one stream |
-| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title}]}` (appended to the playlist), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits) |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
 

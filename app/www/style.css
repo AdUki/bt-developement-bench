@@ -545,10 +545,12 @@ canvas.cv-graph {
   .cv-split { grid-template-columns: minmax(0, 1fr); }
   .cv-body { height: 360px; }
 }
-@media (max-width: 560px) {
-  /* The coloured left edge already says TX/RX: the summary gets the room. */
-  .cv-head, .cv-row { grid-template-columns: 3.2rem 4.2rem 2.6rem minmax(0, 1fr); gap: 0 0.3rem; }
-  .cv-c-h, .cv-c-l, .cv-c-d { display: none; }
+@media (max-width: 760px) {
+  /* A phone: the table keeps every column and its summaries whole, and scrolls sideways as one
+     piece (header with rows); the body still scrolls up and down on its own. */
+  .cv-table { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+  .cv-head, .cv-body { min-width: 48rem; }
+  .cv-head, .cv-row { grid-template-columns: 3.6rem 6.2rem 1.7rem 3rem 3.5rem 2.8rem minmax(24rem, 1fr); }
 }
 
 /* Live packets (Monitor tab): the Capture viewer's table and detail, its rows appended as they
@@ -556,10 +558,7 @@ canvas.cv-graph {
 .lp-body { height: 360px; }
 .lp-note > span:last-child { grid-column: 2 / -1; font-style: italic; }
 #lp .cv-detail { max-height: 386px; }
-@media (max-width: 560px) {
-  /* The time column holds a clock with milliseconds here, not seconds since the first packet. */
-  #lp .cv-head, #lp .cv-row { grid-template-columns: 3.2rem 6.2rem 2.6rem minmax(0, 1fr); }
-}
+
 .tbl td.wrap { white-space: normal; min-width: 14rem; }
 .empty-card h3 { margin-bottom: 0.3rem; }
 .empty-card .hint { margin: 0; }

@@ -5,7 +5,8 @@ or `http://localhost:8080/` with `make run`. Plain HTML/JS/CSS from `app/www/`, 
 `make deploy-www` copies it to the board and a reload shows it. Light or dark follows the system.
 The REST and WebSocket API behind every button is in [api.md](api.md) (also served at `/api`).
 
-The console is six areas — **Devices**, **Audio**, **LE**, **Files**, **Traffic**, **System** —
+The console is seven areas — **Listen**, **Devices**, **Audio**, **LE**, **Files**, **Traffic**,
+**System** —
 in a rail on the left (a bar at the bottom on a phone). Each area has a few views in the bar at
 the top of the page; an area reopens on the view last used in it, and the address names the view
 (`#audio/play`, `#packets`), so it can be bookmarked. Settings that are set once (the adapter's
@@ -31,6 +32,19 @@ questions from a terminal.
 
 ## Areas and views
 
+**Listen** — the console as a music player, for using the board rather than testing it. *Now
+playing* shows whichever source plays: a connected phone (its AVRCP player — track, cover art,
+progress, previous / play–pause / next / stop, the link's volume) or the board itself (a radio
+station, or tracks from a UPnP media server). Chips switch between them when there are several.
+*Up next* is the phone's now-playing list, or the board's queue; a click plays that track. The
+*Library* has the phone's own folders and search (for a browsable player), the radio stations,
+and the media servers on the LAN: a station plays on its own, a track plays with the rest of its
+folder after it as the queue, and **+** adds a track to the end of the queue. The board plays to
+the output chosen in *Play to* — this browser, or a speaker the board has — and keeps playing its
+queue with the page closed. The volume slider sets what a person means: the Bluetooth speaker's
+own volume when the link has one, else the stream's level, or this browser's.
+
+
 **Devices** — the adapter bar: powered, visible, pairable, and under *Settings* the name others
 see, how long it stays visible, how pairing questions are answered (automatically, or asked here)
 and the IO capability (which decides the pairing method a peer gets). *Scan* finds devices; its
@@ -40,7 +54,12 @@ kind and signal, and the one action its state calls for — pair, connect, disco
 pairing. A click on the row opens the rest: class, appearance, TX power, services by name,
 manufacturer and service data, advertising flags; trust and remove (click twice); connect or
 disconnect one profile by UUID, and pair with a PIN for legacy devices; and shortcuts that open
-the GATT explorer, a file session or the AVDTP probe on that device.
+the GATT explorer, a file session or the AVDTP probe on that device. *Input devices*: the
+Bluetooth keyboards, remotes, mice and game pads connected to the board (BlueZ makes each a kernel
+input device): their report maps read out (Consumer Control, Keyboard, Mouse, … and the reports'
+sizes; the raw map under a disclosure), the last key pressed and a live log of presses, and
+*Media keys control what plays*: a remote's play/pause, next, previous and volume keys drive the
+connected phone's player, as with a speaker.
 
 **LE** — *GATT explorer*: pick a device, connect, and its services, characteristics and descriptors appear by handle with
 read, write (hex, or `text:…`; request / command / reliable as the flags allow) and notify; every
@@ -48,7 +67,12 @@ value change lands in the notification log; below it, the *advertisers in range*
 with what each advertisement carried. *Advertise*: a form for `LEAdvertisingManager1`
 (type, name, UUIDs, discoverable; under *More fields* manufacturer and service data as `id:hex`,
 appearance, includes, intervals, TX power, timeout); several at once, each with its state (an advertisement whose timeout ran out shows
-"released"). *GATT server*: an application as JSON (the Example button loads one with a
+"released"). *Remote control*: the board as a Bluetooth LE remote (HID over GATT). Switched on, it advertises
+under its name; pair it from a phone, TV or computer like any remote. The pad has power, mute,
+a d-pad with OK, back, home, menu, previous / play–pause / next, and volume and search rockers;
+a key stays down while it is held (a volume key repeats on the host as with a real remote), and
+with the pad focused the keyboard's arrows, Enter, Escape, Space and + / − press its keys. *Type*
+sends text as key presses; *Battery* sets the level hosts show. *GATT server*: an application as JSON (the Example button loads one with a
 heart-rate counter, a battery level and an echo characteristic), its live values, and a log of
 what remote devices read, wrote and subscribed to.
 

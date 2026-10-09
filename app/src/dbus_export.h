@@ -27,6 +27,10 @@ class VtableBuilder {
                                  emits_change ? SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE
                                               : SD_BUS_VTABLE_PROPERTY_CONST));
   }
+  // A property the peer may set (BlueZ writes back the GATT handle it allocated).
+  void writable(const std::string& name, const char* sig, sd_bus_property_get_t get, sd_bus_property_set_t set) {
+    v_.push_back(SD_BUS_WRITABLE_PROPERTY(keep(name), sig, get, set, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE));
+  }
   void method(const char* name, const char* sig, const char* result, sd_bus_message_handler_t h) {
     v_.push_back(SD_BUS_METHOD(name, sig, result, h, SD_BUS_VTABLE_UNPRIVILEGED));
   }

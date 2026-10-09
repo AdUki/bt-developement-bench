@@ -21,6 +21,7 @@ constexpr const char* kConsumerReport = "/svc0/chr4";
 constexpr const char* kKeyboardReport = "/svc0/chr5";
 constexpr const char* kBatteryLevel = "/svc1/chr0";
 
+constexpr uint16_t kHidServiceHandle = 0x0400;
 constexpr uint8_t kShift = 0x02;  // left shift in the keyboard report's modifier byte
 constexpr uint64_t kHoldLimitNs = 10ull * 1000000000ull;
 
@@ -116,15 +117,21 @@ GattAppDef hid_app_def() {
   // the host pair before it gets the report map, which is what every HID host expects to do.
   const std::vector<std::string> enc_read = {"read", "encrypt-read"};
   const std::vector<std::string> report = {"read", "encrypt-read", "notify"};
-  auto chr = [](const char* uuid, std::vector<std::string> flags, std::vector<uint8_t> value) {
+  // Fixed handles (gatt_server.h): a HID host caches the report map and the report handles at
+  // bonding, so they must be where they were after every restart. Each service starts on its own
+  // 0x10 boundary well above bluetoothd's own services; a characteristic's handle is its value
+  // (its declaration the one before), a notifying one's CCC the one after.
+  auto chr = [](const char* uuid, std::vector<std::string> flags, std::vector<uint8_t> value, uint16_t handle) {
     GattCharDef c;
     c.uuid = uuid_full(uuid);
+    c.handle = handle;
     c.flags = std::move(flags);
     c.value = std::move(value);
     return c;
   };
-  auto report_ref = [](uint8_t id) {
+  auto report_ref = [](uint8_t id, uint16_t handle) {
     GattDescDef d;
+    d.handle = handle;
     d.uuid = uuid_full("2908");  // Report Reference: report ID, type 1 = input
     d.flags = {"read", "encrypt-read"};
     d.value = {id, 0x01};
@@ -132,29 +139,32 @@ GattAppDef hid_app_def() {
   };
   GattServiceDef hid;
   hid.uuid = uuid_full("1812");
+  hid.handle = kHidServiceHandle;
   // bcdHID 1.11, country 0, flags: RemoteWake | NormallyConnectable.
-  hid.characteristics.push_back(chr("2a4a", enc_read, {0x11, 0x01, 0x00, 0x03}));
-  hid.characteristics.push_back(chr("2a4b", enc_read, hid_report_map()));
-  hid.characteristics.push_back(chr("2a4c", {"write-without-response"}, {0x00}));  // Control Point
-  hid.characteristics.push_back(chr("2a4e", {"read", "encrypt-read", "write-without-response"}, {0x01}));  // Report mode
-  GattCharDef consumer = chr("2a4d", report, {0x00, 0x00});
-  consumer.descriptors.push_back(report_ref(1));
+  hid.characteristics.push_back(chr("2a4a", enc_read, {0x11, 0x01, 0x00, 0x03}, 0x0402));
+  hid.characteristics.push_back(chr("2a4b", enc_read, hid_report_map(), 0x0404));
+  hid.characteristics.push_back(chr("2a4c", {"write-without-response"}, {0x00}, 0x0406));  // Control Point
+  hid.characteristics.push_back(chr("2a4e", {"read", "encrypt-read", "write-without-response"}, {0x01}, 0x0408));  // Report mode
+  GattCharDef consumer = chr("2a4d", report, {0x00, 0x00}, 0x040a);  // CCC 0x040b
+  consumer.descriptors.push_back(report_ref(1, 0x040c));
   hid.characteristics.push_back(std::move(consumer));
-  GattCharDef keyboard = chr("2a4d", report, std::vector<uint8_t>(8, 0));
-  keyboard.descriptors.push_back(report_ref(2));
+  GattCharDef keyboard = chr("2a4d", report, std::vector<uint8_t>(8, 0), 0x040e);  // CCC 0x040f
+  keyboard.descriptors.push_back(report_ref(2, 0x0410));
   hid.characteristics.push_back(std::move(keyboard));
 
   GattServiceDef battery;
   battery.uuid = uuid_full("180f");
-  battery.characteristics.push_back(chr("2a19", {"read", "notify"}, {100}));
+  battery.handle = 0x0420;
+  battery.characteristics.push_back(chr("2a19", {"read", "notify"}, {100}, 0x0422));
 
   // PnP ID: vendor ID source 2 (USB-IF), the Linux Foundation's vendor ID 0x1d6b, product 0x0246,
   // version 1.0. Windows and Android read it before they load a HID driver.
   GattServiceDef dis;
   dis.uuid = uuid_full("180a");
-  dis.characteristics.push_back(chr("2a50", {"read"}, {0x02, 0x6b, 0x1d, 0x46, 0x02, 0x00, 0x01}));
+  dis.handle = 0x0430;
+  dis.characteristics.push_back(chr("2a50", {"read"}, {0x02, 0x6b, 0x1d, 0x46, 0x02, 0x00, 0x01}, 0x0432));
   const std::string maker = "btbench";
-  dis.characteristics.push_back(chr("2a29", {"read"}, std::vector<uint8_t>(maker.begin(), maker.end())));
+  dis.characteristics.push_back(chr("2a29", {"read"}, std::vector<uint8_t>(maker.begin(), maker.end()), 0x0434));
 
   GattAppDef d;
   d.services = {std::move(hid), std::move(battery), std::move(dis)};
@@ -276,13 +286,7 @@ bool HidRemote::enable(const std::string& name, std::string* err) {
     return false;
   }
   if (!gatt_.set(hid_app_def(), err)) return false;
-  AdvSpec spec;
-  spec.type = "peripheral";
-  spec.local_name = n;
-  spec.service_uuids = {uuid_full("1812")};
-  spec.appearance = 0x0180;  // Generic Remote Control
-  spec.discoverable = true;
-  spec.has_discoverable = true;
+  const AdvSpec spec = advert(n);
   int old = 0;
   {
     std::lock_guard<std::mutex> lk(m_);
@@ -406,13 +410,58 @@ void HidRemote::queue(std::vector<Step> steps) {
   cv_.notify_all();
 }
 
+// BlueZ drops an advertisement when the adapter powers off (and releases it); a remote that went
+// quiet that way would never be found again. Advertised again while it is on.
+void HidRemote::keep_advertising() {
+  int id;
+  std::string name;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    if (!enabled_) return;
+    id = adv_id_;
+    name = name_;
+  }
+  std::string state;
+  for (const json& in : adv_.list().value("instances", json::array()))
+    if (in.value("id", 0) == id) state = in.value("state", std::string{});
+  if (state == "active" || state == "pending" || state == "registering") return;
+  std::string err;
+  if (id) adv_.remove(id, &err);
+  AdvSpec spec = advert(name);
+  json out;
+  if (!adv_.add(spec, &out, &err)) return;
+  LOG_INFO("hid remote: advertising again ({})", state.empty() ? "gone" : state);
+  std::lock_guard<std::mutex> lk(m_);
+  if (enabled_) adv_id_ = out.value("id", 0);
+  else adv_.remove(out.value("id", 0), &err);
+}
+
+AdvSpec HidRemote::advert(const std::string& name) {
+  AdvSpec spec;
+  spec.type = "peripheral";
+  spec.local_name = name;
+  spec.service_uuids = {uuid_full("1812")};
+  spec.appearance = 0x0180;  // Generic Remote Control
+  spec.discoverable = true;
+  spec.has_discoverable = true;
+  return spec;
+}
+
 void HidRemote::run() {
   std::unique_lock<std::mutex> lk(m_);
+  uint64_t next_adv_check = 0;
   while (!stop_) {
-    // Idle, it wakes once a second only to release a key held too long.
+    // Idle, it wakes once a second only to release a key held too long, and every five to see
+    // that the advertisement is still up.
     cv_.wait_for(lk, std::chrono::seconds(1), [this] { return stop_ || !steps_.empty(); });
     if (stop_) break;
     const uint64_t now = mono_ns();
+    if (now >= next_adv_check && steps_.empty()) {
+      next_adv_check = now + 5ull * 1000000000ull;
+      lk.unlock();
+      keep_advertising();
+      lk.lock();
+    }
     for (int r = 1; r <= 2; ++r) {
       if (held_[r] && now - held_since_ns_[r] > kHoldLimitNs) {
         LOG_INFO("hid remote: releasing report {} held over 10 s", r);

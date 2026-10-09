@@ -47,6 +47,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     for the HF role), both read by the bluetooth.service drop-in. Writers replace one, keep the other.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
+  - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
   - `/data/btbench/obex/` — OBEX files and obexd's root: `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
   - `/data/btbench/wifi/` — wpa_supplicant networks.
   - `/data/bluetooth/` — persisted `/var/lib/bluetooth` (bonds survive reflashes of the rootfs? no: of deploys and kernel swaps; a reflash rewrites /data too).

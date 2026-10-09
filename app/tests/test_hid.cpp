@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -104,12 +105,37 @@ void test_app_def() {
     CHECK_EQ(r.descriptors[0].value, std::vector<uint8_t>({static_cast<uint8_t>(i - 3), 0x01}));
   }
   CHECK_EQ(uuid_short(d.services[1].characteristics[0].uuid), std::string("2a19"));  // battery: svc1/chr0
+  // Fixed handles, laid out the way BlueZ allocates within a service: declaration at the service
+  // handle, then per characteristic its declaration and value (the handle given), a CCC after a
+  // notifying one's value, then its descriptors. Nothing overlaps, every service ends before the
+  // next begins.
+  uint16_t prev_end = 0;
+  for (const GattServiceDef& sv : d.services) {
+    CHECK(sv.handle > prev_end);
+    uint16_t next = static_cast<uint16_t>(sv.handle + 1);
+    for (const GattCharDef& c : sv.characteristics) {
+      CHECK_EQ(c.handle, static_cast<uint16_t>(next + 1));  // value right after its declaration
+      next = static_cast<uint16_t>(c.handle + 1);
+      if (std::find(c.flags.begin(), c.flags.end(), "notify") != c.flags.end()) ++next;  // the CCC
+      for (const GattDescDef& ds : c.descriptors) {
+        CHECK_EQ(ds.handle, next);
+        ++next;
+      }
+    }
+    prev_end = static_cast<uint16_t>(next - 1);
+  }
+  CHECK_EQ(hid.handle, 0x0400);
+  CHECK_EQ(hid.characteristics[4].handle, 0x040a);  // the consumer report a host caches
   // It goes through the same check a definition from the API does: flags BlueZ knows, sizes.
   GattAppDef back;
   std::string err;
   CHECK(gatt_app_from_json(gatt_app_json(d), &back, &err));
   CHECK(err.empty());
   CHECK_EQ(back.services.size(), size_t(3));
+  CHECK_EQ(back.services[0].characteristics[4].descriptors[0].handle, 0x040c);  // handles survive JSON
+  CHECK(!gatt_app_from_json(json::parse(R"({"services":[{"uuid":"180f","handle":0,"characteristics":[]}]})"), &back, &err));
+  CHECK(gatt_app_from_json(json::parse(R"({"services":[{"uuid":"180f","handle":"0x50","characteristics":[]}]})"), &back, &err));
+  CHECK_EQ(back.services[0].handle, 0x50);
 }
 
 void write(const fs::path& p, const std::string& s) {

@@ -80,6 +80,8 @@ class HidRemote {
     std::vector<uint8_t> value;
   };
   void queue(std::vector<Step> steps);
+  void keep_advertising();
+  static AdvSpec advert(const std::string& name);
   void run();
   std::string report_path(HidReport r) const;
 

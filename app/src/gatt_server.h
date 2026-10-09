@@ -17,13 +17,19 @@ namespace btb {
 // services, their characteristics and descriptors, each with flags and an initial value. A
 // characteristic with "counter" ticks a little-endian counter every period and notifies it; any
 // writable one keeps what is written (reads return it, and a notifying one notifies it back).
+// `handle` asks BlueZ for that attribute handle (0: BlueZ picks one). A service's is its declaration,
+// a characteristic's its value (the declaration is the handle before), a descriptor's its own; a
+// notifying characteristic's CCC takes the handle after its value. Fixed handles matter to a
+// bonded client that cached the database (a HID host does): they stay the same across restarts.
 struct GattDescDef {
   std::string uuid;  // full form
+  uint16_t handle = 0;
   std::vector<std::string> flags;
   std::vector<uint8_t> value;
 };
 struct GattCharDef {
   std::string uuid;
+  uint16_t handle = 0;
   std::vector<std::string> flags;
   std::vector<uint8_t> value;
   bool counter = false;
@@ -32,6 +38,7 @@ struct GattCharDef {
 };
 struct GattServiceDef {
   std::string uuid;
+  uint16_t handle = 0;
   bool primary = true;
   std::vector<GattCharDef> characteristics;
 };
