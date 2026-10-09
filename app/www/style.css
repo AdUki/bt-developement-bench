@@ -144,6 +144,30 @@ canvas.graph.short { height: 110px; }
 .c-tx { background: var(--tx); } .c-rx { background: var(--rx); }
 .c-p50 { background: var(--p50); } .c-p95 { background: var(--p95); } .c-fl { background: var(--fl); }
 
+/* Audio: stream cards with level meters, AVRCP players. */
+.grid label.wide { grid-column: 1 / -1; }
+.grid label[hidden] { display: none; }
+/* Long endpoint names in a select must not widen the form past a phone's screen. */
+.grid > label { min-width: 0; }
+.grid > label select, .grid > label input:not([type=checkbox]) { width: 100%; min-width: 0; }
+.meter { position: relative; height: 14px; background: var(--well); border: 1px solid var(--line); border-radius: 4px; margin: 0.25rem 0; overflow: hidden; }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--good); opacity: 0.6; }
+.meter.hot i { background: var(--warn); }
+.meter.clip i { background: var(--bad); }
+.meter b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--fg); }
+.meter span { position: absolute; right: 4px; top: -1px; font-size: 10.5px; color: var(--fg); }
+.stream .row label.row { gap: 0.3rem; }
+.stream input[type=range] { min-width: 120px; }
+.stream .st-gain-v { white-space: nowrap; min-width: 4.5em; }
+.player .pl-title { font-size: 1.05rem; font-weight: 600; margin-top: 0.3rem; overflow-wrap: anywhere; }
+.pl-progress { height: 4px; background: var(--well); border-radius: 2px; margin: 0.5rem 0 0.15rem; overflow: hidden; }
+.pl-progress i { display: block; height: 100%; background: var(--accent); }
+.pl-controls { margin-top: 0.35rem; }
+.pl-btn { min-width: 2.4rem; font-size: 1rem; line-height: 1.2; touch-action: none; user-select: none; }
+.pl-items { margin-top: 0.5rem; border-top: 1px dashed var(--line); padding-top: 0.4rem; max-height: 14rem; overflow: auto; }
+.radio-row, #up-servers > .row, #up-items > .row { padding: 0.2rem 0; border-bottom: 1px solid var(--line); gap: 0.5rem; }
+#up-path { margin: 0.4rem 0; }
+
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
 .modal[hidden] { display: none; }
 .modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; width: min(440px, 100%); }

@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "adv.h"
+#include "audio/engine.h"
 #include "bluetooth.h"
 #include "gatt_server.h"
 #include "jobs.h"
@@ -41,12 +42,14 @@ struct Deps {
   TargetScripts& scripts;
   SystemInfo& sys;
   WsHub& hub;
+  audio::AudioEngine& audio;
 };
 
 // Route installers, one per file (api_*.cpp).
 void install_bluetooth_routes(httplib::Server& svr, Deps& d);
 void install_le_routes(httplib::Server& svr, Deps& d);
 void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt);
+void install_audio_routes(httplib::Server& svr, Deps& d);
 
 class WebServer {
  public:

@@ -31,10 +31,14 @@ bool executable(const std::string& p) {
 
 // Everything after fork() in the child must be async-signal-safe (another thread may hold malloc's
 // lock at the moment of the fork), so argv is built before and the child only dup2s and execs.
-void child_exec(const std::vector<char*>& av, int out_w, int err_w) {
+void child_exec(const std::vector<char*>& av, int in_r, int out_w, int err_w) {
   setpgid(0, 0);
-  const int devnull = open("/dev/null", O_RDONLY);
-  if (devnull >= 0) dup2(devnull, STDIN_FILENO);
+  if (in_r >= 0) {
+    dup2(in_r, STDIN_FILENO);
+  } else {
+    const int devnull = open("/dev/null", O_RDONLY);
+    if (devnull >= 0) dup2(devnull, STDIN_FILENO);
+  }
   dup2(out_w, STDOUT_FILENO);
   dup2(err_w, STDERR_FILENO);
   // The daemon's own descriptors (the HCI monitor socket, the bus, listening sockets) must not
@@ -76,6 +80,10 @@ std::string find_exec(const std::string& name, const std::string& dirs) {
 }
 
 bool spawn(const std::vector<std::string>& argv, Spawned* out, std::string* err) {
+  return spawn_io(argv, false, out, err);
+}
+
+bool spawn_io(const std::vector<std::string>& argv, bool stdin_pipe, Spawned* out, std::string* err) {
   if (argv.empty()) {
     if (err) *err = "empty command";
     return false;
@@ -85,16 +93,21 @@ bool spawn(const std::vector<std::string>& argv, Spawned* out, std::string* err)
     if (err) *err = argv[0] + ": not found";
     return false;
   }
-  int o[2], e[2];
-  if (pipe2(o, O_CLOEXEC) != 0) {
-    if (err) *err = strerror(errno);
-    return false;
-  }
-  if (pipe2(e, O_CLOEXEC) != 0) {
-    if (err) *err = strerror(errno);
-    close(o[0]);
-    close(o[1]);
-    return false;
+  // All three ends are CLOEXEC: the child gets its own copies through dup2, and no other child
+  // started meanwhile (another stream's decoder) inherits this one's pipes — an inherited write
+  // end would keep a reader from ever seeing EOF.
+  int p[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
+  auto close_all = [&p] {
+    for (auto& fds : p)
+      for (int fd : fds)
+        if (fd >= 0) close(fd);
+  };
+  for (int i = stdin_pipe ? 0 : 1; i < 3; ++i) {
+    if (pipe2(p[i], O_CLOEXEC) != 0) {
+      if (err) *err = strerror(errno);
+      close_all();
+      return false;
+    }
   }
   std::vector<std::string> args = argv;
   args[0] = path;
@@ -105,17 +118,19 @@ bool spawn(const std::vector<std::string>& argv, Spawned* out, std::string* err)
   const pid_t pid = fork();
   if (pid < 0) {
     if (err) *err = std::string("fork: ") + strerror(errno);
-    close(o[0]); close(o[1]); close(e[0]); close(e[1]);
+    close_all();
     return false;
   }
-  if (pid == 0) child_exec(av, o[1], e[1]);
+  if (pid == 0) child_exec(av, p[0][0], p[1][1], p[2][1]);
   // Also from here, so a kill_group() racing the child's own setpgid() still finds the group.
   setpgid(pid, pid);
-  close(o[1]);
-  close(e[1]);
+  if (p[0][0] >= 0) close(p[0][0]);
+  close(p[1][1]);
+  close(p[2][1]);
   out->pid = pid;
-  out->out_fd = o[0];
-  out->err_fd = e[0];
+  out->in_fd = p[0][1];
+  out->out_fd = p[1][0];
+  out->err_fd = p[2][0];
   return true;
 }
 

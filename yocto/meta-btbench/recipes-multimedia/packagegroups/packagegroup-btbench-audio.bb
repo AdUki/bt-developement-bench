@@ -33,4 +33,12 @@ RDEPENDS:${PN} = " \
     alsa-utils-amixer \
     alsa-utils-speakertest \
     sbc-examples \
+    \
+    mpg123 \
+    ${@'ffmpeg' if d.getVar('BTBENCH_FFMPEG') == '1' else ''} \
 "
+
+# btbenchd's audio streams decode internet radio and UPnP items with these (docs/audio.md,
+# "Streams"): mpg123 for MP3, ffmpeg for the rest when BTBENCH_FFMPEG = "1". Defaulted here: an
+# untracked btbench-device.conf from before the switch would leave it unset.
+BTBENCH_FFMPEG ??= "0"

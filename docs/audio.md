@@ -160,6 +160,41 @@ aplay -D bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp test.wav
 bluealsa-aplay AA:BB:CC:DD:EE:FF                      # phone → hw:Loopback (pass -D)
 ```
 
+## Streams: playing to and listening from devices
+
+btbenchd plays and captures audio itself (`/api/audio/streams`, the console's Audio tab,
+`bench play`): a test signal, an internet radio or UPnP URL, or what one device sends, into any
+sink the stack has, and/or to a browser that listens in. It uses the stack's own tools, so it
+works in every mode:
+
+| | PipeWire | BlueALSA / none |
+|---|---|---|
+| play into a sink | `pw-cat --playback --target <node>` (fed a WAV on stdin) | `aplay -D bluealsa:DEV=…,PROFILE=a2dp` / `hw:Loopback,0,0` |
+| capture a source | `pw-cat --record --target bluez_input.…` (or a sink's monitor) | `arecord -D bluealsa:DEV=…` / `hw:Loopback,1,0` |
+| decode a URL | `mpg123 -s` (MP3, ICY titles; https through its curl helper), else `ffmpeg` | the same |
+
+Each stream runs one pump thread in btbenchd that moves 20 ms chunks from the source through the
+gain and the level meter to the sink's stdin (a 16 KiB pipe: a gain or frequency change is heard
+within ~100 ms) and to the listeners. What paces it is whatever is real-time in it: the sink
+consuming, a capture producing, or, when it plays nowhere, a clock. In PipeWire the streams show
+as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
+
+- **Tunnel.** A capture of one device into a sink of another: a phone playing to the board
+  (A2DP sink) relayed to a speaker (the board as A2DP source). In PipeWire the phone's stream is
+  a node `bluez_input.<addr>.…` once it plays; WirePlumber also links it to the default sink
+  (the loopback card) as usual.
+- **Rates.** A stream has one rate. PipeWire resamples on both ends; aplay/arecord on a BlueALSA
+  PCM need the transport's rate (the endpoint list says it), the loopback takes any.
+- **Decoders.** `mpg123` is on the image (MP3: most internet radio). Everything else — AAC
+  streams, HLS, FLAC/WAV from a media server — needs `ffmpeg`, which OE flags `commercial`:
+  set `BTBENCH_FFMPEG = "1"` in `btbench-device.conf` (it accepts that flag for ffmpeg only) and
+  rebuild the image. A board flashed before mpg123 joined the image gets it without a reflash:
+  `make pkg ARGS=mpg123` (and `make pkg ARGS=ffmpeg` with the switch set).
+- **CPU.** The Zero W has one core: a decoder plus pw-cat into an SBC sink is the heaviest kind
+  of stream, a generator into a sink the lightest. Watch the header's CPU figure (or the Graphs
+  tab) while one runs. At most four streams run at once, and one that plays nowhere ends after
+  30 s with nobody listening.
+
 ## bluetoothd
 
 - **Version.** BlueZ comes from bluez.git at `BTBENCH_BLUEZ_SRCREV` (`yocto/conf/versions.conf`),

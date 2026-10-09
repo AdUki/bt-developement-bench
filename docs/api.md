@@ -28,6 +28,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 | `bt.request` | the pending agent request, or `null` | at once when it appears or goes |
 | `media` | the body of `GET /api/media` | on change, at most 1 Hz; once on connect |
 | `gatt.notify` | `{address, path, handle, uuid, value, text, ts}` | every value change BlueZ reports: notifications, indications, and the result of reads |
+| `audio.streams` | the body of `GET /api/audio/streams` (levels, titles) | 4 Hz while a stream runs, once more when the last ends |
 | `gatt.server` | `{op: "read\|write\|notify-on\|notify-off", path, uuid, value, offset, device}` | a remote device using the local GATT server |
 | `system` | the body of `GET /api/system/health` | 1 Hz |
 | `journal` | `{ts, prio, unit, ident, pid, msg}` | each new entry of the followed unit (`PUT /api/system/journal`) |
@@ -230,8 +231,7 @@ audio mode (they are BlueZ's objects, whoever registered the local endpoints):
              "max_bitrate": 357000,
              "summary": "48000 Hz, joint stereo, 16 blocks, 8 subbands, loudness, bitpool 2-53, ≤357 kbit/s"},
    "configuration": "11150235", "delay_ms": 150.0, "volume": 100}],
- "players": [{"path": "...", "address": "...", "name": "Music", "status": "playing",
-   "track": {"title": "...", "artist": "...", "album": "...", "duration_ms": 180000}, "position_ms": 42000}]}
+ "players": [ ...see AVRCP below... ]}
 ```
 
 Decoded: SBC, AAC, aptX/aptX HD, LDAC (rates and modes), other vendor codecs by name, and LC3
@@ -239,6 +239,128 @@ configurations (BAP LTVs: rate, frame duration, allocation, octets per frame, bi
 raw element as hex. `delay_ms` is the sink's reported delay (A2DP delay reporting), `null` without.
 
 `PUT /api/media/transport` `{"path": "<transport>", "volume": 0..127}` — AVRCP absolute volume.
+
+### AVRCP players
+
+A connected phone (or anything that plays into the board) shows its AVRCP target as a player —
+BlueZ's `MediaPlayer1`, whichever audio stack runs:
+
+```json
+{"path": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/player0", "device": "...", "address": "5C:E9:1E:22:40:01",
+ "name": "Music", "type": "Audio", "subtype": "Audio Book", "status": "playing",
+ "track": {"title": "...", "artist": "...", "album": "...", "genre": "...", "track_number": 3,
+           "number_of_tracks": 12, "duration_ms": 180000, "img_handle": ""},
+ "position_ms": 42000, "repeat": "off", "shuffle": "alltracks", "equalizer": null, "scan": null,
+ "browsable": true, "searchable": false, "transport": ".../sep1/fd0",
+ "folder": {"name": "/NowPlaying", "items": 12},
+ "items": [{"path": ".../player0/NowPlaying/item1", "name": "...", "type": "audio", "folder_type": "",
+            "playable": true, "metadata": { ...as track... }}]}
+```
+
+`status` is BlueZ's: `playing`, `paused`, `stopped`, `forward-seek`, `reverse-seek`, `error`.
+A setting the player does not offer is `null`; an unknown number (all ones on the wire) is `null`
+or a `duration_ms` of 0. `position_ms` is as of the last update the phone sent (on play, pause,
+seek and track changes): count on from there while it plays. `transport` is the same device's
+transport, for its volume. `items` are what browsing listed (see below), in listing order.
+
+| route | body | what |
+|---|---|---|
+| `POST /api/media/players/control` | `{"path", "action"}` | `play`, `pause`, `stop`, `next`, `previous`, `fast-forward`, `rewind` (a seek runs until `play` or `release`), `release`, or `press:<key>` / `hold:<key>` with an AV/C operation id (`0x44` play, `0x4b` forward, ...). Waits for the phone: 403/502 with BlueZ's error when it refuses |
+| `PUT /api/media/players` | `{"path"}` + any of `repeat` (`off\|singletrack\|alltracks\|group`), `shuffle` (`off\|alltracks\|group`), `equalizer` (`off\|on`), `scan` | the player's settings |
+| `POST /api/media/players/browse` | `{"path", "folder": "<item path>"}` (folder optional) | `ChangeFolder` when given, then `ListItems`: `{"items": [{path, name, type, folder_type, playable, title, artist, album, duration_ms}]}`. The items also appear under the player from then on |
+| `POST /api/media/items` | `{"path": "<item>", "action": "play\|add"}` | play an item now, or add it to the now-playing list |
+
+## Audio streams
+
+A stream plays a **source** into a **sink** and/or to listeners: a test signal, an internet radio
+or UPnP URL, or one device's audio, into a Bluetooth speaker (or the loopback card), heard in a
+browser, or both. Each stream is one pump thread in btbenchd and the stack's own tools as child
+processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` with BlueALSA or none, `mpg123` or
+`ffmpeg` for URLs), so it works the same in every audio mode. At most 4 run at once.
+
+`POST /api/audio/streams` (201):
+
+```json
+{"source": {"type": "tone", "freq": 1000, "freq_right": null, "level_db": -12},
+ "sink": {"type": "pipewire", "target": "bluez_output.F8_DF_15_0A_11_3C.1"},
+ "rate": 48000, "channels": 2, "gain_db": 0, "latency_ms": 60, "label": ""}
+```
+
+| source `type` | fields |
+|---|---|
+| `tone` | `freq` Hz, `freq_right` (the right channel on its own frequency, or `null`), `level_db` (peak dBFS) |
+| `sweep` | `from`, `to` Hz, `seconds`, `log` (default true), `repeat` (default true), `level_db` |
+| `noise` | `color`: `white`, `pink` or `brown`; `level_db` is the RMS (default -20) |
+| `silence` | — |
+| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest), `title` (a name for the label) |
+| `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
+
+`sink` is `null` (listeners only), or `{"type": "pipewire", "target": ""}` (a node name, "" the
+default sink) or `{"type": "alsa", "target": "bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp"}`
+(`hw:Loopback,0,0`, ...): the ids of `GET /api/audio/endpoints`. A *tunnel* from one device to
+another is a `capture` of the first into a sink of the second. `rate` is one of 8000 … 96000;
+frequencies are clamped to the rate's Nyquist, `gain_db` to -60..+20.
+
+The answer, and each entry of `GET /api/audio/streams` (`{"streams": [...], "max": 4}`, newest
+first), is the spec as normalised plus:
+
+```json
+{"id": 3, "label": "tone 1 kHz → bluez_output.F8_DF_15_0A_11_3C.1", "node": "btbench-stream-3",
+ "state": "running", "error": "", "started_ms": 1791557330192, "ended_ms": null, "seconds": 12.3,
+ "listeners": 1, "level": {"peak_db": [-12.0, -12.0], "rms_db": [-15.0, -15.0], "clipped": 0},
+ "meta": {"name": "Groove Salad: ...", "title": "Artist - Song", "url": "<the URL played>"}}
+```
+
+`state`: `starting`, `running`, `ended` (a file or sweep finished; a stream that plays nowhere and
+was not listened to for 30 s ends too, saying so in `error`), `failed` (`error` has the tool's
+last words: a refused URL, a sink that went away), `stopped`. `level` is the last 250 ms after the
+gain. `meta` carries an ICY stream's station name and current title (from the decoder, or —
+when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to. `node` is
+the PipeWire stream's name (`wpctl status`, `pw-top`).
+
+| route | what |
+|---|---|
+| `GET /api/audio/streams/{id}` | one stream |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click |
+| `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
+| `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
+
+### Endpoints
+
+`GET /api/audio/endpoints` (`?fresh=1` skips the 2 s cache) — where streams play to and capture
+from:
+
+```json
+{"backend": "pipewire", "error": "",
+ "sinks": [{"id": "bluez_output.F8_DF_15_0A_11_3C.1", "backend": "pipewire", "direction": "sink",
+            "label": "JBL Flip 5", "kind": "bluetooth", "address": "F8:DF:15:0A:11:3C",
+            "profile": "a2dp-sink", "codec": "sbc", "serial": "120", "state": "running",
+            "default": true, "rate": null, "channels": null}],
+ "sources": [ ...the same shape... ],
+ "tools": {"pw-cat": true, "pw-dump": true, "aplay": true, "arecord": true, "mpg123": true, "ffmpeg": false, "curl": true}}
+```
+
+With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`), Bluetooth
+first. Without it (`alsa`) they are the BlueALSA PCMs of the transports BlueZ has configured — a
+transport where the board is the A2DP source is a sink, one where it is the sink a source, HFP
+both (`PROFILE=sco`) — plus the loopback card when snd-aloop is loaded. `kind`: `bluetooth`,
+`loopback`, `hardware`, `virtual`.
+
+### UPnP media servers
+
+| route | what |
+|---|---|
+| `GET /api/audio/upnp/servers?search=1` | SSDP search of the LAN (~2.5 s; `timeout_ms`): `{servers: [{id, name, manufacturer, model, location, icon}], searched_ms, error}`; without `search`, the last search's |
+| `GET /api/audio/upnp/browse?server=<id>&object=0&start=0&count=100` | ContentDirectory `Browse` of a container (`0` the root): `{containers: [{id, title, child_count, class}], items: [{id, title, artist, album, class, duration_s, url, mime, size, art}], returned, total, object, server}`. 502 with the server's own fault ("No such object (UPnP error 701)") |
+
+An item's `url` is played as a `url` source (FLAC, WAV, AAC and the like need ffmpeg on the
+board; MP3 plays with mpg123). `tools/fake-upnp/server.py` is a media server to try it with.
+
+### Radio stations
+
+`GET /api/audio/radio` — `{"stations": [{"name", "url"}], "saved": false}` (a starter list until
+one is saved); `PUT /api/audio/radio` `{"stations": [...]}` saves them to
+`/data/btbench/radio.json`.
 
 ## HCI monitor and capture
 

@@ -32,10 +32,14 @@ std::string find_exec(const std::string& name, const std::string& dirs = "");
 // reaches whatever it started. For the jobs runner, which streams the output as it comes.
 struct Spawned {
   pid_t pid = -1;
+  int in_fd = -1;  // only with spawn_io(..., stdin_pipe = true)
   int out_fd = -1;
   int err_fd = -1;
 };
 bool spawn(const std::vector<std::string>& argv, Spawned* out, std::string* err);
+// The same, optionally with the child's stdin on a pipe too (in_fd): for a player fed by the
+// daemon (pw-cat, aplay), whose stdin the daemon writes audio into.
+bool spawn_io(const std::vector<std::string>& argv, bool stdin_pipe, Spawned* out, std::string* err);
 // SIGTERM to the group, then SIGKILL after `grace_ms` if it is still there. Does not reap.
 void kill_group(pid_t pid, int grace_ms);
 

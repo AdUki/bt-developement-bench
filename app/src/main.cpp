@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "adv.h"
+#include "audio/engine.h"
 #include "bluetooth.h"
 #include "bluez_model.h"
 #include "gatt_server.h"
@@ -144,7 +145,11 @@ int main(int argc, char** argv) {
   wopt.port = port;
   wopt.allow_power = !pc;
 
-  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub};
+  // The audio streams. Without PipeWire, the BlueZ transports say which BlueALSA PCMs exist.
+  btb::audio::AudioEngine audio(publish, [&hub](const std::string& t) { return hub.has_subscribers(t); },
+                                data_dir, [&bt] { return btb::model_media(*bt.objects()); });
+
+  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio};
   btb::WebServer server(deps, wopt);
   bt.on_change([&server](bool request) { server.publish_bt(request); });
 
@@ -180,6 +185,7 @@ int main(int argc, char** argv) {
   g_server = nullptr;
   journal.stop();
   jobs.stop_all();
+  audio.stop_all();
 #ifdef BTB_HAVE_HCI
   mon->stop();
 #endif

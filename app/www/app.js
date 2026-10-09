@@ -53,6 +53,14 @@ const setClass = (el, c) => { if (el && el.className !== c) el.className = c; };
 // Inputs are updated from the daemon only while the user is not in them.
 const idle = el => document.activeElement !== el;
 
+// A <select>'s options from [{value, label}], keeping the choice (or `keep`) when it is still one.
+function fillSelect(sel, opts, keep) {
+  const want = keep != null ? keep : sel.value;
+  const html = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+  setHTML(sel, html);
+  if ([...sel.options].some(o => o.value === want)) sel.value = want;
+}
+
 // localStorage throws, not just returns null, when the origin has storage blocked.
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* blocked */ } };

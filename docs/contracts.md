@@ -30,7 +30,7 @@ libubootenv-bin), `btbench-base` (system), `btbenchd` (btbenchd).
 Device: `BTBENCH_HOSTNAME`, `BTBENCH_ROOT_PASSWORD`, `BTBENCH_SSH_PUBKEY` (path on the build
 host), `BTBENCH_WIFI_{SSID,PSK,COUNTRY}`, `BTBENCH_AP_PSK`, `BTBENCH_GADGET` (ecm|ncm|off),
 `BTBENCH_AUDIO_MODE` (pipewire|bluealsa|none), `BTBENCH_EXTRA_CODECS` (0|1), `BTBENCH_AAC` (0|1),
-`BTBENCH_HTTP_PORT`.
+`BTBENCH_HTTP_PORT`, `BTBENCH_FFMPEG` (0|1: ffmpeg on the image, for streams that are not MP3).
 
 Recipes that ship files from the repo (tools/target, tools/dev, boards/dts) reach them with
 `FILESEXTRAPATHS:prepend := "${BTBENCH_ROOT}/tools/target:"` (or the dir they need) and list them
@@ -46,6 +46,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     journal lines) and `BLUETOOTHD_NOPLUGIN="hfp"` (BlueZ's own HFP plugin would fight PipeWire/BlueALSA
     for the HF role), both read by the bluetooth.service drop-in. Writers replace one, keep the other.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
+  - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/wifi/` — wpa_supplicant networks.
   - `/data/bluetooth/` — persisted `/var/lib/bluetooth` (bonds survive reflashes of the rootfs? no: of deploys and kernel swaps; a reflash rewrites /data too).
   - `/data/btsnoop/` — the always-on btmon ring (`hci-<YYYYmmdd-HHMMSS>.btsnoop`, newest is being written).
@@ -83,6 +84,10 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
 - Flags: `--port N` `--www DIR` `--data-dir DIR` (default `/data/btbench`) `--no-bluetooth`
   `--hci-replay FILE.btsnoop` (feed the HCI monitor from a capture, paced in real time).
 - WebSocket `/api/ws?topics=a,b` — messages `{"topic":"...","data":{...}}`.
+- Audio streams (`/api/audio/streams`, `app/src/audio/`) run, from PATH: `pw-cat` and `pw-dump`
+  (pipewire-tools, with `PIPEWIRE_RUNTIME_DIR=/run/pipewire` from the unit), `aplay`/`arecord`
+  (alsa-utils-aplay), `mpg123` (packagegroup-btbench-audio), `ffmpeg` (only with
+  `BTBENCH_FFMPEG = "1"`), `curl`. A missing one fails only the streams that need it.
 
 ### HCI monitor API (HCI monitor area; btbenchd wires it in)
 

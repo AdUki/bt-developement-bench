@@ -45,6 +45,10 @@ BTBENCH_AUDIO_MODE ?= "pipewire"
 BTBENCH_EXTRA_CODECS ?= "0"
 # AAC (fdk-aac, LICENSE_FLAGS "commercial"; accepting it is yours to decide).
 BTBENCH_AAC ?= "0"
+# ffmpeg, for the web console's audio streams that are not MP3 (AAC internet radio, HLS, FLAC or
+# WAV from a UPnP server); mpg123 plays MP3 without it. LICENSE_FLAGS "commercial", accepted for
+# ffmpeg only.
+BTBENCH_FFMPEG ?= "0"
 
 # --- Web console -------------------------------------------------------------
 BTBENCH_HTTP_PORT ?= "80"

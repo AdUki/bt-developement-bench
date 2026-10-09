@@ -140,12 +140,85 @@
       <div id="au-services" class="small muted"></div>
       <div id="au-msg" class="small"></div>
     </div>
+
+    <h2>Players (AVRCP)</h2>
+    <div id="au-players" class="list"></div>
+
+    <h2>Play and listen</h2>
+    <div class="card" id="st-new">
+      <div class="row between">
+        <h3>New stream</h3>
+        <span id="st-backend" class="small muted"></span>
+      </div>
+      <div class="grid">
+        <label>Source
+          <select id="st-src">
+            <option value="tone">Tone (sine)</option>
+            <option value="sweep">Sweep</option>
+            <option value="noise">Noise</option>
+            <option value="silence">Silence</option>
+            <option value="url">Internet radio / URL</option>
+            <option value="capture">A device's audio (capture)</option>
+            <option value="monitor">What a sink plays (monitor)</option>
+          </select>
+        </label>
+        <label data-for="tone">Frequency (Hz) <input type="number" id="st-freq" value="1000" min="1" max="48000"></label>
+        <label data-for="tone">Right channel (Hz, empty = same) <input type="number" id="st-freq-r" min="1" max="48000" placeholder="same"></label>
+        <label data-for="sweep">From (Hz) <input type="number" id="st-from" value="20" min="1"></label>
+        <label data-for="sweep">To (Hz) <input type="number" id="st-to" value="20000" min="1"></label>
+        <label data-for="sweep">Seconds <input type="number" id="st-secs" value="10" min="0.5" max="600" step="0.5"></label>
+        <label data-for="sweep" class="check"><input type="checkbox" id="st-log" checked> logarithmic</label>
+        <label data-for="sweep" class="check"><input type="checkbox" id="st-repeat" checked> repeat</label>
+        <label data-for="noise">Colour
+          <select id="st-color"><option>pink</option><option>white</option><option>brown</option></select>
+        </label>
+        <label data-for="tone sweep noise"><span id="st-level-kind">Level (dBFS, peak)</span> <input type="number" id="st-level" value="-12" min="-96" max="0"></label>
+        <label data-for="url" class="wide">URL (stream, .pls/.m3u, or a UPnP item) <input type="url" id="st-url" placeholder="https://ice1.somafm.com/groovesalad-128-mp3"></label>
+        <label data-for="url">Decoder
+          <select id="st-decoder"><option value="auto">auto</option><option>mpg123</option><option>ffmpeg</option></select>
+        </label>
+        <label data-for="capture">Capture from <select id="st-capture"></select></label>
+        <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
+        <label>Play to <select id="st-sink"></select></label>
+        <label>Rate
+          <select id="st-rate"><option>48000</option><option>44100</option><option>32000</option><option>16000</option><option>8000</option></select>
+        </label>
+        <label>Channels <select id="st-ch"><option value="2">stereo</option><option value="1">mono</option></select></label>
+        <label>Gain (dB) <input type="number" id="st-gain" value="0" min="-60" max="20" step="0.5"></label>
+        <label class="check"><input type="checkbox" id="st-listen"> listen in this browser</label>
+      </div>
+      <div class="row wrap" style="margin-top:0.6rem">
+        <button class="primary" id="st-start">Start</button>
+        <button id="st-refresh" title="Read PipeWire's nodes / the BlueALSA PCMs again">Refresh endpoints</button>
+        <span id="st-msg" class="small"></span>
+      </div>
+    </div>
+    <div id="st-list" class="list"></div>
+
+    <div class="cols">
+      <div class="card">
+        <div class="row between"><h3>Internet radio</h3>
+          <span><button class="small-btn" id="rd-edit">edit</button></span></div>
+        <div id="rd-list" class="small"></div>
+        <div id="rd-editor" hidden>
+          <textarea id="rd-text" class="mono" rows="8" placeholder="Name | https://url"></textarea>
+          <div class="row"><button id="rd-save">Save</button><button id="rd-cancel">Cancel</button>
+            <span class="small muted">one station a line: <span class="mono">name | url</span></span></div>
+        </div>
+        <div class="small muted">Plays to the sink chosen above. MP3 needs mpg123 on the board, anything else ffmpeg.</div>
+      </div>
+      <div class="card">
+        <div class="row between"><h3>UPnP media servers</h3><button class="small-btn" id="up-search">search the LAN</button></div>
+        <div id="up-servers" class="small"></div>
+        <div id="up-path" class="small mono"></div>
+        <div id="up-items" class="small"></div>
+      </div>
+    </div>
+
     <h2>Transports</h2>
     <div id="au-transports" class="list"></div>
     <h2>Remote endpoints</h2>
     <div id="au-endpoints" class="list"></div>
-    <h2>Players</h2>
-    <div id="au-players" class="list"></div>
   </section>
 
   <!-- ======================================================== Monitor -->

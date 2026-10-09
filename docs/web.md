@@ -41,9 +41,23 @@ heart-rate counter, a battery level and an echo characteristic), its live values
 what remote devices read, wrote and subscribed to.
 
 **Audio** — the audio stack (PipeWire / BlueALSA / none) with a confirmation, optionally
-restarting bluetoothd; then BlueZ's view, the same in every mode: transports (codec decoded, raw
-configuration, state, delay, an AVRCP absolute-volume slider), the remote stream endpoints with
-their capabilities, and AVRCP players.
+restarting bluetoothd. *Players*: each connected phone's AVRCP player with its track (title,
+artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
+previous / rewind / play–pause / stop / fast forward / next (the seeks run while the button is
+held), repeat and shuffle when the player offers them, the transport's absolute volume, *listen*
+(hear what the phone sends the board, in this browser) and, for a browsable player, its
+now-playing list with *play* per item. *Play and listen*: a new stream from a tone (its own
+frequency on the right channel if wanted), a sweep, white/pink/brown noise, silence, a URL
+(internet radio, a playlist, a file), a device's audio (capture — with a speaker as the sink,
+that is a tunnel from one device to another) or what a sink plays (its monitor), into any sink
+the stack has (`Play to`) or nowhere, and/or *listen in this browser*. Each running stream shows
+its level meters (RMS bar, peak mark, per channel), the radio title, a live gain slider and, for a
+tone, its frequency and level; listening adds the buffered time, a volume and a spectrum. The
+console keeps listening when you change tabs. *Internet radio*: the station list (edit it as
+`name | url` lines), play to the chosen sink or listen. *UPnP media servers*: search the LAN,
+browse a server's folders and play or listen to its tracks. Then BlueZ's view, the same in every
+mode: transports (codec decoded, raw configuration, state, delay, an AVRCP absolute-volume
+slider) and the remote stream endpoints with their capabilities.
 
 **Monitor** — the HCI monitor's connections: throughput, TX latency p50/p95/max (HCI send to
 Number Of Completed Packets), packets in flight against the controller's credits, RTP loss. Click

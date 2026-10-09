@@ -376,6 +376,117 @@ cmd_media() {
     (.players[] | "player " + .address + "  " + .status + "  " + (.track.title // "") + " — " + (.track.artist // ""))'
 }
 
+
+# ---- AVRCP players, audio streams --------------------------------------------------------------
+
+# The player of ADDR (or the only one, or the first).
+player_path() {
+  get /api/media | jq -r --arg a "$(echo "${1-}" | tr a-f A-F)" \
+    '[.players[] | select($a == "" or .address == $a)][0].path // empty'
+}
+
+cmd_player() {
+  local addr="" action=""
+  case "${1-}" in ??:??:??:??:??:??) addr=$1; shift ;; esac
+  action=${1-}
+  local path
+  path=$(player_path "$addr")
+  [ -n "$path" ] || die "no AVRCP player${addr:+ for $addr} (is a phone connected and playing?)"
+  case "$action" in
+    "") ;;
+    repeat|shuffle) [ $# -ge 2 ] || die "usage: bench player [ADDR] $action off|..."
+      put /api/media/players "$(jq -nc --arg p "$path" --arg k "$action" --arg v "$2" '{path:$p, ($k):$v}')" >/dev/null || exit 1 ;;
+    *) post /api/media/players/control "$(jq -nc --arg p "$path" --arg a "$action" '{path:$p, action:$a}')" >/dev/null || exit 1 ;;
+  esac
+  # BlueZ's tree is re-read a moment after a change: show the player as it is then.
+  [ -n "$action" ] && sleep 0.5
+  get /api/media | jq -c --arg p "$path" '[.players[] | select(.path == $p)][0]' | show '
+    "player " + .address + "  " + .name + "  " + .status
+    + (if .repeat then "  repeat " + .repeat else "" end) + (if .shuffle then "  shuffle " + .shuffle else "" end),
+    "  " + (.track.title // "") + " — " + (.track.artist // "") + " — " + (.track.album // ""),
+    "  " + ((.position_ms / 1000 | floor | tostring) + " s" + (if .track.duration_ms > 0 then " / " + (.track.duration_ms / 1000 | floor | tostring) + " s" else "" end))'
+}
+
+cmd_sinks() {
+  get /api/audio/endpoints?fresh=1 | show '"backend " + .backend + (if .error != "" then "  (" + .error + ")" else "" end),
+    "sinks", (.sinks[] | "  " + .id + "  " + .label + (if .default then "  (default)" else "" end)),
+    "sources", (.sources[] | "  " + .id + "  " + .label + (if .default then "  (default)" else "" end))'
+}
+
+# The sink a TARGET names: "" the default (PipeWire), "-" nowhere (listen only), an ALSA device
+# (hw:..., bluealsa:...), or a PipeWire node name.
+sink_json() {
+  case "${1-}" in
+    "") echo '{"type":"pipewire","target":""}' ;;
+    -) echo null ;;
+    hw:*|plughw:*|bluealsa:*) jq -nc --arg t "$1" '{type:"alsa", target:$t}' ;;
+    *) jq -nc --arg t "$1" '{type:"pipewire", target:$t}' ;;
+  esac
+}
+
+show_stream() {
+  show '"stream " + (.id | tostring) + "  " + .state + "  " + .label + (if .error != "" then "  (" + .error + ")" else "" end)'
+}
+
+cmd_play() {
+  local what=${1-} src
+  shift || true
+  case "$what" in
+    tone) src=$(jq -nc --argjson f "${1:-1000}" '{type:"tone", freq:$f, level_db:-12}'); shift || true ;;
+    sweep) src='{"type":"sweep","from":20,"to":20000,"seconds":10}' ;;
+    noise) src=$(jq -nc --arg c "${1:-pink}" '{type:"noise", color:$c}'); shift || true ;;
+    silence) src='{"type":"silence"}' ;;
+    url|radio) [ $# -ge 1 ] || die "usage: bench play url URL [TARGET]"; src=$(jq -nc --arg u "$1" '{type:"url", url:$u}'); shift ;;
+    capture) [ $# -ge 1 ] || die "usage: bench play capture SOURCE [TARGET]"
+      case "$1" in hw:*|bluealsa:*) src=$(jq -nc --arg t "$1" '{type:"capture", backend:"alsa", target:$t}') ;;
+        *) src=$(jq -nc --arg t "$1" '{type:"capture", target:$t}') ;; esac; shift ;;
+    *) die "usage: bench play tone [HZ]|sweep|noise [white|pink|brown]|silence|url URL|capture SOURCE [TARGET]" ;;
+  esac
+  post /api/audio/streams "$(jq -nc --argjson s "$src" --argjson k "$(sink_json "${1-}")" '{source:$s, sink:$k}')" | show_stream
+}
+
+cmd_streams() {
+  get /api/audio/streams | show '.streams[] | "  " + (.id | tostring) + "  " + .state + "  " + .label
+    + (if .meta.title != "" then "  ♪ " + .meta.title else "" end)
+    + (if (.level.rms_db | length) > 0 then "  rms " + (.level.rms_db | map(tostring) | join("/")) + " dB" else "" end)
+    + (if .error != "" then "  (" + .error + ")" else "" end)'
+}
+
+cmd_stop() {
+  local id=${1-}
+  [ -n "$id" ] || die "usage: bench stop ID|all"
+  if [ "$id" = all ]; then
+    for id in $(get /api/audio/streams | jq -r '.streams[].id'); do del "/api/audio/streams/$id" >/dev/null; done
+  else
+    del "/api/audio/streams/$id" >/dev/null || exit 1
+  fi
+  cmd_streams
+}
+
+# Hear a stream on this machine: its endless WAV into whatever plays here.
+cmd_listen() {
+  local id=${1-}
+  [ -n "$id" ] || die "usage: bench listen ID   (bench streams lists them)"
+  local player
+  if command -v pw-play >/dev/null; then player=(pw-play -)
+  elif command -v aplay >/dev/null; then player=(aplay -q)
+  elif command -v ffplay >/dev/null; then player=(ffplay -nodisp -loglevel error -)
+  else die "nothing here plays audio (pw-play, aplay or ffplay)"; fi
+  curl -sSN "$URL/api/audio/streams/$id/listen" | "${player[@]}"
+}
+
+cmd_radio() {
+  if [ $# -ge 1 ]; then
+    local url
+    url=$(get /api/audio/radio | jq -r --arg n "$1" '[.stations[] | select(.name | ascii_downcase | contains($n | ascii_downcase))][0].url // empty')
+    [ -n "$url" ] || die "no station matching '$1'"
+    shift
+    cmd_play url "$url" "${1-}"
+  else
+    get /api/audio/radio | show '.stations[] | "  " + .name + "  " + .url'
+  fi
+}
+
 # ---- Capture and the monitor -------------------------------------------------------------------
 
 cmd_cap() {
@@ -617,10 +728,12 @@ cmd_completion() {
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
   local cmds="status scan devices info pair connect disconnect trust untrust block unblock cancel remove
-    discoverable agent gatt adv audio media cap mark mon wifi kernel sys logs bt-args run ssh help completion"
+    discoverable agent gatt adv audio media player sinks play radio streams stop listen cap mark mon wifi kernel sys logs bt-args run ssh help completion"
   if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
+    play) COMPREPLY=($(compgen -W "tone sweep noise silence url capture" -- "$cur")) ;;
+    player) COMPREPLY=($(compgen -W "play pause stop next previous fast-forward rewind repeat shuffle" -- "$cur")) ;;
     discoverable) COMPREPLY=($(compgen -W "on off" -- "$cur")) ;;
     agent) COMPREPLY=($(compgen -W "auto ask" -- "$cur")) ;;
     ask|auto) COMPREPLY=($(compgen -W "DisplayOnly DisplayYesNo KeyboardOnly NoInputNoOutput KeyboardDisplay" -- "$cur")) ;;
@@ -671,6 +784,14 @@ ${bold}LE${off}
 ${bold}Audio${off}
   audio [pipewire|bluealsa|none] [--restart-bt]   show or switch the audio stack
   media                           A2DP/BAP endpoints and transports, codec decoded
+  player [ADDR] [play|pause|stop|next|previous|fast-forward|rewind|repeat M|shuffle M]
+                                  a phone's AVRCP player: control it, show its track
+  sinks                           where streams play to and capture from
+  play tone [HZ]|sweep|noise [COLOUR]|silence|url URL|capture SOURCE [TARGET]
+                                  start a stream into TARGET (default sink; - = listen only)
+  radio [NAME [TARGET]]           the station list, or play one
+  streams | stop ID|all           the running streams (levels, titles) / stop them
+  listen ID                       hear a stream here (curl | pw-play)
 ${bold}Capture and monitor${off}
   cap on|off|ls                   the always-on btsnoop ring
   cap get NAME [OUT] | analyze NAME | rm NAME
@@ -707,6 +828,13 @@ case "$cmd" in
   adv) cmd_adv "$@" ;;
   audio) cmd_audio "$@" ;;
   media) cmd_media ;;
+  player) cmd_player "$@" ;;
+  sinks) cmd_sinks ;;
+  play) cmd_play "$@" ;;
+  radio) cmd_radio "$@" ;;
+  streams) cmd_streams ;;
+  stop) cmd_stop "$@" ;;
+  listen) cmd_listen "$@" ;;
   cap) cmd_cap "$@" ;;
   mark) cmd_mark "$@" ;;
   mon) cmd_mon "$@" ;;

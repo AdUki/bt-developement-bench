@@ -16,6 +16,7 @@ add_btb_test(test_bluetooth)
 add_btb_test(test_le)
 add_btb_test(test_scripts)
 add_btb_test(test_exec)
+add_btb_test(test_audio)
 # The UUID table is read from the source tree, never copied.
 target_compile_definitions(test_uuids PRIVATE BTB_WWW_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../www")
 target_compile_definitions(test_bluez_model PRIVATE BTB_WWW_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../www")

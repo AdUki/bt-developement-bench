@@ -8,6 +8,10 @@ plus a `yocto/conf/boards/<name>.conf` away.
 - **BlueZ** from git (pinned in `yocto/conf/versions.conf`), with every tool and test script.
 - **Audio stack switchable on the board:** PipeWire + WirePlumber, BlueALSA, or bluetoothd alone
   (`bench audio <mode>`).
+- **Audio in and out:** play a tone, sweep, noise, silence, internet radio or a UPnP server's
+  tracks into any Bluetooth sink, tunnel one device's audio to another, and listen to any of it
+  in the browser with level meters and a spectrum; AVRCP control and metadata of a connected
+  phone (`bench play`, `bench player`).
 - **Kernel:** bluetooth-next by default (image and dev tree), linux-raspberrypi for comparison
   (`KERNEL=rpi`). Trial boots fall back to the good kernel on their own.
 - **Monitoring:** an always-on btsnoop ring, live per-link/per-channel throughput, TX latency

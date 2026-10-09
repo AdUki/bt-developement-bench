@@ -165,6 +165,7 @@ void WebServer::install_routes() {
   install_bluetooth_routes(svr, d_);
   install_le_routes(svr, d_);
   install_system_routes(svr, d_, opt_);
+  install_audio_routes(svr, d_);
 
   // /api/ws?topics=bt,hci.stats — no topics parameter subscribes to everything.
   svr.WebSocket("/api/ws", [this](const httplib::Request& req, httplib::ws::WebSocket& ws) {
