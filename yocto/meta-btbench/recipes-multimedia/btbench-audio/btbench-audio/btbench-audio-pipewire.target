@@ -1,10 +1,10 @@
 # Audio mode "pipewire": PipeWire system-wide with WirePlumber (btbench-audio set pipewire).
 #
-# The three btbench-audio-*.target conflict with each other, and each stack's units are PartOf=
-# their target (drop-ins next to the units), so starting one target stops the other stack. The
-# After= between the targets only orders that stop before this start.
+# The two btbench-audio-*.target conflict with each other, and PipeWire's units are PartOf= this
+# target (drop-ins next to the units), so starting the "none" target stops PipeWire. The After=
+# between the targets only orders that stop before the other start.
 [Unit]
 Description=Audio mode: PipeWire with WirePlumber
-Conflicts=btbench-audio-bluealsa.target btbench-audio-none.target
-After=btbench-audio-bluealsa.target btbench-audio-none.target
+Conflicts=btbench-audio-none.target
+After=btbench-audio-none.target
 Wants=pipewire.socket pipewire-manager.socket pipewire.service wireplumber.service

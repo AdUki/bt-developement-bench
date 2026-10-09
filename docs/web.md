@@ -40,7 +40,7 @@ includes); several at once, each with its state (an advertisement whose timeout 
 heart-rate counter, a battery level and an echo characteristic), its live values, and a log of
 what remote devices read, wrote and subscribed to.
 
-**Audio** — the audio stack (PipeWire / BlueALSA / none) with a confirmation, optionally
+**Audio** — the audio stack (PipeWire / none) with a confirmation, optionally
 restarting bluetoothd. *Players*: each connected phone's AVRCP player with its track (title,
 artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
 previous / rewind / play–pause / stop / fast forward / next (the seeks run while the button is
@@ -106,7 +106,7 @@ the AP if joining fails.
 falling back to the good one on a panic, hang or power cycle), *commit* and *roll back*, each
 behind a confirmation.
 
-**System** — health, versions of BlueZ, PipeWire, WirePlumber, BlueALSA and the kernel, the stack's
+**System** — health, versions of BlueZ, PipeWire, WirePlumber and the kernel, the stack's
 services with restart buttons, bluetoothd's command line (e.g. `-d -E`; saved to
 `/data/btbench/bluetoothd.env` and applied by restarting bluetooth), the journal of a unit (the
 last 200 lines, and live with *follow*), the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl

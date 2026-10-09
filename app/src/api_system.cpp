@@ -37,11 +37,11 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     reply(res, d.scripts.json_cmd("btbench-audio", {"status"}, 10000));
   });
 
-  // Body: {"mode": "pipewire|bluealsa|none", "restart_bt": bool}. Switching stops one stack and
-  // starts the other, a few seconds on a Zero W; answered with the new status.
+  // Body: {"mode": "pipewire|none", "restart_bt": bool}. Switching starts or stops PipeWire and
+  // WirePlumber, a few seconds on a Zero W; answered with the new status.
   svr.Put("/api/audio", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     const std::string mode = j.at("mode").get<std::string>();
-    if (!audio_mode_ok(mode)) return send_error(res, 400, "mode must be pipewire, bluealsa or none");
+    if (!audio_mode_ok(mode)) return send_error(res, 400, "mode must be pipewire or none");
     std::vector<std::string> args{"set", mode};
     if (j.value("restart_bt", false)) args.push_back("--restart-bt");
     const TargetScripts::Result r = d.scripts.action("btbench-audio", args, 60000);

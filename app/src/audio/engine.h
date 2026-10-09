@@ -2,7 +2,7 @@
 
 // Audio streams: something to play (a test signal, an internet radio or UPnP URL, or what a
 // Bluetooth device sends the board) pumped into somewhere to play it (a Bluetooth speaker or
-// headset through PipeWire or BlueALSA, the loopback card) and/or to the browsers listening in
+// headset through PipeWire, the loopback card) and/or to the browsers listening in
 // (GET /api/audio/streams/{id}/listen). See docs/api.md "Audio streams".
 //
 // Each stream is one pump thread moving 20 ms chunks of S16LE from its source to its sink:
@@ -12,8 +12,9 @@
 //   capture  ──┘   (mpg123/ffmpeg, pw-cat --record,└─► listeners (browsers, curl | aplay)
 //                   arecord: child processes)
 //
-// The tools do the stack-specific work — PipeWire's graph, BlueALSA's PCMs, HTTP and codecs — so
-// the daemon links none of them, and a stream is the same whichever audio mode the board runs.
+// The tools do the stack-specific work — PipeWire's graph, ALSA devices, HTTP and codecs — so the
+// daemon links none of them, and a stream is the same whichever audio mode the board runs (in mode
+// "none" only the plain ALSA devices, i.e. the loopback card, are there to play into).
 // What paces a stream is whatever is real-time in it: the sink consuming, a capture producing,
 // or, for a generator or a decoder heard only by listeners, the pump's own clock.
 //
@@ -100,10 +101,7 @@ class AudioEngine {
  public:
   using Publish = std::function<void(const std::string& topic, const nlohmann::json& data)>;
   using HasSubscribers = std::function<bool(const std::string& topic)>;
-  // `media` reads GET /api/media's body: the BlueZ transports become BlueALSA endpoints when
-  // PipeWire is not running.
-  AudioEngine(Publish publish, HasSubscribers has_subscribers, std::string data_dir,
-              std::function<nlohmann::json()> media);
+  AudioEngine(Publish publish, HasSubscribers has_subscribers, std::string data_dir);
   ~AudioEngine();
   AudioEngine(const AudioEngine&) = delete;
   AudioEngine& operator=(const AudioEngine&) = delete;
@@ -160,7 +158,6 @@ class AudioEngine {
   const Publish publish_;
   const HasSubscribers has_subscribers_;
   const std::string data_dir_;
-  const std::function<nlohmann::json()> media_;
   const Tools tools_;
   UpnpBrowser upnp_;
 

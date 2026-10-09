@@ -108,7 +108,7 @@ PW_MODULE_SUBDIR = "pipewire-0.3"
 do_install:append() {
     # The pipewire-alsa plugin's PCM definition, where alsa-lib looks for add-on config. Only
     # that one: 99-pipewire-default.conf would make PipeWire the default ALSA device, and in the
-    # bluealsa and none audio modes there is no PipeWire to answer. Use `aplay -D pipewire`.
+    # "none" audio mode there is no PipeWire to answer. Use `aplay -D pipewire`.
     if ${@bb.utils.contains('PACKAGECONFIG', 'alsa', 'true', 'false', d)}; then
         install -d ${D}${sysconfdir}/alsa/conf.d
         ln -sf ${datadir}/alsa/alsa.conf.d/50-pipewire.conf ${D}${sysconfdir}/alsa/conf.d/50-pipewire.conf

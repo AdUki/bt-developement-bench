@@ -177,7 +177,7 @@ void test_specs() {
   CHECK_EQ(back["source"]["target"].get<std::string>(), std::string("bluez_input.5C_E9_1E_22_40_01.2"));
   CHECK_EQ(back["rate"].get<int>(), 44100);
 
-  CHECK(endpoint_id_ok("bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp"));
+  CHECK(endpoint_id_ok("plughw:CARD=Loopback,DEV=0"));
   CHECK(endpoint_id_ok("hw:Loopback,0,0"));
   CHECK(!endpoint_id_ok("-D"));
   CHECK(!endpoint_id_ok("a b"));
@@ -273,20 +273,16 @@ void test_endpoints() {
   CHECK(pix["default"].get<bool>());  // the metadata value as a string, too
   CHECK(endpoints_from_pw_dump(json::object())["sinks"].empty());
 
-  const json media = json::parse(R"({"transports": [
-    {"address": "F8:DF:15:0A:11:3C", "uuid": "110a", "state": "idle", "codec": {"name": "SBC", "rate": 44100}},
-    {"address": "5C:E9:1E:22:40:01", "uuid": "110b", "state": "active", "codec": {"name": "AAC", "rate": 48000}},
-    {"address": "00:1A:7D:DA:71:13", "uuid": "111f", "codec": {"name": "mSBC"}},
-    {"address": "11:22:33:44:55:66", "uuid": "184e"}]})");
-  const json a = endpoints_from_alsa(media, true);
-  CHECK_EQ(a["sinks"].size(), size_t(3));    // A2DP source, HFP, loopback
-  CHECK_EQ(a["sources"].size(), size_t(3));  // A2DP sink, HFP, loopback
-  CHECK_EQ(a["sinks"][0]["id"].get<std::string>(), std::string("bluealsa:DEV=F8:DF:15:0A:11:3C,PROFILE=a2dp"));
-  CHECK_EQ(a["sinks"][0]["rate"].get<int>(), 44100);
-  CHECK_EQ(a["sources"][0]["id"].get<std::string>(), std::string("bluealsa:DEV=5C:E9:1E:22:40:01,PROFILE=a2dp"));
-  CHECK_EQ(a["sinks"][1]["profile"].get<std::string>(), std::string("sco"));
-  CHECK_EQ(a["sinks"][2]["id"].get<std::string>(), std::string("hw:Loopback,0,0"));
+  // Without PipeWire only the loopback card is left to play into and capture from.
+  const json a = endpoints_from_alsa(true);
+  CHECK_EQ(a["sinks"].size(), size_t(1));
+  CHECK_EQ(a["sources"].size(), size_t(1));
+  CHECK_EQ(a["sinks"][0]["id"].get<std::string>(), std::string("hw:Loopback,0,0"));
+  CHECK_EQ(a["sinks"][0]["backend"].get<std::string>(), std::string("alsa"));
+  CHECK_EQ(a["sources"][0]["id"].get<std::string>(), std::string("hw:Loopback,1,0"));
   for (const json& x : a["sinks"]) CHECK(endpoint_id_ok(x["id"].get<std::string>()));
+  const json bare = endpoints_from_alsa(false);
+  CHECK(bare["sinks"].empty() && bare["sources"].empty());
 }
 
 void test_xml() {

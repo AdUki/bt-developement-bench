@@ -4,8 +4,8 @@ Bluetooth audio codecs, plus the freeaptxenc and freeaptxdec command line tools.
 HOMEPAGE = "https://github.com/regularhunter/libfreeaptx"
 SECTION = "libs"
 
-# Opt-in (BTBENCH_EXTRA_CODECS = "1"): scarthgap's layers have no aptX library, and PipeWire and
-# BlueALSA only offer aptX when built against this one.
+# Opt-in (BTBENCH_EXTRA_CODECS = "1"): scarthgap's layers have no aptX library, and PipeWire only
+# offers aptX when built against this one.
 LICENSE = "LGPL-2.1-or-later"
 LIC_FILES_CHKSUM = "file://COPYING;md5=4fbd65380cdd255951079008b364516c"
 

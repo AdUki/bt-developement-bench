@@ -30,7 +30,7 @@ const std::vector<std::string>& job_allowlist() {
   static const std::vector<std::string> a = {
       "l2test",   "l2ping",   "isotest",  "rctest",      "scotest",     "btgatt-client",
       "btmgmt",   "bluetoothctl", "avinfo", "iperf3",    "wpctl",       "pw-dump",
-      "pw-cli",   "bluealsactl", "bluealsa-cli", "hcitool", "hciconfig"};
+      "pw-cli",   "hcitool",  "hciconfig"};
   return a;
 }
 

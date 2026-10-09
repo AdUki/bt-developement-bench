@@ -8,7 +8,7 @@ first when an interface moves.
 | Area | Owns |
 |---|---|
 | system | `yocto/meta-btbench/recipes-core/{images,btbench-base,base-files}/`, `recipes-core/packagegroups/packagegroup-btbench-tools.bb`, `yocto/meta-btbench/wic/`, `tools/target/{btbench-wifi,btbench-gadget,btbench-bdaddr,btbench-data}`, `mk/system.mk`, `docs/system.md` |
-| audio + BlueZ | `recipes-connectivity/bluez5/`, `recipes-multimedia/{pipewire,wireplumber,bluealsa,libfreeaptx,ldacbt,btbench-audio,packagegroups}/`, `tools/target/{btbench-audio,btbench-btsnoop}`, `tools/dev/{bbvars,clangd-gen}`, `mk/dev.mk`, `docs/{audio,dev}.md` |
+| audio + BlueZ | `recipes-connectivity/bluez5/`, `recipes-multimedia/{pipewire,wireplumber,libfreeaptx,ldacbt,btbench-audio,packagegroups}/`, `tools/target/{btbench-audio,btbench-btsnoop}`, `tools/dev/{bbvars,clangd-gen}`, `mk/dev.mk`, `docs/{audio,dev}.md` |
 | kernel | `recipes-kernel/`, `dynamic-layers/raspberrypi/recipes-{kernel,bsp}/`, `boards/dts/`, `tools/dev/mkdtb`, `tools/target/btbench-kernel`, `mk/kernel.mk`, `docs/kernel.md` |
 | btbenchd | `app/` (except `app/src/hci/`, `app/tests/hci/`), `recipes-btbench/`, `tools/bench`, `tools/fake-bluez/`, `mk/app.mk`, `docs/{api,web}.md` |
 | HCI monitor | `app/src/hci/`, `app/tests/hci/`, `docs/monitor.md` |
@@ -16,7 +16,7 @@ first when an interface moves.
 ## Image composition
 
 `btbench-image` installs: `packagegroup-btbench-tools` (system), `packagegroup-btbench-audio`
-(audio + BlueZ: bluez5 and its tools, pipewire, wireplumber, bluealsa, btbench-audio,
+(audio + BlueZ: bluez5 and its tools, pipewire, wireplumber, btbench-audio,
 btbench-btsnoop), `packagegroup-btbench-kernel` (kernel: kernel modules, btbench-kernel,
 libubootenv-bin), `btbench-base` (system), `btbenchd` (btbenchd).
 
@@ -29,7 +29,7 @@ libubootenv-bin), `btbench-base` (system), `btbenchd` (btbenchd).
 
 Device: `BTBENCH_HOSTNAME`, `BTBENCH_ROOT_PASSWORD`, `BTBENCH_SSH_PUBKEY` (path on the build
 host), `BTBENCH_WIFI_{SSID,PSK,COUNTRY}`, `BTBENCH_AP_PSK`, `BTBENCH_GADGET` (ecm|ncm|off),
-`BTBENCH_AUDIO_MODE` (pipewire|bluealsa|none), `BTBENCH_EXTRA_CODECS` (0|1), `BTBENCH_AAC` (0|1),
+`BTBENCH_AUDIO_MODE` (pipewire|none), `BTBENCH_EXTRA_CODECS` (0|1), `BTBENCH_AAC` (0|1),
 `BTBENCH_HTTP_PORT`, `BTBENCH_FFMPEG` (0|1: ffmpeg on the image, for streams that are not MP3).
 
 Recipes that ship files from the repo (tools/target, tools/dev, boards/dts) reach them with
@@ -43,7 +43,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
 - `/data` — ext4 partition (label `data`), mounted at boot, grown to fill the card at first boot.
   - `/data/btbench/audio-mode` — one word.
   - `/data/btbench/bluetoothd.env` — `BLUETOOTHD_ARGS="-d ..."` (no `-n`: under systemd it only duplicates
-    journal lines) and `BLUETOOTHD_NOPLUGIN="hfp"` (BlueZ's own HFP plugin would fight PipeWire/BlueALSA
+    journal lines) and `BLUETOOTHD_NOPLUGIN="hfp"` (BlueZ's own HFP plugin would fight PipeWire
     for the HF role), both read by the bluetooth.service drop-in. Writers replace one, keep the other.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
@@ -61,8 +61,8 @@ All print JSON on stdout for `status`/`scan`, exit non-zero with a one-line reas
 failure. btbenchd and `bench` call them; they must not need a terminal.
 
 ### btbench-audio
-- `btbench-audio get` → `pipewire` | `bluealsa` | `none`
-- `btbench-audio status` → `{"mode":"pipewire","modes":["pipewire","bluealsa","none"],"services":{"pipewire":"active","wireplumber":"active","bluealsa":"inactive"}}`
+- `btbench-audio get` → `pipewire` | `none`
+- `btbench-audio status` → `{"mode":"pipewire","modes":["pipewire","none"],"services":{"pipewire":"active","wireplumber":"active"}}`
 - `btbench-audio set <mode> [--restart-bt]`
 - `btbench-audio boot` — start the stored mode (btbench-audio-select.service)
 

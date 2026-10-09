@@ -851,12 +851,10 @@ void AudioEngine::Stream::run() {
 
 // ---- the engine ---------------------------------------------------------------------------------
 
-AudioEngine::AudioEngine(Publish publish, HasSubscribers has_subscribers, std::string data_dir,
-                         std::function<json()> media)
+AudioEngine::AudioEngine(Publish publish, HasSubscribers has_subscribers, std::string data_dir)
     : publish_(std::move(publish)),
       has_subscribers_(std::move(has_subscribers)),
       data_dir_(std::move(data_dir)),
-      media_(std::move(media)),
       tools_(Tools::find()) {
   publisher_ = std::thread([this] { run_publisher(); });
 }
@@ -1088,7 +1086,7 @@ json AudioEngine::endpoints(bool fresh) {
       error = "PipeWire is not running (" + r.reason() + ")";
     }
   }
-  if (!have_pw) out = endpoints_from_alsa(media_ ? media_() : json::object(), file_exists("/proc/asound/Loopback"));
+  if (!have_pw) out = endpoints_from_alsa(file_exists("/proc/asound/Loopback"));
   out["backend"] = have_pw ? "pipewire" : (out["sinks"].empty() && out["sources"].empty() ? "none" : "alsa");
   out["error"] = have_pw ? "" : error;
   out["tools"] = tools_.to_json();

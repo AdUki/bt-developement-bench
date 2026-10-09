@@ -7,7 +7,7 @@
 // element (which buffers seconds and cannot say how much), and the AudioContext is made in the
 // click that asked for it, so autoplay rules let it play.
 
-const AUDIO_MODES = ['pipewire', 'bluealsa', 'none'];
+const AUDIO_MODES = ['pipewire', 'none'];
 const au = {endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
   tick: null, radio: [], upnp: {server: null, path: []}};
 
@@ -37,7 +37,8 @@ function renderEndpoints(ep) {
   au.endpoints = ep;
   const t = ep.tools || {};
   const missing = ['pw-cat', 'mpg123', 'ffmpeg'].filter(k => !t[k]);
-  setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA / BlueALSA' : 'no audio stack'}` +
+  // Without PipeWire the only endpoints are the loopback card's, played to with aplay.
+  setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'no audio stack'}` +
     `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
   const sinkKind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
   const sinks = [{value: '', label: 'nowhere (listen only)'}];

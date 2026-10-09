@@ -153,7 +153,7 @@ configure: ## Set hostname, password, ssh key, Wi-Fi, audio mode and the Yocto c
 	ask "Wi-Fi country (2-letter regulatory domain)" "$(DEF_WIFI_COUNTRY)" "$$(get $(DEVCONF) BTBENCH_WIFI_COUNTRY)"; country="$$ANS"; \
 	ask "Setup AP password (the board's own AP when it has no network; 8+ chars)" "$(DEF_AP_PSK)" "$$(get $(DEVCONF) BTBENCH_AP_PSK)"; appsk="$$ANS"; \
 	echo -e "\n$(BOLD)Audio$(OFF) $(DIM)— the stack at first boot; switch any time with 'bench audio <mode>'.$(OFF)"; \
-	ask "Audio mode (pipewire/bluealsa/none)" "$(DEF_AUDIO_MODE)" "$$(get $(DEVCONF) BTBENCH_AUDIO_MODE)"; mode="$$ANS"; \
+	ask "Audio mode (pipewire/none)" "$(DEF_AUDIO_MODE)" "$$(get $(DEVCONF) BTBENCH_AUDIO_MODE)"; mode="$$ANS"; \
 	echo -e "\n$(BOLD)Build host$(OFF) $(DIM)— caches. Point them at a shared tree and every project reuses one.$(OFF)"; \
 	ask "Yocto download dir (DL_DIR)" "$(DEF_DL_DIR)" "$$(get $(SITECONF) DL_DIR)"; dl="$$ANS"; \
 	ask "Yocto sstate cache (SSTATE_DIR)" "$(DEF_SSTATE_DIR)" "$$(get $(SITECONF) SSTATE_DIR)"; ss="$$ANS"; \

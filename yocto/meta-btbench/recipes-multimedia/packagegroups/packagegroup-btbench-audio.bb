@@ -1,6 +1,6 @@
 SUMMARY = "BlueZ and the audio stacks of the Bluetooth development bench"
-DESCRIPTION = "bluetoothd and every BlueZ tool, PipeWire with WirePlumber, BlueALSA, the audio mode \
-switch and the btmon capture ring. Which stack runs is chosen on the board (btbench-audio)."
+DESCRIPTION = "bluetoothd and every BlueZ tool, PipeWire with WirePlumber, the audio mode switch \
+and the btmon capture ring. Whether PipeWire runs is chosen on the board (btbench-audio)."
 
 # Not allarch: sbc-examples is renamed to libsbc-examples by debian package naming, and an
 # allarch packagegroup cannot follow a per-machine rename (the image then asks for a package that
@@ -23,9 +23,6 @@ RDEPENDS:${PN} = " \
     pipewire-spa-tools \
     pipewire-alsa \
     wireplumber \
-    \
-    bluealsa \
-    bluealsa-aplay \
     \
     btbench-audio \
     \

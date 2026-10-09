@@ -1,5 +1,5 @@
 #!/bin/sh
-# btbench-audio — which audio stack runs on the board: pipewire, bluealsa or none.
+# btbench-audio — which audio stack runs on the board: pipewire or none.
 #
 #   btbench-audio get                       the running mode (the stored one when none runs)
 #   btbench-audio status                    JSON: {"mode":..,"modes":[..],"services":{..}}
@@ -7,20 +7,22 @@
 #   btbench-audio boot                      start the stored mode (btbench-audio-select.service)
 #
 # Each mode is a systemd target (btbench-audio-<mode>.target) that wants its stack's services.
-# The targets conflict with each other and the services are PartOf= their target, so starting one
-# target stops the other stack: PipeWire and BlueALSA both register A2DP endpoints and HFP
-# profiles with bluetoothd and must never run side by side. "none" is bluetoothd alone, for
-# bluetoothctl's endpoint/transport commands or BlueZ's test/ scripts.
+# The targets conflict with each other and the services are PartOf= their target, so starting
+# "none" stops PipeWire and WirePlumber. "none" is bluetoothd alone, for bluetoothctl's
+# endpoint/transport commands or BlueZ's test/ scripts, which must not race PipeWire for the A2DP
+# endpoints and HFP profiles it registers with bluetoothd.
 #
 # The mode is kept in /data/btbench/audio-mode. Without it, AUDIO_MODE from
-# /etc/btbench/device.env, then the image's default (BTBENCH_AUDIO_MODE at build time).
+# /etc/btbench/device.env, then the image's default (BTBENCH_AUDIO_MODE at build time). A stored
+# mode that is no longer one of MODES (a board that ran the dropped "bluealsa" mode) is skipped the
+# same way, so such a board boots into the default instead of into no target at all.
 #
 # Called by btbenchd and `bench`: no terminal, JSON on stdout, a one-line reason on stderr and a
 # non-zero exit on failure.
 
 set -u
 
-MODES="pipewire bluealsa none"
+MODES="pipewire none"
 STATE_DIR=${BTBENCH_DATA_DIR:-/data/btbench}
 MODE_FILE=$STATE_DIR/audio-mode
 DEVICE_ENV=/etc/btbench/device.env
@@ -94,9 +96,8 @@ cmd_status() {
 	for m in $MODES; do
 		modes="$modes${modes:+,}\"$m\""
 	done
-	printf '{"mode":"%s","modes":[%s],"services":{"pipewire":"%s","wireplumber":"%s","bluealsa":"%s"}}\n' \
-		"$mode" "$modes" "$(service_state pipewire)" "$(service_state wireplumber)" \
-		"$(service_state bluealsa)"
+	printf '{"mode":"%s","modes":[%s],"services":{"pipewire":"%s","wireplumber":"%s"}}\n' \
+		"$mode" "$modes" "$(service_state pipewire)" "$(service_state wireplumber)"
 }
 
 cmd_set() {

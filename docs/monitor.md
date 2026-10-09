@@ -212,7 +212,7 @@ it. TX is ours (A2DP source); RX is the peer's.
   counts them since the stream started.
   - Duplicates and late packets count neither as lost nor as progress.
   - A new SSRC restarts the count.
-  - Packets lost **on TX** never reached HCI: the source (PipeWire, bluealsa) dropped them.
+  - Packets lost **on TX** never reached HCI: the source (PipeWire) dropped them.
   - Packets lost **on RX** were lost before the peer's controller sent them.
 - **`rtp_jitter_ms`** is the RFC 3550 interarrival jitter, J += (|D| − J)/16. The HCI timestamp is
   used as the arrival time, and the codec's sample rate as the RTP clock.
