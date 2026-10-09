@@ -143,6 +143,10 @@ install(TARGETS btbenchd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # api.html is generated into www/ before install runs (the api_html target is part of ALL).
 install(DIRECTORY www/ DESTINATION ${CMAKE_INSTALL_DATADIR}/btbenchd/www)
 
+# The board's logs as files (/tmp/logs, btbench-logd) and the owner's colorizer to read them with.
+add_subdirectory(logd)
+add_subdirectory(clog)
+
 # Off in the Yocto build: the tests run on the build host (make test), never on the board.
 option(BTB_TESTS "Build the unit tests" ON)
 if(BTB_TESTS)

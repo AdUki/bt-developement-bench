@@ -34,6 +34,8 @@ struct WebOptions {
   int port = 80;
   // Reboot and the bluetooth/service restarts act on the machine; off on a PC.
   bool allow_power = true;
+  // btbench-logd's files (GET /api/system/logs).
+  std::string logs_dir = "/tmp/logs";
 };
 
 // What the routes work on. Owned by main(), alive for as long as the server is.

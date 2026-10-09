@@ -124,6 +124,20 @@ function setupSystem() {
   };
 }
 
+// ---------------------------------------------------------------- log files (/tmp/logs)
+
+function renderLogFiles(r) {
+  setText($('lf-dir'), r.dir);
+  setHTML($('lf-list'), r.files.length ? r.files.map(f => f.link
+    ? `<div class="file-row"><span class="mono">${esc(f.name)}</span><span class="small muted">→ ${esc(f.link)}</span></div>`
+    : `<div class="file-row"><span><a href="/api/system/logs/${encodeURIComponent(f.name)}?tail=2000" target="_blank" rel="noopener" class="mono">${esc(f.name)}</a>
+        <span class="small muted">${fmtBytes(f.size)} · ${fmtTime(f.mtime_ms)}</span></span>
+      <a class="small-btn btn-link" href="/api/system/logs/${encodeURIComponent(f.name)}?download=1">Download</a></div>`).join('')
+    : '<div class="muted small">No log files yet: btbench-logs.service writes them on the board.</div>');
+}
+
+const refreshLogFiles = () => api('/system/logs').then(renderLogFiles).catch(() => {});
+
 // ---------------------------------------------------------------- kernel Bluetooth logs
 
 // The kernel's own Bluetooth debug messages (btbench-btdebug), by area. Each area says how many of
@@ -171,6 +185,7 @@ registerTab('system', {
     refreshSystem().then(() => { if (!$('sys-journal').textContent) loadJournal(); });
     refreshJobs();
     refreshBtDebug();
+    refreshLogFiles();
   },
   onMessage(topic, d) {
     if (topic === 'system') renderHealth(d);

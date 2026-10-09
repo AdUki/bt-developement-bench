@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
   std::string hci_replay;
   bool no_bluetooth = false;
   bool pc = false;
+  std::string logs_dir = "/tmp/logs";
   bool verbose = false;
 
   app.add_option("--port", port, "HTTP port (default 80)");
@@ -81,6 +82,7 @@ int main(int argc, char** argv) {
   app.add_option("--www", www, "Directory of the web console's files");
   app.add_option("--data-dir", data_dir, "Where the bench keeps its state: bluetoothd.env (default /data/btbench)");
   app.add_option("--capture-dir", capture_dir, "The btsnoop ring the capture routes manage (default /data/btsnoop)");
+  app.add_option("--logs-dir", logs_dir, "btbench-logd's per-program log files, served by the API (default /tmp/logs)");
   app.add_option("--scripts-dir", scripts_dir,
                  "Also look here for btbench-audio/-wifi/-kernel (default: PATH only)");
   app.add_option("--bt-adapter", bt_adapter,
@@ -155,6 +157,7 @@ int main(int argc, char** argv) {
   wopt.host = host;
   wopt.port = port;
   wopt.allow_power = !pc;
+  wopt.logs_dir = logs_dir;
 
   // The audio streams: PipeWire's graph when it runs, the loopback card when it does not.
   btb::audio::AudioEngine audio(publish, [&hub](const std::string& t) { return hub.has_subscribers(t); },

@@ -1,8 +1,13 @@
 // /api/audio, /api/wifi, /api/kernel (the target scripts), /api/system and /api/jobs.
+#include <dirent.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <thread>
 
 #include "http_util.h"
@@ -110,6 +115,57 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
       reply(res, d.scripts.json_cmd("btbench-kernel", {"status"}, 10000));
     });
   }
+
+  // ---- Log files (btbench-logd, /tmp/logs) --------------------------------------------------------
+
+  // {dir, files: [{name, size, mtime_ms, link}]}: what is in the directory, links included (btsnoop).
+  svr.Get("/api/system/logs", [opt](const httplib::Request&, httplib::Response& res) {
+    json files = json::array();
+    if (DIR* dir = opendir(opt.logs_dir.c_str())) {
+      while (dirent* e = readdir(dir)) {
+        const std::string n = e->d_name;
+        if (n == "." || n == "..") continue;
+        const std::string p = opt.logs_dir + "/" + n;
+        struct stat st {}, lst {};
+        if (lstat(p.c_str(), &lst) != 0) continue;
+        const bool link = S_ISLNK(lst.st_mode);
+        char target[512] = {0};
+        if (link && readlink(p.c_str(), target, sizeof target - 1) < 0) target[0] = 0;
+        stat(p.c_str(), &st);
+        files.push_back(json{{"name", n}, {"size", S_ISREG(st.st_mode) ? json(st.st_size) : json(nullptr)},
+                             {"mtime_ms", static_cast<int64_t>(st.st_mtime) * 1000},
+                             {"link", link ? json(std::string(target)) : json(nullptr)}});
+      }
+      closedir(dir);
+    }
+    std::sort(files.begin(), files.end(), [](const json& a, const json& b) { return a["name"] < b["name"]; });
+    send_json(res, json{{"dir", opt.logs_dir}, {"files", files}});
+  });
+
+  // A file as text; ?tail=N for its last N lines. Only a plain file directly in the directory.
+  svr.Get(R"(/api/system/logs/([A-Za-z0-9_.-]+))", [opt](const httplib::Request& req, httplib::Response& res) {
+    const std::string name = req.matches[1];
+    const std::string p = opt.logs_dir + "/" + name;
+    struct stat st {};
+    if (name.empty() || name[0] == '.' || lstat(p.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+      return send_error(res, 404, "no such log file");
+    std::ifstream f(p, std::ios::binary);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string text = ss.str();
+    const long tail = std::atol(query(req, "tail", "0").c_str());
+    if (tail > 0) {
+      size_t at = text.size();
+      for (long n = 0; n <= tail && at > 0; ++n) {
+        at = text.rfind('\n', at - 1);
+        if (at == std::string::npos) { at = 0; break; }
+      }
+      if (at > 0) text = text.substr(at + 1);
+    }
+    res.set_header("Cache-Control", "no-store");
+    if (query(req, "download", "") == "1") res.set_header("Content-Disposition", "attachment; filename=\"" + name + "\"");
+    res.set_content(text, "text/plain; charset=utf-8");
+  });
 
   // ---- Kernel Bluetooth logs (btbench-btdebug) ----------------------------------------------------
 

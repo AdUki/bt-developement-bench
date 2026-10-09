@@ -21,11 +21,14 @@ SRC_URI = " \
     file://app/CMakeLists.txt \
     file://app/src \
     file://app/www \
+    file://app/logd \
+    file://app/clog \
     file://app/tests \
     file://app/third_party \
     file://docs/api.md \
     file://tools/bench \
     file://btbenchd.service \
+    file://btbench-logs.service \
 "
 S = "${WORKDIR}/app"
 
@@ -33,7 +36,9 @@ inherit cmake systemd pkgconfig
 
 EXTRA_OECMAKE = "-DCMAKE_BUILD_TYPE=Release -DBTB_TESTS=OFF"
 
-SYSTEMD_SERVICE:${PN} = "btbenchd.service"
+# btbench-logs: btbench-logd mirrors the journal into /tmp/logs, one native-format file per program,
+# read with clog (app/clog, installed beside it).
+SYSTEMD_SERVICE:${PN} = "btbenchd.service btbench-logs.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 # Defaulted here as well as in the .sample: btbench-device.conf is untracked, and a copy made
@@ -45,12 +50,13 @@ do_install:append() {
     sed -e 's|@PORT@|${BTBENCH_HTTP_PORT}|' ${WORKDIR}/btbenchd.service \
         > ${D}${systemd_system_unitdir}/btbenchd.service
     chmod 0644 ${D}${systemd_system_unitdir}/btbenchd.service
+    install -m 0644 ${WORKDIR}/btbench-logs.service ${D}${systemd_system_unitdir}/btbench-logs.service
 
     # The CLI, so the same commands work in a shell on the board (it defaults to localhost there).
     install -D -m 0755 ${WORKDIR}/tools/bench ${D}${bindir}/bench
 }
 
-FILES:${PN} += "${datadir}/btbenchd ${systemd_system_unitdir}"
+FILES:${PN} += "${datadir}/btbenchd ${datadir}/clog ${systemd_system_unitdir}"
 
 # What the API runs: systemctl/journal are systemd's; btmon (capture analyze) and the jobs
 # runner's tools come with the BlueZ and audio packagegroups.

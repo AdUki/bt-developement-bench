@@ -579,6 +579,11 @@
 
     <div class="pane" data-pane="logs">
       <div class="card">
+        <div class="card-head"><h3>Log files</h3><span id="lf-dir" class="small muted mono"></span></div>
+        <p class="hint">Each program's log in its own format (btbench-logd), for clog: <span class="mono">clog -t /tmp/logs/bluez.log</span> on the board, or download one here.</p>
+        <div id="lf-list" class="lf-list"></div>
+      </div>
+      <div class="card">
         <div class="card-head">
           <h3>Kernel Bluetooth logs</h3>
           <div class="acts">

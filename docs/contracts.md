@@ -53,6 +53,10 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   - `/etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf` — written by btbenchd: the
     Bluetooth roles (`override.bluez5.roles`) and Setup's WirePlumber settings, on top of the image's
     `50-btbench.conf`.
+  - `/tmp/logs/` — btbench-logd (btbench-logs.service): the journal as one file per program, in that
+    program's own format (for clog, `app/clog`): `bluez.log`, `pipewire.log`, `wireplumber.log`,
+    `wpasupplicant.log`, `btbenchd.log`, `kernel.log`, `system.log` (the rest); each rotated once
+    (`.1`) at 2 MiB; `btsnoop` → `/data/btsnoop`. RAM (tmpfs), gone at reboot; journald keeps the lot.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.

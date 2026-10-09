@@ -132,6 +132,24 @@ puts the image's version back.
 - **Ctrl-C** interrupts the inferior as usual. Quitting gdb detaches, and the process keeps
   running.
 
+## Logs: `make logs`, clog
+
+btbench-logd (btbench-logs.service) mirrors the journal into `/tmp/logs` on the board, one file per
+program in the format the program prints itself, so clog (`app/clog`, on the board and built for
+the PC in `app/build/clog/clog`) colours each with its group:
+
+```bash
+make logs                      # clog -t /tmp/logs/bluez.log on the board (LOG=pipewire|wireplumber|
+                               #   btbenchd|kernel|system|wpasupplicant)
+make logs-pull                 # the files to build/logs/<time>/ (build/logs/latest)
+app/build/clog/clog build/logs/latest/bluez.log
+ssh root@btbench.local clog /tmp/logs/pipewire.log
+```
+
+`/tmp/logs/btsnoop` links to the capture ring. Debug output: `bluetoothd -d` (System → bluetoothd
+arguments, `bench bt-args "-d"`), `PIPEWIRE_DEBUG`, and the kernel's own Bluetooth messages
+(`make bt-debug AREAS=l2cap`, docs/kernel.md) all land in these files.
+
 ## Editor support: `make clangd`
 
 - **compile_commands.json.** Every build symlinks it into its src tree. It holds the SDK's GCC

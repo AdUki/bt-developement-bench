@@ -337,3 +337,18 @@ clangd: ## Write .clangd into each src tree (strips GCC-only flags) and print cl
 	  $(ROOT)/tools/dev/clangd-gen "$$s" $$([ -d "$$b" ] && echo "$$b") --sdk $(SDK_DIR) | grep -v '^clangd needs'; \
 	done
 	@echo -e "Start clangd with:  $(BOLD)--query-driver=$(SDK_DIR)/sysroots/*/usr/bin/*/*-gcc,$(SDK_DIR)/sysroots/*/usr/bin/*/*-g++$(OFF)"
+
+# ---- Logs (btbench-logd: /tmp/logs on the board, one native-format file per program) -------------
+# The files are named for clog's groups (app/clog/clog.conf): bluez, pipewire, wireplumber,
+# wpasupplicant; btbenchd, kernel and system are in the nsdk format of its default group.
+LOG ?= bluez
+
+.PHONY: logs logs-pull
+logs: ## Follow a board log in clog (LOG=bluez|pipewire|wireplumber|btbenchd|kernel|system|wpasupplicant)
+	@$(SSH) -t $(TARGET) clog -t /tmp/logs/$(LOG).log
+
+logs-pull: ## Copy the board's /tmp/logs to build/logs/<time>/ (and build/logs/latest) for clog on the PC
+	@set -e; dest=$(ROOT)/build/logs/$$(date +%Y%m%d-%H%M%S); mkdir -p $$dest; \
+	$(SSH) $(TARGET) 'cd /tmp/logs && tar cf - $$(ls *.log *.log.1 2>/dev/null)' | tar xf - -C $$dest; \
+	ln -sfn $$dest $(ROOT)/build/logs/latest; \
+	echo -e "$(BOLD)Logs$(OFF) in $$dest $(DIM)(build/logs/latest; read them with app/build/clog/clog build/logs/latest/bluez.log)$(OFF)"

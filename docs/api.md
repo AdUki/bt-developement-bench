@@ -613,6 +613,8 @@ servers did. A restart drops every connection. Answers with the state plus `rest
 | `GET /api/system/bluetoothd-args` | `{args, noplugin, file}` |
 | `PUT /api/system/bluetoothd-args` `{"args": "-d -E", "restart": true}` | writes `BLUETOOTHD_ARGS` in `/data/btbench/bluetoothd.env` (other lines, `BLUETOOTHD_NOPLUGIN`, are kept) and restarts bluetooth.service |
 | `GET /api/system/journal?unit=bluetooth&lines=200` | `{unit, entries: [{ts, prio, unit, ident, pid, msg}]}`, oldest first; `unit=kernel` is the kernel's log (`journalctl -k`) |
+| `GET /api/system/logs` | `{dir, files: [{name, size, mtime_ms, link}]}`: btbench-logd's files (`/tmp/logs`, `--logs-dir`); `link` is a symbolic link's target (`btsnoop`) |
+| `GET /api/system/logs/{name}?tail=2000&download=1` | one file as `text/plain`, or its last `tail` lines; `download=1` as an attachment |
 | `GET /api/system/btdebug` | the kernel's Bluetooth debug messages by area: `btbench-btdebug status` (docs/contracts.md); 503 on a PC |
 | `PUT /api/system/btdebug` `{"on": ["l2cap", "smp"], "off": ["all"], "keep": ["l2cap"]}` | any of them, applied off → on → keep; `keep` replaces the areas on from boot (`[]`: none). Answers with the status |
 | `PUT /api/system/journal` `{"unit": "pipewire"}` | the unit the `journal` topic follows (default bluetooth) |
