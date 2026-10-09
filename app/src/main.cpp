@@ -156,9 +156,9 @@ int main(int argc, char** argv) {
   wopt.port = port;
   wopt.allow_power = !pc;
 
-  // The audio streams. Without PipeWire, the BlueZ transports say which BlueALSA PCMs exist.
+  // The audio streams: PipeWire's graph when it runs, the loopback card when it does not.
   btb::audio::AudioEngine audio(publish, [&hub](const std::string& t) { return hub.has_subscribers(t); },
-                                data_dir, [&bt] { return btb::model_media(*bt.objects()); });
+                                data_dir);
 
   // OBEX (obexd on the system bus), started on first use; its files live under the data dir.
   btb::obex::Options oopt;

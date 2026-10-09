@@ -1,9 +1,9 @@
 #pragma once
 
 // Where a stream can play to and capture from (GET /api/audio/endpoints), from whichever stack
-// owns the audio: PipeWire's nodes (pw-dump), or, without PipeWire, ALSA devices — BlueALSA's PCMs
-// for the Bluetooth transports BlueZ has configured, and the snd-aloop loopback card. Pure
-// functions of their inputs, unit-tested; audio/engine.cpp runs the tools.
+// owns the audio: PipeWire's nodes (pw-dump), or, without PipeWire (audio mode "none"), the plain
+// ALSA devices — just the snd-aloop loopback card, since no other ALSA device on the bench speaks
+// Bluetooth. Pure functions of their inputs, unit-tested; audio/engine.cpp runs the tools.
 
 #include <nlohmann/json.hpp>
 #include <string>
@@ -13,7 +13,7 @@ namespace btb::audio {
 // One endpoint: {id, backend: "pipewire"|"alsa", direction: "sink"|"source", label, kind:
 // "bluetooth"|"loopback"|"hardware"|"virtual", address|null, profile, codec, state, default,
 // rate|null, channels|null}. `id` is what a stream names as its target: PipeWire's node.name, or
-// the ALSA device string ("bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp", "hw:Loopback,0,0").
+// the ALSA device string ("hw:Loopback,0,0").
 
 // pw-dump's stdout → one array of objects. pw-dump prints the dump as a JSON array, and when
 // objects change while it runs it prints more arrays after it (the updates, keyed by id, with
@@ -25,11 +25,10 @@ nlohmann::json parse_pw_dump(const std::string& text);
 // streams (an application's own output) are left out.
 nlohmann::json endpoints_from_pw_dump(const nlohmann::json& dump);
 
-// GET /api/media's transports → the BlueALSA PCMs for them: a transport where the board is the
-// A2DP source (UUID 110a) is a sink to play into, one where it is the sink (110b) a source to
-// capture; HFP/HSP transports are both, over SCO. `loopback`: snd-aloop is loaded, so
-// hw:Loopback,0,0 (play) and hw:Loopback,1,0 (capture what was played into it) are there too.
-nlohmann::json endpoints_from_alsa(const nlohmann::json& media, bool loopback);
+// The ALSA endpoints when PipeWire is not running. `loopback`: snd-aloop is loaded, so
+// hw:Loopback,0,0 (play) and hw:Loopback,1,0 (capture what was played into it) are there; without
+// it there is nothing, and the endpoint list says backend "none".
+nlohmann::json endpoints_from_alsa(bool loopback);
 
 // The codec picker: pw-dump's Bluetooth devices (PipeWire "cards") with their profiles, as
 // {devices:[{id, name, label, address, active:{...profile}|null, profiles:[{index, name,

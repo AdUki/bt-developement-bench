@@ -50,7 +50,7 @@ bool parse_script_json(const std::string& out, json* j, std::string* err) {
   return true;
 }
 
-bool audio_mode_ok(const std::string& m) { return m == "pipewire" || m == "bluealsa" || m == "none"; }
+bool audio_mode_ok(const std::string& m) { return m == "pipewire" || m == "none"; }
 
 bool wifi_mode_ok(const std::string& m) { return m == "auto" || m == "sta" || m == "ap" || m == "off"; }
 

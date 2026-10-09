@@ -15,7 +15,7 @@
 
 namespace btb {
 
-// The tools the jobs runner starts: BlueZ's test tools, the PipeWire/BlueALSA inspectors, iperf3.
+// The tools the jobs runner starts: BlueZ's test tools, the PipeWire inspectors, iperf3.
 // Nothing that takes a shell, and the arguments go to execv as they are.
 bool job_allowed(const std::string& cmd);
 const std::vector<std::string>& job_allowlist();

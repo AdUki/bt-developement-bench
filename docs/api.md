@@ -336,8 +336,9 @@ while A2DP is up the probe is refused (409) and `GET /api/media`'s endpoints are
 A stream plays a **source** into a **sink** and/or to listeners: a test signal, an internet radio
 or UPnP URL, or one device's audio, into a Bluetooth speaker (or the loopback card), heard in a
 browser, or both. Each stream is one pump thread in btbenchd and the stack's own tools as child
-processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` with BlueALSA or none, `mpg123` or
-`ffmpeg` for URLs), so it works the same in every audio mode. At most 4 run at once.
+processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` for plain ALSA devices such as the
+loopback card, `mpg123` or `ffmpeg` for URLs). In audio mode `none` only the ALSA devices are
+there to play into or capture from. At most 4 run at once.
 
 `POST /api/audio/streams` (201):
 
@@ -357,8 +358,8 @@ processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` with BlueALSA or none, `
 | `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
 
 `sink` is `null` (listeners only), or `{"type": "pipewire", "target": ""}` (a node name, "" the
-default sink) or `{"type": "alsa", "target": "bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp"}`
-(`hw:Loopback,0,0`, ...): the ids of `GET /api/audio/endpoints`. A *tunnel* from one device to
+default sink) or `{"type": "alsa", "target": "hw:Loopback,0,0"}` (an ALSA device string,
+`hw:`/`plughw:`): the ids of `GET /api/audio/endpoints`. A *tunnel* from one device to
 another is a `capture` of the first into a sink of the second. `rate` is one of 8000 … 96000;
 frequencies are clamped to the rate's Nyquist, `gain_db` to -60..+20.
 
@@ -405,10 +406,9 @@ from:
 ```
 
 With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`), Bluetooth
-first. Without it (`alsa`) they are the BlueALSA PCMs of the transports BlueZ has configured — a
-transport where the board is the A2DP source is a sink, one where it is the sink a source, HFP
-both (`PROFILE=sco`) — plus the loopback card when snd-aloop is loaded. `kind`: `bluetooth`,
-`loopback`, `hardware`, `virtual`.
+first. Without it (`alsa`, audio mode `none`) they are the loopback card's two sides when
+snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to capture), and nothing
+(`none`) otherwise. `kind`: `bluetooth`, `loopback`, `hardware`, `virtual`.
 
 ### Bluetooth codecs
 
@@ -427,7 +427,7 @@ has opened its stream to the board, the send ones once the board's A2DP source i
 
 `PUT /api/audio/devices/{id}/profile` `{"profile": "a2dp-sink-sbc_xq"}` (or the index) switches
 it (`wpctl set-profile`) and answers with the device once the link has renegotiated (a few
-seconds; it waits up to about ten); `switch_error` says so when it has not by then. Without PipeWire (BlueALSA mode)
+seconds; it waits up to about ten); `switch_error` says so when it has not by then. Without PipeWire (mode `none`)
 the list is empty and says why.
 
 ### UPnP media servers
@@ -517,11 +517,11 @@ HCI=replay:FILE`).
 ## Audio mode
 
 `GET /api/audio` — `btbench-audio status`:
-`{"mode": "pipewire", "modes": ["pipewire", "bluealsa", "none"], "services": {"pipewire": "active", ...}}`.
+`{"mode": "pipewire", "modes": ["pipewire", "none"], "services": {"pipewire": "active", "wireplumber": "active"}}`.
 
-`PUT /api/audio` `{"mode": "bluealsa", "restart_bt": false}` — switches the stack (stops one,
-starts the other; with `restart_bt` bluetoothd is restarted too, so no endpoint of the old stack
-lingers) and answers with the new status.
+`PUT /api/audio` `{"mode": "none", "restart_bt": false}` — `pipewire` or `none`: starts or stops
+PipeWire and WirePlumber (with `restart_bt` bluetoothd is restarted too, so no endpoint PipeWire
+registered lingers) and answers with the new status.
 
 The audio, Wi-Fi and kernel routes run the board's target scripts. On a PC, where they are not
 installed, they answer 503 saying so.
@@ -556,9 +556,9 @@ answer with the new status.
 
 | route | what |
 |---|---|
-| `GET /api/system` | `{hostname, ips, uptime_s, load1, cpu_pct, temp_c, mem: {total_kb, used_kb, available_kb}, power: {available, under_voltage, seen}, versions: {bluetoothd, pipewire, wireplumber, bluealsa, btmon, kernel, os}, services: {unit: state}, bluetoothd_args, bluetoothd_noplugin, data_dir, board, device}` |
+| `GET /api/system` | `{hostname, ips, uptime_s, load1, cpu_pct, temp_c, mem: {total_kb, used_kb, available_kb}, power: {available, under_voltage, seen}, versions: {bluetoothd, pipewire, wireplumber, btmon, kernel, os}, services: {unit: state}, bluetoothd_args, bluetoothd_noplugin, data_dir, board, device}` |
 | `GET /api/system/health` | the first part only (what the `system` topic carries) |
-| `GET /api/system/services` | `{unit: "active\|inactive\|failed\|..."}` for bluetooth, pipewire, wireplumber, bluealsa, btbench-btsnoop, btbench-wifi, btbenchd |
+| `GET /api/system/services` | `{unit: "active\|inactive\|failed\|..."}` for bluetooth, pipewire, wireplumber, btbench-btsnoop, btbench-wifi, btbenchd |
 | `POST /api/system/services/{unit}/restart` | restart one of those (not btbenchd itself) |
 | `GET /api/system/bluetoothd-args` | `{args, noplugin, file}` |
 | `PUT /api/system/bluetoothd-args` `{"args": "-d -E", "restart": true}` | writes `BLUETOOTHD_ARGS` in `/data/btbench/bluetoothd.env` (other lines, `BLUETOOTHD_NOPLUGIN`, are kept) and restarts bluetooth.service |
@@ -575,7 +575,7 @@ on a PC (`btbenchd --pc`).
 
 The test tools, run on the board with their output streamed: `l2test`, `l2ping`, `isotest`,
 `rctest`, `scotest`, `btgatt-client`, `btmgmt`, `bluetoothctl`, `avinfo`, `iperf3`, `wpctl`,
-`pw-dump`, `pw-cli`, `bluealsactl`, `bluealsa-cli`, `hcitool`, `hciconfig`. Nothing else, and no
+`pw-dump`, `pw-cli`, `hcitool`, `hciconfig`. Nothing else, and no
 shell: the arguments go to the tool as they are. Tools that expect a terminal (an interactive
 `bluetoothctl`, `btmgmt` without a command) wait for input that never comes; kill them, or give them
 their command on the command line.

@@ -1,5 +1,5 @@
 SUMMARY = "Bluetooth development bench — the one image"
-DESCRIPTION = "A writable development image: BlueZ, PipeWire/WirePlumber or BlueALSA, the bench \
+DESCRIPTION = "A writable development image: BlueZ, PipeWire/WirePlumber, the bench \
 daemon and its web console, debugging and tracing tools, ssh and opkg. Deploys rsync over it and \
 kernel trials boot next to it, so nothing about it is read-only."
 LICENSE = "MIT"

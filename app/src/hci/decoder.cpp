@@ -1431,7 +1431,7 @@ void Decoder::avdtp_sig(int64_t ts, Adapter* a, Conn* c, bool tx, const uint8_t*
 
 // The transport channel: RTP header, then the codec's media payload. Loss is a gap in the RTP
 // sequence numbers; jitter is RFC 3550's interarrival jitter, with the HCI timestamp as the
-// arrival time — for TX that measures how evenly the source (PipeWire, bluealsa) hands packets to
+// arrival time — for TX that measures how evenly the source (PipeWire) hands packets to
 // the kernel, for RX how evenly the peer's packets arrive.
 void Decoder::avdtp_media(int64_t ts, Conn* c, Channel* ch, bool tx, const uint8_t* d,
                           size_t len) {

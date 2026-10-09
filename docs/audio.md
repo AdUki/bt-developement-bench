@@ -1,41 +1,39 @@
 # Audio and BlueZ on the board
 
-The board runs bluetoothd from BlueZ master and one of three audio setups on top of it. You pick
+The board runs bluetoothd from BlueZ master and either PipeWire or nothing on top of it. You pick
 the setup at runtime; nothing needs a rebuild. An always-on btmon ring records every HCI packet
 to `/data/btsnoop`.
 
 | mode | what runs | use it for |
 |---|---|---|
 | `pipewire` (default) | PipeWire system-wide, WirePlumber | A2DP both ways, HFP both ends, LE Audio (BAP), the codecs PipeWire has |
-| `bluealsa` | BlueALSA (`bluealsa`, plus `bluealsa-aplay` by hand) | A2DP and HFP with ALSA PCMs per link, a much smaller stack |
 | `none` | bluetoothd alone | `bluetoothctl endpoint/transport`, BlueZ's `test/` scripts, your own endpoint code |
 
 ```
 btbench-audio get                      # pipewire
 btbench-audio status                   # {"mode":"pipewire","modes":[...],"services":{...}}
-btbench-audio set bluealsa             # switch; remembered across reboots
-btbench-audio set none --restart-bt    # switch and restart bluetoothd too
+btbench-audio set none                 # switch; remembered across reboots
+btbench-audio set pipewire --restart-bt  # switch and restart bluetoothd too
 ```
 
 `bench audio <mode>` and the console's Audio → Stack view call the same script.
 
 ## How the modes switch
 
-PipeWire and BlueALSA both register A2DP endpoints and HFP profiles with bluetoothd. Running
-both at once would leave devices connecting to whichever registered first, so the modes exclude
-each other through systemd:
+PipeWire registers A2DP endpoints and HFP profiles with bluetoothd. In mode `none` your own
+endpoint code or BlueZ's test scripts register theirs instead, and with PipeWire still there
+devices would connect to whichever registered first, so the modes exclude each other through
+systemd:
 
 - **One target per mode.** `btbench-audio-pipewire.target` wants `pipewire.socket`,
   `pipewire-manager.socket`, `pipewire.service` and `wireplumber.service`.
-  `btbench-audio-bluealsa.target` wants `bluealsa.service`. `btbench-audio-none.target` wants
-  nothing.
-- **The targets conflict with each other.** Starting one stops the other two.
-- **The services are `PartOf=` their target** (drop-ins in
-  `/usr/lib/systemd/system/<unit>.d/50-btbench-audio-*.conf`). Stopping a target stops its stack.
-  The sockets are included, so a PipeWire client cannot socket-activate PipeWire in another mode.
-- **Ordering.** `bluealsa.service` is ordered `After=` PipeWire and WirePlumber. On a switch,
-  systemd therefore stops the old stack before it starts the new one, so the two never overlap.
-- **Nothing is enabled on its own.** pipewire, wireplumber and bluealsa have
+  `btbench-audio-none.target` wants nothing.
+- **The targets conflict with each other.** Starting one stops the other.
+- **PipeWire's units are `PartOf=` its target** (drop-ins in
+  `/usr/lib/systemd/system/<unit>.d/50-btbench-audio-pipewire.conf`). Stopping the target stops
+  PipeWire. The sockets are included, so a PipeWire client cannot socket-activate PipeWire in
+  mode `none`.
+- **Nothing is enabled on its own.** pipewire and wireplumber have
   `SYSTEMD_AUTO_ENABLE = "disable"`. At boot, `btbench-audio-select.service` runs
   `btbench-audio boot`, which starts the stored mode's target.
 
@@ -58,17 +56,17 @@ each other through systemd:
 
 ## Codecs and licensing
 
-| codec | PipeWire | BlueALSA | switch | library, license |
-|---|---|---|---|---|
-| SBC, SBC-XQ | yes | yes (SBC) | always | sbc (LGPL-2.1+) |
-| CVSD, mSBC (HFP) | yes | yes | always | sbc; spandsp (LGPL-2.1) for BlueALSA's mSBC |
-| LC3 (BAP), LC3-SWB (HFP) | yes | LC3-SWB | always | liblc3 (Apache-2.0) |
-| Opus (A2DP, PipeWire's vendor codec) | yes | yes | always | libopus (BSD) |
-| FastStream | yes | yes | always | built in |
-| G.722 (ASHA) | yes | no | always | built in |
-| aptX, aptX HD | yes | yes | `BTBENCH_EXTRA_CODECS = "1"` | libfreeaptx (LGPL-2.1+), recipe in meta-btbench |
-| LDAC (encode only) | yes | yes | `BTBENCH_EXTRA_CODECS = "1"` | ldacbt / AOSP libldac (Apache-2.0), recipe in meta-btbench |
-| AAC | yes | yes | `BTBENCH_AAC = "1"` | fdk-aac, `LICENSE_FLAGS = "commercial"` |
+| codec | switch | library, license |
+|---|---|---|
+| SBC, SBC-XQ | always | sbc (LGPL-2.1+) |
+| CVSD, mSBC (HFP) | always | sbc |
+| LC3 (BAP), LC3-SWB (HFP) | always | liblc3 (Apache-2.0) |
+| Opus (A2DP, PipeWire's vendor codec) | always | libopus (BSD) |
+| FastStream | always | built in |
+| G.722 (ASHA) | always | built in |
+| aptX, aptX HD | `BTBENCH_EXTRA_CODECS = "1"` | libfreeaptx (LGPL-2.1+), recipe in meta-btbench |
+| LDAC (encode only) | `BTBENCH_EXTRA_CODECS = "1"` | ldacbt / AOSP libldac (Apache-2.0), recipe in meta-btbench |
+| AAC | `BTBENCH_AAC = "1"` | fdk-aac, `LICENSE_FLAGS = "commercial"` |
 
 Both switches live in `yocto/meta-btbench/conf/btbench-device.conf`. Run `make image` afterwards.
 
@@ -80,14 +78,8 @@ Both switches live in `yocto/meta-btbench/conf/btbench-device.conf`. Run `make i
 - **AAC needs fdk-aac**, which OE flags `commercial`. With `BTBENCH_AAC = "1"`, the distro adds
   `commercial` to `LICENSE_FLAGS_ACCEPTED`. Accepting it is your decision.
 
-**Which codecs are offered at runtime:**
-
-- **PipeWire.** WirePlumber's `bluez5.codecs` list (below). Delete a name to stop offering that
-  codec.
-- **BlueALSA.** SBC, CVSD, mSBC and LC3-SWB are on by default. The rest are enabled by name with
-  `-c` on its command line (`SYSTEMD_BLUEALSA_ARGS` in the bluealsa bbappend). Only the codecs
-  that were built get a `-c`, because an unknown name stops the daemon. To try something else
-  on the board, use `systemctl edit bluealsa` with an `ExecStart=` override.
+**Which codecs are offered at runtime:** WirePlumber's `bluez5.codecs` list (below). Delete a
+name to stop offering that codec.
 
 ## PipeWire without a desktop
 
@@ -111,7 +103,7 @@ upstream's system units (`-Dsystemd-system-service=enabled`):
 - **What is not built.** pipewire-pulse (packaged apart, not installed), JACK, video,
   GStreamer, network audio and any desktop integration.
 - **ALSA plugin.** The pipewire-alsa plugin is installed, but PipeWire is *not* made the default
-  ALSA device: in the other modes there would be no PipeWire to answer. Use
+  ALSA device: in mode `none` there would be no PipeWire to answer. Use
   `aplay -D pipewire file.wav`.
 - **Sample rates.** `/etc/pipewire/pipewire.conf.d/50-btbench.conf` allows the graph to run at
   44.1 kHz as well as 48 kHz. Most A2DP links run at 44.1 kHz. Resampling them to 48 kHz on the
@@ -154,24 +146,20 @@ arecord -D hw:Loopback,1,0 -f S16_LE -r 44100 -c 2 phone.wav
 
 # The board plays to a speaker (A2DP source): play a file to the Bluetooth sink
 pw-play --target bluez_output.AA_BB_CC_DD_EE_FF.1 test.wav     # or: wpctl status for the name
-
-# BlueALSA mode: the PCMs are per link
-bluealsa-aplay -L                                     # list them
-aplay -D bluealsa:DEV=AA:BB:CC:DD:EE:FF,PROFILE=a2dp test.wav
-bluealsa-aplay AA:BB:CC:DD:EE:FF                      # phone → hw:Loopback (pass -D)
 ```
 
 ## Streams: playing to and listening from devices
 
 btbenchd plays and captures audio itself (`/api/audio/streams`, the console's Audio → Play and
 listen, `bench play`): a test signal, an internet radio or UPnP URL, or what one device sends, into any
-sink the stack has, and/or to a browser that listens in. It uses the stack's own tools, so it
-works in every mode:
+sink the stack has, and/or to a browser that listens in. It uses the stack's own tools. In mode
+`none` there is no Bluetooth audio to reach, but plain ALSA still works, so the loopback card is
+there to play into and capture from:
 
-| | PipeWire | BlueALSA / none |
+| | PipeWire | none |
 |---|---|---|
-| play into a sink | `pw-cat --playback --target <node>` (fed a WAV on stdin) | `aplay -D bluealsa:DEV=…,PROFILE=a2dp` / `hw:Loopback,0,0` |
-| capture a source | `pw-cat --record --target bluez_input.…` (or a sink's monitor) | `arecord -D bluealsa:DEV=…` / `hw:Loopback,1,0` |
+| play into a sink | `pw-cat --playback --target <node>` (fed a WAV on stdin) | `aplay -D hw:Loopback,0,0` |
+| capture a source | `pw-cat --record --target bluez_input.…` (or a sink's monitor) | `arecord -D hw:Loopback,1,0` |
 | decode a URL | `mpg123 -s` (MP3, ICY titles; https through its curl helper), else `ffmpeg` | the same |
 
 Each stream runs one pump thread in btbenchd that moves 20 ms chunks from the source through the
@@ -184,8 +172,7 @@ as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
   (A2DP sink) relayed to a speaker (the board as A2DP source). In PipeWire the phone's stream is
   a node `bluez_input.<addr>.…` once it plays; WirePlumber also links it to the default sink
   (the loopback card) as usual.
-- **Rates.** A stream has one rate. PipeWire resamples on both ends; aplay/arecord on a BlueALSA
-  PCM need the transport's rate (the endpoint list says it), the loopback takes any.
+- **Rates.** A stream has one rate. PipeWire resamples on both ends; the loopback takes any.
 - **Decoders.** `mpg123` is on the image (MP3: most internet radio). Everything else — AAC
   streams, HLS, FLAC/WAV from a media server — needs `ffmpeg`, which OE flags `commercial`:
   set `BTBENCH_FFMPEG = "1"` in `btbench-device.conf` (it accepts that flag for ffmpeg only) and
@@ -227,7 +214,7 @@ Run `systemctl restart bluetooth` after editing (`bench bt-args "-d"` does both)
   every log line to stderr, so each line shows up twice in the journal.
 - **BlueZ's own `hfp` plugin is not loaded.** It is an experimental HFP Hands-Free with its own
   SDP record and RFCOMM server, so `Experimental = true` would load it. It would then compete
-  with PipeWire's native HFP and BlueALSA's `hfp-hf` for the same role. To work on it, set
+  with PipeWire's native HFP for the same role. To work on it, set
   `BLUETOOTHD_NOPLUGIN=` (empty) and use audio mode `none`, or remove `hfp_hf` from
   WirePlumber's roles.
 
@@ -267,7 +254,6 @@ around `btmon -w`:
 | BlueZ recipe | `yocto/meta-btbench/recipes-connectivity/bluez5/bluez5_git.bb` (requires poky's `bluez5.inc`) |
 | bluetoothd drop-in | `recipes-connectivity/bluez5/bluez5/10-btbench.conf` |
 | PipeWire, WirePlumber | `recipes-multimedia/{pipewire,wireplumber}/*_git.bb` and their config fragments |
-| BlueALSA | `recipes-multimedia/bluealsa/bluealsa_%.bbappend` (4.3.1, codecs, args) |
 | codec libraries | `recipes-multimedia/{libfreeaptx,ldacbt}/` |
 | modes, capture ring | `recipes-multimedia/btbench-audio/` (units, drop-ins), `tools/target/btbench-{audio,btsnoop}` |
 | everything for the image | `recipes-multimedia/packagegroups/packagegroup-btbench-audio.bb` |

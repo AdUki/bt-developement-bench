@@ -96,8 +96,8 @@ its level meters (RMS bar, peak mark, per channel), the radio title, a live gain
 tone, its frequency and level; listening adds the buffered time, a volume and a spectrum. The
 console keeps listening when you change views. *Internet radio*: the station list (edit it as
 `name | url` lines), play to the chosen sink or listen. *UPnP media servers*: search the LAN,
-browse a server's folders and play or listen to its tracks. *Stack*: the audio stack (PipeWire /
-BlueALSA / none) with a confirmation, optionally restarting bluetoothd, then BlueZ's view, the
+browse a server's folders and play or listen to its tracks. *Stack*: the audio stack (PipeWire or
+none) with a confirmation, optionally restarting bluetoothd, then BlueZ's view, the
 same in every mode: transports (codec decoded, state, delay, an AVRCP absolute-volume slider; the
 raw configuration and path under *Details*) and the remote stream endpoints with their capabilities, and the *AVDTP probe*: a device's own
 DISCOVER / GET_ALL_CAPABILITIES answer, every stream endpoint with its role, codec and other
@@ -161,8 +161,8 @@ On the board a big file is indexed, and a text filter searched, a slice at a tim
 shows the progress and the totals grow until done. For the file btmon is writing, *follow* keeps
 reading what is appended (and scrolls with it while the table is at the bottom).
 
-**System** — four views. *Overview*: health, versions of BlueZ, PipeWire, WirePlumber, BlueALSA
-and the kernel, the stack's services with restart buttons, bluetoothd's command line under a
+**System** — four views. *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
+kernel, the stack's services with restart buttons, bluetoothd's command line under a
 disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
 bluetooth), and reboot. *Logs and tools*: the journal of a unit (the last 200 lines, and live with
 *follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted

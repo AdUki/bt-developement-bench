@@ -459,12 +459,12 @@ cmd_sinks() {
 }
 
 # The sink a TARGET names: "" the default (PipeWire), "-" nowhere (listen only), an ALSA device
-# (hw:..., bluealsa:...), or a PipeWire node name.
+# (hw:..., plughw:...), or a PipeWire node name.
 sink_json() {
   case "${1-}" in
     "") echo '{"type":"pipewire","target":""}' ;;
     -) echo null ;;
-    hw:*|plughw:*|bluealsa:*) jq -nc --arg t "$1" '{type:"alsa", target:$t}' ;;
+    hw:*|plughw:*) jq -nc --arg t "$1" '{type:"alsa", target:$t}' ;;
     *) jq -nc --arg t "$1" '{type:"pipewire", target:$t}' ;;
   esac
 }
@@ -483,7 +483,7 @@ cmd_play() {
     silence) src='{"type":"silence"}' ;;
     url|radio) [ $# -ge 1 ] || die "usage: bench play url URL [TARGET]"; src=$(jq -nc --arg u "$1" '{type:"url", url:$u}'); shift ;;
     capture) [ $# -ge 1 ] || die "usage: bench play capture SOURCE [TARGET]"
-      case "$1" in hw:*|bluealsa:*) src=$(jq -nc --arg t "$1" '{type:"capture", backend:"alsa", target:$t}') ;;
+      case "$1" in hw:*|plughw:*) src=$(jq -nc --arg t "$1" '{type:"capture", backend:"alsa", target:$t}') ;;
         *) src=$(jq -nc --arg t "$1" '{type:"capture", target:$t}') ;; esac; shift ;;
     *) die "usage: bench play tone [HZ]|sweep|noise [white|pink|brown]|silence|url URL|capture SOURCE [TARGET]" ;;
   esac
@@ -806,12 +806,12 @@ _bench() {
     ask|auto) COMPREPLY=($(compgen -W "DisplayOnly DisplayYesNo KeyboardOnly NoInputNoOutput KeyboardDisplay" -- "$cur")) ;;
     adv) COMPREPLY=($(compgen -W "ls start stop" -- "$cur")) ;;
     start) COMPREPLY=($(compgen -f -- "$cur")) ;;
-    audio) COMPREPLY=($(compgen -W "pipewire bluealsa none" -- "$cur")) ;;
+    audio) COMPREPLY=($(compgen -W "pipewire none" -- "$cur")) ;;
     cap) COMPREPLY=($(compgen -W "on off ls get analyze rm live" -- "$cur")) ;;
     wifi) COMPREPLY=($(compgen -W "status scan add remove ap sta off auto" -- "$cur")) ;;
     kernel) COMPREPLY=($(compgen -W "status try commit rollback" -- "$cur")) ;;
-    logs) COMPREPLY=($(compgen -W "bluetooth pipewire wireplumber bluealsa btbenchd btbench-wifi btbench-btsnoop -f" -- "$cur")) ;;
-    run) COMPREPLY=($(compgen -W "l2test l2ping isotest rctest scotest btgatt-client btmgmt bluetoothctl avinfo iperf3 wpctl pw-dump pw-cli bluealsactl" -- "$cur")) ;;
+    logs) COMPREPLY=($(compgen -W "bluetooth pipewire wireplumber btbenchd btbench-wifi btbench-btsnoop -f" -- "$cur")) ;;
+    run) COMPREPLY=($(compgen -W "l2test l2ping isotest rctest scotest btgatt-client btmgmt bluetoothctl avinfo iperf3 wpctl pw-dump pw-cli hcitool hciconfig" -- "$cur")) ;;
     info|pair|connect|disconnect|trust|untrust|block|unblock|cancel|remove|gatt)
       local addrs
       addrs=$(bench devices 2>/dev/null | awk 'NR > 1 { print $1 }')
@@ -849,7 +849,7 @@ ${bold}LE${off}
   gatt ADDR notify H              follow its value (Ctrl-C stops notifications)
   adv [ls] | start FILE.json | stop [ID]   LE advertisements (fields: see /api)
 ${bold}Audio${off}
-  audio [pipewire|bluealsa|none] [--restart-bt]   show or switch the audio stack
+  audio [pipewire|none] [--restart-bt]   show or switch the audio stack
   media                           A2DP/BAP endpoints and transports, codec decoded
   player [ADDR] [play|pause|stop|next|previous|fast-forward|rewind|repeat M|shuffle M]
                                   a phone's AVRCP player: control it, show its track

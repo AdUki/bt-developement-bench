@@ -19,7 +19,7 @@ namespace {
 void test_script_json() {
   json j;
   std::string err;
-  CHECK(parse_script_json("{\"mode\":\"pipewire\",\"modes\":[\"pipewire\",\"bluealsa\",\"none\"]}\n", &j, &err));
+  CHECK(parse_script_json("{\"mode\":\"pipewire\",\"modes\":[\"pipewire\",\"none\"]}\n", &j, &err));
   CHECK_EQ(j["mode"].get<std::string>(), std::string("pipewire"));
   CHECK(parse_script_json("[{\"ssid\":\"x\",\"signal_dbm\":-52}]", &j, &err));
   CHECK(j.is_array());
@@ -31,7 +31,7 @@ void test_script_json() {
 
 void test_inputs() {
   std::string err;
-  CHECK(audio_mode_ok("bluealsa"));
+  CHECK(audio_mode_ok("pipewire") && audio_mode_ok("none"));
   CHECK(!audio_mode_ok("pulse"));
   CHECK(wifi_mode_ok("auto") && wifi_mode_ok("off"));
   CHECK(!wifi_mode_ok("mesh"));
@@ -48,10 +48,10 @@ void test_inputs() {
 }
 
 void test_systemctl() {
-  const std::vector<std::string> units = {"bluetooth.service", "pipewire.service", "bluealsa.service"};
+  const std::vector<std::string> units = {"bluetooth.service", "pipewire.service", "wireplumber.service"};
   const json j = parse_is_active(units, "active\ninactive\nfailed\n");
   CHECK_EQ(j["bluetooth.service"].get<std::string>(), std::string("active"));
-  CHECK_EQ(j["bluealsa.service"].get<std::string>(), std::string("failed"));
+  CHECK_EQ(j["wireplumber.service"].get<std::string>(), std::string("failed"));
   const json short_ = parse_is_active(units, "active\n");
   CHECK_EQ(short_["pipewire.service"].get<std::string>(), std::string("unknown"));
   CHECK(restartable_service("bluetooth.service"));

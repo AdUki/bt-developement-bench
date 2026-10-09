@@ -6,7 +6,7 @@ watch the HCI traffic live. Built for a Raspberry Pi Zero W; other boards are a 
 plus a `yocto/conf/boards/<name>.conf` away.
 
 - **BlueZ** from git (pinned in `yocto/conf/versions.conf`), with every tool and test script.
-- **Audio stack switchable on the board:** PipeWire + WirePlumber, BlueALSA, or bluetoothd alone
+- **Audio stack switchable on the board:** PipeWire + WirePlumber, or bluetoothd alone
   (`bench audio <mode>`).
 - **Audio in and out:** play a tone, sweep, noise, silence, internet radio or a UPnP server's
   tracks into any Bluetooth sink, tunnel one device's audio to another, and listen to any of it

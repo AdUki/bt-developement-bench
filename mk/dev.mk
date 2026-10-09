@@ -214,8 +214,8 @@ deploy_stage = set -e; \
 
 # Run on the board after a deploy: unit files may have changed, libraries may have new names.
 remote_reload = systemctl daemon-reload; command -v ldconfig >/dev/null && ldconfig; true
-# PipeWire and WirePlumber only run in the pipewire audio mode; restarting them in another one
-# would start them next to BlueALSA.
+# PipeWire and WirePlumber only run in the pipewire audio mode; restarting them in "none" would
+# start them behind the mode's back, racing whatever test drives bluetoothd's endpoints there.
 remote_if_pipewire = if [ "$$(btbench-audio get 2>/dev/null)" = pipewire ]; then $(1); \
 	else echo "audio mode is not pipewire: $(2) not restarted"; fi
 

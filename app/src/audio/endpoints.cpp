@@ -150,42 +150,8 @@ json endpoints_from_pw_dump(const json& dump) {
   return json{{"sinks", sinks}, {"sources", sources}};
 }
 
-json endpoints_from_alsa(const json& media, bool loopback) {
+json endpoints_from_alsa(bool loopback) {
   json sinks = json::array(), sources = json::array();
-  if (media.contains("transports") && media["transports"].is_array()) {
-    for (const json& t : media["transports"]) {
-      const std::string uuid = t.value("uuid", "");
-      const std::string addr = t.value("address", "");
-      if (addr.empty()) continue;
-      const bool a2dp_src = uuid == "110a", a2dp_snk = uuid == "110b";
-      const bool sco = uuid == "111e" || uuid == "111f" || uuid == "1108" || uuid == "1112";
-      if (!a2dp_src && !a2dp_snk && !sco) continue;
-      const std::string profile = sco ? "sco" : "a2dp";
-      const json codec = t.contains("codec") ? t["codec"] : json::object();
-      json e{{"id", "bluealsa:DEV=" + addr + ",PROFILE=" + profile},
-             {"backend", "alsa"},
-             {"label", addr + " (" + (sco ? std::string("HFP/HSP") : std::string("A2DP")) + ", " +
-                           codec.value("name", std::string("?")) + ")"},
-             {"kind", "bluetooth"},
-             {"address", addr},
-             {"profile", profile},
-             {"codec", codec.value("name", std::string{})},
-             {"serial", ""},
-             {"state", t.value("state", "")},
-             {"default", false},
-             {"rate", codec.contains("rate") && codec["rate"].is_number() ? codec["rate"] : json(nullptr)},
-             {"channels", nullptr}};
-      if (a2dp_src || sco) {
-        json s = e;
-        s["direction"] = "sink";
-        sinks.push_back(std::move(s));
-      }
-      if (a2dp_snk || sco) {
-        e["direction"] = "source";
-        sources.push_back(std::move(e));
-      }
-    }
-  }
   if (loopback) {
     auto lb = [](const char* id, const char* dir, const char* label) {
       return json{{"id", id},       {"backend", "alsa"}, {"direction", dir},  {"label", label},

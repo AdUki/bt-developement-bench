@@ -174,7 +174,7 @@ The kernel area adds `src/linux` to `CLANGD_TREES`.
 - **Rebuild the SDK** when you change a component's ABI (a new library version, a changed public
   header) and another component builds against it. Otherwise the other one compiles against the
   SDK's old copy. For BlueZ, PipeWire and WirePlumber this mostly matters between PipeWire and
-  WirePlumber. PipeWire's BlueZ plugin and BlueALSA talk to bluetoothd over D-Bus and link
+  WirePlumber. PipeWire's BlueZ plugin talks to bluetoothd over D-Bus and links
   BlueZ's libbluetooth only for the socket helpers, whose ABI has not moved in years.
 - **Mixed revisions.** A deploy on top of an image of different revisions works as long as the
   libraries they share agree. When in doubt, `make bump-versions image` and reflash.

@@ -127,7 +127,7 @@ const std::vector<Plugin>& plugins_table() {
   static const std::vector<Plugin> t = {
       {"policy", "Policy", "Connects a device's other profiles when one connects, reconnects devices that dropped, powers adapters on. Off: only what is asked for connects."},
       {"autopair", "Auto-pair", "Tries the usual fixed PINs (0000, 1234) for legacy devices without a keypad."},
-      {"a2dp", "A2DP", "Stream endpoints for PipeWire and BlueALSA (needed for music either way)."},
+      {"a2dp", "A2DP", "Stream endpoints for PipeWire (needed for any A2DP music)."},
       {"avrcp", "AVRCP", "Remote control, track info, absolute volume, cover art."},
       {"hfp", "BlueZ HFP", "BlueZ's own Hands-Free: fights PipeWire's native HFP for the same role."},
       {"input", "HID (classic)", "Classic Bluetooth keyboards, mice, game pads."},

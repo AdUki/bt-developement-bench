@@ -38,8 +38,7 @@ json env_json(const std::string& path) {
 const std::vector<std::string>& watched_services() {
   static const std::vector<std::string> s = {
       "bluetooth.service",       "pipewire.service",      "wireplumber.service",
-      "bluealsa.service",        "btbench-btsnoop.service", "btbench-wifi.service",
-      "btbenchd.service"};
+      "btbench-btsnoop.service", "btbench-wifi.service",  "btbenchd.service"};
   return s;
 }
 
@@ -220,8 +219,7 @@ json SystemInfo::versions() {
   };
   const std::vector<Tool> tools = {
       {"bluetoothd", {"bluetoothd", "-v"}},     {"pipewire", {"pipewire", "--version"}},
-      {"wireplumber", {"wireplumber", "--version"}}, {"bluealsa", {"bluealsa", "-V"}},
-      {"btmon", {"btmon", "--version"}},
+      {"wireplumber", {"wireplumber", "--version"}}, {"btmon", {"btmon", "--version"}},
   };
   json v = json::object();
   for (const Tool& t : tools) {
