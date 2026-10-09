@@ -212,6 +212,12 @@ with `GattManager1` (it replaces the previous one):
 subscribed client is notified of it (an echo). BlueZ adds the CCC descriptors itself (defining
 `2902` is refused).
 
+Any service, characteristic or descriptor may give a fixed `"handle"` (1..0xffff, a number or
+`"0x0400"`): a service's is its declaration, a characteristic's its value (its declaration is
+the handle before), a descriptor's its own; a notifying characteristic's CCC, which BlueZ adds,
+takes the handle after its value. BlueZ refuses an application whose handles collide or do not
+fit. Without handles BlueZ allocates them, the same way each time for the same definition.
+
 `GET /api/le/gatt-server` — `{"defined", "state": "none|pending|registering|registered|failed",
 "error", "path", "app", "values": [{path, uuid, value, text, notifying}]}`;
 `GET /api/le/gatt-server/example` — the example above; `DELETE /api/le/gatt-server` unregisters it.
@@ -222,14 +228,15 @@ Remote reads and writes are reported on the `gatt.server` topic.
 The board as a Bluetooth LE remote control: a HID service (Report Map with a Consumer Control
 report, ID 1, and a boot-layout keyboard report, ID 2; HID Information, Control Point, Protocol
 Mode), Battery and Device Information (PnP ID), registered as a second GATT application under
-`/org/btbench/hid`, and an advertisement (appearance 0x0180 *Remote Control*, the HID UUID, its
+`/org/btbench/hid` at fixed handles (HID 0x0400–0x0410 with the reports' values at 0x040a and
+0x040e, Battery 0x0420, Device Information 0x0430: a bonded host's cached database stays valid), and an advertisement (appearance 0x0180 *Remote Control*, the HID UUID, its
 name) — both only while it is on. Hosts pair before they read the report map (it is
 encrypted-read), like with any HID device.
 
 | route | what |
 |---|---|
 | `GET /api/le/hid` | `{enabled, name, gatt: {state, error}, advertisement: {id, state, error}, subscribed: {consumer, keyboard}, battery, last: {key, action, ts}, keys: {consumer: [...], keyboard: [...]}}`; `subscribed` says a host turned on the report's notifications |
-| `PUT /api/le/hid` `{"enabled": true, "name": "btbench remote"}` | on (409 with BlueZ's reason if it refused the service or the advertisement), `{"enabled": false}` off; `{"battery": 0..100}` the level hosts show |
+| `PUT /api/le/hid` `{"enabled": true, "name": "btbench remote"}` | on (409 with BlueZ's reason if it refused the service or the advertisement), `{"enabled": false}` off — kept in `/data/btbench/hid-remote.json`, so it is back on after a restart, and advertised again when BlueZ drops the advertisement (an adapter power cycle); `{"battery": 0..100}` the level hosts show |
 | `POST /api/le/hid/key` `{"key": "volume_up", "action": "tap", "hold_ms": 80}` | `action` `tap` (press, hold, release), `down` or `up`. `key`: a name from `keys` — `play_pause`, `next`, `previous`, `volume_up`, `mute`, `home`, `back`, `menu`, `power`, …; `up`, `down`, `left`, `right`, `enter`, `escape`, … — one character (`a`, `7`), or a raw usage `consumer:0xcd` / `keyboard:0x28`. A key held down more than 10 s is released by itself; 409 while the remote is off |
 | `POST /api/le/hid/type` `{"text": "hello"}` | types printable ASCII (US layout), up to 256 characters |
 

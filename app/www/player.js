@@ -104,6 +104,7 @@ function renderNowPlaying() {
   setText($('np-sub'), sub);
   setText($('np-sub2'), sub2);
   $('np').classList.toggle('idle', c.kind === 'none');
+  $('np-bar').parentElement.hidden = c.kind === 'none';
   const btn = (a, d, on, cls) => `<button class="np-btn ${cls || ''}" data-np="${a}" title="${a}" aria-label="${a}"${on ? '' : ' disabled'}>${svg(d)}</button>`;
   setHTML($('np-ctl'), btn('previous', PL_SVG.previous, can.prev) +
     (playing ? btn('pause', PL_SVG.pause, can.play, 'main') : btn('play', PL_SVG.play, can.play, 'main')) +

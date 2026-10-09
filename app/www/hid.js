@@ -177,7 +177,7 @@ function renderHost(s) {
 
 function hostEvent(e) {
   const t = e.type === 'key' ? (e.value === 1 ? 'down' : e.value === 0 ? 'up' : 'repeat') : e.value;
-  logLine($('hh-log'), `${fmtTime(e.ts)}  ${devName(e.address)}  ${e.name.padEnd(18)} ${t}`);
+  logLine($('hh-log'), `${fmtTime(e.ts)}  ${devName(e.address)}  ${e.name.replace(/^(KEY|BTN)_/, '')} ${t}`);
   if (e.type === 'key' && e.value === 1) {
     setHTML($('hh-last'), `<span class="keycap">${esc(e.name.replace(/^(KEY|BTN)_/, ''))}</span> <span class="muted small">from ${esc(devName(e.address))}</span>`);
   }
@@ -194,8 +194,8 @@ registerTab('hid', {
   topics: () => ['hid.input', 'bt'],
   show() {
     hid.logged = false;
-    refreshHost();
-    api('/bluetooth').then(b => { if (!btState) btState = b; }).catch(() => {});
+    // The names first: the log says "SMI-PC", not its address.
+    api('/bluetooth').then(b => { if (!btState) btState = b; }).catch(() => {}).then(refreshHost);
   },
   onMessage(topic, d) {
     if (currentTab !== 'hid') return;
