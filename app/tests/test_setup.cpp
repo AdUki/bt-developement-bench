@@ -117,8 +117,8 @@ void test_setup() {
     json out;
     std::string err;
     int status = 0;
-    CHECK(s.change(json::parse(R"({"profiles": {"a2dp_source": false, "obex_ftp": false, "le_audio": false, "bap_sink": false, "bap_source": false, "bap_bcast_sink": true, "hid_remote": true},
-        "plugins": {"policy": false}, "settings": {"General.ControllerMode": "le", "Monitor.bluez5.enable-msbc": false}})"), &out, &err, &status));
+    CHECK(s.change(json::parse(R"({"profiles": {"a2dp_source": false, "obex_ftp": false, "bap_sink": false, "bap_source": false, "bap_bcast_sink": true, "hid_remote": true},
+        "plugins": {"policy": false, "bap": false, "bass": false, "vcp": false, "micp": false, "mcp": false, "ccp": false, "csip": false, "tmap": false, "gmap": false}, "settings": {"General.ControllerMode": "le", "Monitor.bluez5.enable-msbc": false}})"), &out, &err, &status));
     CHECK(err.empty());
     CHECK(remote);
     CHECK_EQ(obex_got, std::string("ftp,pcsuite"));
@@ -131,7 +131,7 @@ void test_setup() {
     CHECK(has(slurp(dir / "wp.conf"), "override.bluez5.roles = [ a2dp_sink bap_bcast_sink hfp_hf hfp_ag ]"));
     CHECK(has(slurp(dir / "wp.conf"), "bluez5.enable-msbc = false"));
     for (const json& p : out["profiles"]) {
-      if (p["id"] == "a2dp_source" || p["id"] == "le_audio" || p["id"] == "bap_sink") CHECK_EQ(p["on"].get<bool>(), false);
+      if (p["id"] == "a2dp_source" || p["id"] == "bap_sink") CHECK_EQ(p["on"].get<bool>(), false);
       if (p["id"] == "a2dp_sink" || p["id"] == "hid_remote" || p["id"] == "bap_bcast_sink") CHECK_EQ(p["on"].get<bool>(), true);
     }
     // Refused as a whole: nothing changes.

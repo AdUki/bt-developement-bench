@@ -185,8 +185,6 @@ const std::vector<Profile>& profiles_table() {
       {"bap_source", "LE Audio unicast source", "LE Audio", "Send LE Audio to earbuds (BAP unicast client, source).", {}, {"bap_source"}, {}},
       {"bap_bcast_sink", "LE Audio broadcast sink", "LE Audio", "Listen to Auracast broadcasts (BAP broadcast sink). Needs ISO: a controller with LE Audio.", {}, {"bap_bcast_sink"}, {}},
       {"bap_bcast_source", "LE Audio broadcast source", "LE Audio", "Broadcast audio for anyone to hear (BAP broadcast source). Needs ISO.", {}, {"bap_bcast_source"}, {}},
-      {"le_audio", "LE Audio services in BlueZ", "LE Audio", "BlueZ's side of LE Audio: BAP, broadcast assistant, volume, microphone, media and call control, coordinated sets.",
-       {"bap", "bass", "vcp", "micp", "mcp", "ccp", "csip", "tmap", "gmap"}, {}, {}},
       {"avrcp", "AVRCP", "Control", "Players, track info, absolute volume and cover art.", {"avrcp"}, {}, {}},
       {"hid_host", "HID host (classic)", "Input", "Use classic keyboards, mice and game pads.", {"input"}, {}, {}},
       {"hog_host", "HID over GATT host", "Input", "Use BLE keyboards, mice and remotes.", {"hog", "scanparam"}, {}, {}},
