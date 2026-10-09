@@ -84,6 +84,7 @@ target_compile_definitions(third_party INTERFACE SPDLOG_HEADER_ONLY CPPHTTPLIB_T
 add_library(btbench_core STATIC
   src/a2dp_codec.cpp
   src/audio/endpoints.cpp
+  src/avdtp/probe.cpp
   src/audio/engine.cpp
   src/audio/pcm.cpp
   src/audio/upnp.cpp

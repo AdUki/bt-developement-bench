@@ -5,6 +5,7 @@
 // the answer is the point.
 #include <systemd/sd-bus.h>
 
+#include "avdtp/probe.h"
 #include "bluez_model.h"
 #include "http_util.h"
 #include "util/strings.h"
@@ -301,6 +302,21 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
                                              DVar::u16(static_cast<uint16_t>(v)), 5000);
     if (!r.ok) return reply_error(res, r);
   }));
+
+  // ---- AVDTP browsing: a device's stream endpoints, asked directly ------------------------------
+
+  // POST: probe over an AVDTP channel of our own (pages the device; up to ?timeout_s, default 15).
+  // Answers {address, seps:[...], took_ms}, or 409 when the device refuses a second channel —
+  // GET /api/media's endpoints are then BlueZ's view of the same SEPs.
+  svr.Post("/api/media/avdtp/:addr", [](const httplib::Request& req, httplib::Response& res) {
+    const std::string addr = upper(path_param(req, "addr"));
+    if (!bt_address_ok(addr)) return send_error(res, 400, "address is AA:BB:CC:DD:EE:FF");
+    const int timeout_ms = static_cast<int>(std::clamp(query_long(req, "timeout_s", 15), 2L, 60L) * 1000);
+    json out;
+    std::string err;
+    if (!avdtp::probe(addr, timeout_ms, &out, &err)) return send_error(res, err.find("refused") != std::string::npos ? 409 : 502, err);
+    send_json(res, out);
+  });
 
   // ---- AVRCP: the remote players (a phone's music app, as BlueZ's MediaPlayer1) -----------------
 
