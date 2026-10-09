@@ -19,6 +19,7 @@ SRC_URI = " \
     file://btbench-data.service \
     file://btbench-bdaddr.service \
     file://btbench-gadget.service \
+    file://btbench-gadget-reconnect.service \
     file://btbench-wifi.service \
     file://10-usb0.network \
     file://30-wlan0.network \
@@ -89,6 +90,7 @@ SYSTEMD_SERVICE:${PN} = " \
     btbench-data.service \
     btbench-bdaddr.service \
     btbench-gadget.service \
+    btbench-gadget-reconnect.service \
     btbench-wifi.service \
 "
 SYSTEMD_AUTO_ENABLE = "enable"
@@ -105,7 +107,7 @@ do_install() {
     done
 
     install -d ${D}${systemd_system_unitdir}
-    for u in btbench-data btbench-bdaddr btbench-gadget btbench-wifi; do
+    for u in btbench-data btbench-bdaddr btbench-gadget btbench-gadget-reconnect btbench-wifi; do
         install -m 0644 ${WORKDIR}/$u.service ${D}${systemd_system_unitdir}/
     done
 

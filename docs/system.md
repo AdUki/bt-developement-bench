@@ -44,6 +44,11 @@ Plug the Zero W's **USB** port (not PWR) into the PC. It is one composite USB de
   `enx06bb…`. Its MAC comes from the board's serial number, so NetworkManager keeps the same
   "Wired connection" profile across reboots and reflashes; nothing needs configuring. If
   NetworkManager is set to ignore unknown devices, `nmcli device set <iface> managed yes`.
+  The link answers about 45 s after power-on, not when the PC first gets its lease:
+  btbench-gadget-reconnect.service connects once more 15 s after boot finishes, because with
+  `KERNEL=next` the first connection stops receiving at about that moment (the PC then logs
+  `transmit queue 0 timed out` for its `enx…` interface). If the link dies that way later,
+  `btbench-gadget reconnect` on the serial console brings it back.
 - **Serial console**: `/dev/ttyACM0` on the PC (`picocom /dev/ttyACM0`), a login on `ttyGS0`.
   It works when the network does not, e.g. a trial kernel without a network.
 

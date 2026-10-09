@@ -1,0 +1,15 @@
+[Unit]
+Description=Reconnect the USB gadget to the PC once boot has settled
+# The link bound at boot stops receiving at about the moment boot finishes (btbench-gadget,
+# "reconnect"). Ordered after multi-user.target and 15 s later still, so the reconnect comes after
+# whatever breaks it; with a reconnect at the end of boot the failure still showed up.
+After=btbench-gadget.service multi-user.target
+Requisite=btbench-gadget.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 15
+ExecStart=/usr/bin/btbench-gadget reconnect
+
+[Install]
+WantedBy=multi-user.target
