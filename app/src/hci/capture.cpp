@@ -224,9 +224,27 @@ bool Capture::set_running(bool on, std::string* err) const {
   return false;
 }
 
+std::string drop_plot_errors(const std::string& out) {
+  std::string kept;
+  size_t at = 0;
+  while (at < out.size()) {
+    size_t nl = out.find('\n', at);
+    if (nl == std::string::npos) nl = out.size();
+    const std::string line = out.substr(at, nl - at);
+    if (line.find("gnuplot") == std::string::npos) kept += line + (nl < out.size() ? "\n" : "");
+    at = nl + 1;
+  }
+  return kept;
+}
+
 CommandResult Capture::analyze(const std::string& name) const {
   // btmon -a over a full 16 MiB ring file takes a few seconds on the Zero W; 30 s is generous.
-  return run_command({btmon_, "-a", path(name)}, 30000, 4 * 1024 * 1024);
+  CommandResult r = run_command({btmon_, "-a", path(name)}, 30000, 4 * 1024 * 1024);
+  // btmon pipes its latency histograms to gnuplot, which the image does not have (and whose
+  // terminal-art plots the console could not show anyway: it draws its own graphs), so every
+  // connection adds the shell's "gnuplot: command not found" to the summary. Dropped.
+  r.output = drop_plot_errors(r.output);
+  return r;
 }
 
 }  // namespace btb::hci

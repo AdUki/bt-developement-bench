@@ -55,10 +55,21 @@ void test_run_command() {
   CHECK(r.exit_code == 0 && std::stoi(r.output) <= 5);
 }
 
+void test_plot_errors() {
+  // btmon -a's summary, with the shell's complaint about the missing plotter between sections.
+  const std::string out = "Bluetooth monitor ver 5.87\nFound BR-ACL connection with handle 11\n"
+                          "sh: line 1: gnuplot: command not found\n        Address: AA:BB\n"
+                          "sh: gnuplot: not found\n        TX packets: 12";
+  CHECK_EQ(btb::hci::drop_plot_errors(out),
+           std::string("Bluetooth monitor ver 5.87\nFound BR-ACL connection with handle 11\n        Address: AA:BB\n        TX packets: 12"));
+  CHECK_EQ(btb::hci::drop_plot_errors(""), std::string(""));
+}
+
 }  // namespace
 
 int main() {
   test_names();
   test_run_command();
+  test_plot_errors();
   return report("test_hci_capture");
 }

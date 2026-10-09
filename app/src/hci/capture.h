@@ -10,6 +10,9 @@
 
 namespace btb::hci {
 
+// btmon -a's output without the lines its missing plotter adds ("sh: gnuplot: command not found").
+std::string drop_plot_errors(const std::string& out);
+
 struct CommandResult {
   bool started = false;  // false: fork/exec failed (error says why)
   bool timed_out = false;
