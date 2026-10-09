@@ -168,6 +168,17 @@ canvas.graph.short { height: 110px; }
 .radio-row, #up-servers > .row, #up-items > .row { padding: 0.2rem 0; border-bottom: 1px solid var(--line); gap: 0.5rem; }
 #up-path { margin: 0.4rem 0; }
 
+/* Graphs */
+.gr-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; margin-top: 0.5rem; }
+.gr-legend span { cursor: pointer; user-select: none; }
+.gr-legend span.off { opacity: 0.35; text-decoration: line-through; }
+.gr-legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 0.3rem; }
+.gr-chart { position: relative; }
+.gr-chart canvas.graph { height: 170px; }
+.gr-tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.3rem 0.5rem; font-size: 0.78rem; white-space: nowrap; z-index: 5; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.gr-tip[hidden] { display: none; }
+
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
 .modal[hidden] { display: none; }
 .modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; width: min(440px, 100%); }

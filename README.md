@@ -16,7 +16,8 @@ plus a `yocto/conf/boards/<name>.conf` away.
   (`KERNEL=rpi`). Trial boots fall back to the good kernel on their own.
 - **Monitoring:** an always-on btsnoop ring, live per-link/per-channel throughput, TX latency
   (HCI → Number of Completed Packets), controller buffer occupancy, AVDTP state and RTP loss, and
-  a live pcap stream into Wireshark.
+  a live pcap stream into Wireshark; live scrolling graphs of all of it (the Graphs tab); and a
+  packet viewer for the captures, with filters, per-packet decoding and timeline graphs.
 - **Control:** web console (`http://10.55.0.1`) and `tools/bench`: pair, connect, GATT explorer,
   advertising, local GATT server, audio mode, Wi-Fi, kernel slots, logs.
 - **Links:** USB gadget (network + serial console) on the data micro-USB port; Wi-Fi with a setup

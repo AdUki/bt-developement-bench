@@ -59,6 +59,15 @@ browse a server's folders and play or listen to its tracks. Then BlueZ's view, t
 mode: transports (codec decoded, raw configuration, state, delay, an AVRCP absolute-volume
 slider) and the remote stream endpoints with their capabilities.
 
+**Graphs** — live, scrolling graphs on one time axis (30 s, 2 min or 5 min): per connection the
+throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the
+controller's free credits, and for an AVDTP media stream its RTP packets, losses and jitter;
+the audio streams' levels; the board's CPU and temperature. Each connection (stream, the board)
+has one colour; click it in the legend to hide it, or pick one connection. Hovering shows the
+values at that instant on every chart. Pause freezes the picture (the data keeps coming), CSV
+downloads the samples. The last five minutes of a connection come from the monitor's history when
+the tab opens; everything else is collected while the tab is open.
+
 **Monitor** — the HCI monitor's connections: throughput, TX latency p50/p95/max (HCI send to
 Number Of Completed Packets), packets in flight against the controller's credits, RTP loss. Click
 one for two minutes of throughput and latency graphs, the latency histogram since it connected, and

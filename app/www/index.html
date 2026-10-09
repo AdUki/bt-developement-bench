@@ -21,6 +21,7 @@
   <a href="#devices" class="tab" data-tab="devices">Devices</a>
   <a href="#le" class="tab" data-tab="le">LE</a>
   <a href="#audio" class="tab" data-tab="audio">Audio</a>
+  <a href="#graphs" class="tab" data-tab="graphs">Graphs</a>
   <a href="#monitor" class="tab" data-tab="monitor">Monitor</a>
   <a href="#capture" class="tab" data-tab="capture">Capture</a>
   <a href="#wifi" class="tab" data-tab="wifi">Wi-Fi</a>
@@ -221,6 +222,22 @@
     <div id="au-endpoints" class="list"></div>
   </section>
 
+  <!-- ======================================================== Graphs -->
+  <section id="graphs" class="panel">
+    <div class="card">
+      <div class="row wrap">
+        <h3>Live graphs</h3>
+        <label>Window <select id="gr-window"><option value="30">30 s</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></label>
+        <label>Connection <select id="gr-conn"><option value="">all</option></select></label>
+        <button id="gr-pause">Pause</button>
+        <button id="gr-csv" title="The buffered samples as CSV">CSV</button>
+        <span id="gr-msg" class="small muted"></span>
+      </div>
+      <div id="gr-legend" class="small gr-legend"></div>
+    </div>
+    <div id="gr-charts"></div>
+  </section>
+
   <!-- ======================================================== Monitor -->
   <section id="monitor" class="panel">
     <div id="mon-msg" class="small bad-text"></div>
@@ -398,6 +415,7 @@
 <script src="le.js"></script>
 <script src="audio.js"></script>
 <script src="monitor.js"></script>
+<script src="graphs.js"></script>
 <script src="capture.js"></script>
 <script src="wifi.js"></script>
 <script src="kernel.js"></script>
