@@ -81,12 +81,19 @@ btbenchd-cross: check-submodules check-sdk ## Cross-build btbenchd with the SDK 
 	cmake --build $(APP_XBUILD) -j$$(nproc) --target btbenchd
 	@echo -e "$(BOLD)$(APP_XBUILD)/btbenchd$(OFF)  $$(file -b $(APP_XBUILD)/btbenchd | cut -d, -f1-2)"
 
+# The SDK compiles with -g, so the binary is ~150 MB, nearly all debug info: over the board's
+# Wi-Fi that is minutes, and an rsync that stalls leaves btbenchd stopped. The board gets a
+# stripped copy; the full one is staged where `make gdb` builds its sysroot, so a debugger still
+# has the symbols.
 .PHONY: deploy-daemon
 deploy-daemon: btbenchd-cross ## Copy btbenchd and its www to the board and restart it (TARGET=, RESTART=0)
 	@echo -e "$(BOLD)btbenchd → $(TARGET)$(OFF)"
-	@set -e; $(call board_rw,/) \
+	@set -e; . $(SDK_ENV) >/dev/null; \
+	$$STRIP -o $(APP_XBUILD)/btbenchd.stripped $(APP_XBUILD)/btbenchd; \
+	mkdir -p $(STAGE)/btbenchd$(dir $(BTBENCHD_BIN)); cp -f $(APP_XBUILD)/btbenchd $(STAGE)/btbenchd$(BTBENCHD_BIN); \
+	$(call board_rw,/) \
 	$(SSH) $(TARGET) 'systemctl stop btbenchd'; \
-	$(RSYNC) $(APP_XBUILD)/btbenchd $(TARGET):$(BTBENCHD_BIN); \
+	$(RSYNC) $(APP_XBUILD)/btbenchd.stripped $(TARGET):$(BTBENCHD_BIN); \
 	$(RSYNC) --delete $(APP)/www/ $(TARGET):$(BTBENCHD_WWW)/
 	@if [ "$(RESTART)" != 0 ]; then $(SSH) $(TARGET) 'systemctl start btbenchd'; \
 	 else echo -e "$(DIM)RESTART=0: btbenchd left stopped$(OFF)"; fi
