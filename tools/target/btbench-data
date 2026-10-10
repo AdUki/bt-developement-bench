@@ -10,8 +10,10 @@
 #    the one partition that changed, and resize2fs grows the mounted ext4 online. On every later
 #    boot it finds nothing to do and costs a few reads of /sys.
 #
-# 2. Create the directories the bench keeps on /data (docs/contracts.md): btbench (settings and
-#    Wi-Fi networks), btsnoop (the HCI capture ring), bluetooth (BlueZ's pairings).
+# 2. Create what the bench keeps on /data (docs/contracts.md): btbench (settings, Wi-Fi networks,
+#    sshd's host keys, the WirePlumber fragment Setup writes), bluetooth (BlueZ's pairings). Only
+#    settings: the root filesystem is read-only and what changes often is in RAM (docs/system.md
+#    "The SD card").
 #
 # Never fails the boot: a /data that cannot grow is still a working /data. Every problem is logged
 # and the script exits 0.
@@ -73,7 +75,22 @@ grow() {
 
 grow
 
-# Pairings are link keys: root only. The Wi-Fi networks hold their keys too.
-mkdir -p /data/btbench/wifi /data/btsnoop /data/bluetooth
-chmod 700 /data/bluetooth /data/btbench/wifi
+# Pairings are link keys: root only. The Wi-Fi networks and the host keys are secrets too.
+mkdir -p /data/btbench/wifi /data/btbench/ssh /data/bluetooth
+chmod 700 /data/bluetooth /data/btbench/wifi /data/btbench/ssh
+# /etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf links here (the root is read-only);
+# a fragment with nothing in it (a comment: WirePlumber parses every file there) until Setup writes one.
+[ -e /data/btbench/wireplumber-profiles.conf ] ||
+    echo "# btbenchd Setup's WirePlumber settings: none yet" > /data/btbench/wireplumber-profiles.conf
+
+# systemd-timesyncd's clock (the time of its last sync), on /data rather than in the RAM copy of
+# /var/lib: at boot it sets the clock forward to it, and a board with no network (on the USB link,
+# say) otherwise starts at the image's build date, with logs and captures stamped by it. One small
+# write per sync. Ordered before systemd-timesyncd (btbench-data.service).
+ts=/var/lib/systemd/timesync
+if [ -d "$ts" ] && ! mountpoint -q "$ts"; then
+    mkdir -p /data/btbench/timesync
+    [ -e /data/btbench/timesync/clock ] || cp -a "$ts/." /data/btbench/timesync/ 2>/dev/null
+    mount --bind /data/btbench/timesync "$ts" || log "could not keep $ts on /data"
+fi
 exit 0

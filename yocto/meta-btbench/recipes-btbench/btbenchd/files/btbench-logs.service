@@ -10,7 +10,7 @@ Type=simple
 # the capture ring, so everything a bug report needs is in one directory.
 # The backlog (what the files start with) is read from the journal on the SD card: 1000 entries
 # cost the Zero W about two seconds of CPU at boot, 3000 about seven.
-ExecStart=/usr/bin/btbench-logd --dir /tmp/logs --max-kib 2048 --backlog 1000 --link btsnoop=/data/btsnoop
+ExecStart=/usr/bin/btbench-logd --dir /tmp/logs --max-kib 2048 --backlog 1000 --link btsnoop=/tmp/btsnoop
 # A burst of BT_DBG (btbench-btdebug) must not take the core from what is being debugged.
 Nice=10
 Restart=always

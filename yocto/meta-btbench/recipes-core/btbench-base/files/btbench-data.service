@@ -1,11 +1,12 @@
 [Unit]
 Description=Grow /data to fill the card and create the bench's directories on it
-# Before sysinit.target, so every ordinary service finds /data/btbench, /data/btsnoop and
-# /data/bluetooth in place. /data is mounted nofail (see base-files' fstab), and a nofail mount is
+# Before sysinit.target, so every ordinary service finds /data/btbench and /data/bluetooth in
+# place (and sshd its host keys' directory). /data is mounted nofail (see base-files' fstab), and a nofail mount is
 # not ordered before local-fs.target: hence the explicit After=data.mount.
 DefaultDependencies=no
 After=data.mount local-fs.target systemd-remount-fs.service
-Before=sysinit.target shutdown.target
+# Before timesyncd: it reads its clock file, which this keeps on /data, when it starts.
+Before=sysinit.target shutdown.target systemd-timesyncd.service
 Conflicts=shutdown.target
 
 [Service]

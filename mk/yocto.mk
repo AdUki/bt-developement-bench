@@ -115,7 +115,8 @@ pkg: check-host check-devconf $(BUILD_CONF) ## Build recipe(s) ARGS=... and opkg
 	python3 -m http.server -b 127.0.0.1 -d $$feed $(FEED_PORT) >/dev/null 2>&1 & srv=$$!; \
 	trap "kill $$srv 2>/dev/null" EXIT; sleep 0.5; \
 	ssh -o ControlPath=none $(SSH_OPTS) -R 8000:127.0.0.1:$(FEED_PORT) $(TARGET) \
-	  "rm -f /var/cache/opkg/*.ipk; opkg update >/dev/null && opkg install --force-reinstall $(PKGS)"
+	  "rw() { ! command -v btbench-rw >/dev/null || btbench-rw \$$1 /; }; rw open || exit 1; trap 'rw close' EXIT; \
+	   rm -f /var/cache/opkg/*.ipk; opkg update >/dev/null && opkg install --force-reinstall $(PKGS)"
 
 ## ─── configure ───────────────────────────────────────────────────────────────
 

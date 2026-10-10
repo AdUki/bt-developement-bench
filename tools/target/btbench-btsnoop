@@ -3,6 +3,8 @@
 #
 # Every HCI packet of every controller, plus the kernel's and bluetoothd's monitor-channel
 # messages, goes to $DIR/hci-<YYYYmmdd-HHMMSS>.btsnoop; the newest file is the one being written.
+# In RAM (/tmp) by default: a capture is rewritten all the time, and the SD card is kept for
+# settings (docs/system.md "The SD card"). A file worth keeping is downloaded from the console.
 # When it passes ROTATE_SIZE, a new btmon starts on the next file and the old one is stopped a
 # second later, so there is no gap (a few packets land in both files). Files beyond ROTATE_COUNT
 # are deleted, oldest first.
@@ -11,17 +13,17 @@
 # script around plain `btmon -w`.
 #
 # Settings, from the environment (the unit reads /data/btbench/btsnoop.env if it exists):
-#   BTSNOOP_DIR     where the files go (default /data/btsnoop)
-#   ROTATE_SIZE     bytes, or with a K/M/G suffix (default 16M)
-#   ROTATE_COUNT    files kept, the one being written included (default 8)
+#   BTSNOOP_DIR     where the files go (default /tmp/btsnoop)
+#   ROTATE_SIZE     bytes, or with a K/M/G suffix (default 8M)
+#   ROTATE_COUNT    files kept, the one being written included (default 4: 32 MB of RAM at most)
 #   CHECK_INTERVAL  seconds between size checks (default 5)
 #   BTMON_ARGS      extra btmon options, e.g. "-i 0" to capture one controller only
 
 set -u
 
-DIR=${BTSNOOP_DIR:-/data/btsnoop}
-ROTATE_SIZE=${ROTATE_SIZE:-16M}
-ROTATE_COUNT=${ROTATE_COUNT:-8}
+DIR=${BTSNOOP_DIR:-/tmp/btsnoop}
+ROTATE_SIZE=${ROTATE_SIZE:-8M}
+ROTATE_COUNT=${ROTATE_COUNT:-4}
 CHECK_INTERVAL=${CHECK_INTERVAL:-5}
 BTMON_ARGS=${BTMON_ARGS:-}
 

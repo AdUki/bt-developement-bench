@@ -59,6 +59,23 @@ else
     fi
 fi
 
+# --- 1b. the device cache in RAM -------------------------------------------------------------
+# bluetoothd files the name and services of every device it hears in <adapter>/cache/, scans
+# included: hundreds of small writes in a busy room, onto the SD card, which is kept for settings
+# (docs/system.md "The SD card"). The cache only saves a remote's SDP and name lookups on the
+# next connection, so it lives in RAM: copied there at boot, gone at the next. A new adapter's
+# cache (the first boot with a new address) stays on /data until the boot after.
+if mountpoint -q "$STATE"; then
+    for cache in "$STATE"/*/cache; do
+        [ -d "$cache" ] || continue
+        mountpoint -q "$cache" && continue
+        ram=/run/btbench/bluetooth-cache/$(basename "$(dirname "$cache")")
+        mkdir -p "$ram" && chmod 700 "$ram"
+        cp -a "$cache/." "$ram/" 2>/dev/null
+        mount --bind "$ram" "$cache" || log "could not keep $cache in RAM"
+    done
+fi
+
 # --- 2. address ----------------------------------------------------------------------------
 if ! command -v btmgmt >/dev/null; then
     log "no btmgmt in the image: cannot check the controller's address"

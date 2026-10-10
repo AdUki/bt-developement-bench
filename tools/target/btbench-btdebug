@@ -131,6 +131,12 @@ status() {
 
 keep() {
 	areas=$(expand "$@")
+	# The kept areas are a modprobe.d file on the root filesystem, which is read-only (btbench-rw):
+	# open while it is written.
+	if command -v btbench-rw >/dev/null 2>&1; then
+		btbench-rw open / || die "cannot open / for writing"
+		trap 'btbench-rw close /' EXIT
+	fi
 	if [ -z "${areas# }" ]; then
 		rm -f "$KEEP"
 		return 0

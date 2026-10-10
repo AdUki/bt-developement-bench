@@ -24,7 +24,7 @@ struct Options {
   // Non-empty: feed the monitor from this btsnoop file (datalink 2001, or 1002 H4) instead of
   // the kernel socket, paced at the speed it was recorded.
   std::string replay_file;
-  std::string capture_dir = "/data/btsnoop";
+  std::string capture_dir = "/tmp/btsnoop";
   std::string capture_unit = "btbench-btsnoop.service";
 
   // Beyond the contract (defaults are what the daemon wants):

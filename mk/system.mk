@@ -1,7 +1,7 @@
 # System: the board's own plumbing scripts (tools/target/btbench-{wifi,gadget,bdaddr,data}, installed
 # by btbench-base). Included by the Makefile. See docs/system.md.
 
-SYSTEM_SCRIPTS := btbench-wifi btbench-gadget btbench-bdaddr btbench-data
+SYSTEM_SCRIPTS := btbench-wifi btbench-gadget btbench-bdaddr btbench-data btbench-rw btbench-sshkeys
 
 ## ─── system ──────────────────────────────────────────────────────────────────
 
@@ -11,6 +11,6 @@ SYSTEM_SCRIPTS := btbench-wifi btbench-gadget btbench-bdaddr btbench-data
 # the next boot, or when you restart its service yourself.
 .PHONY: deploy-scripts
 deploy-scripts: ## Copy the system scripts (Wi-Fi, gadget, bdaddr, data) to the board (TARGET=)
-	@$(RSYNC) $(addprefix tools/target/,$(SYSTEM_SCRIPTS)) $(TARGET):/usr/bin/
+	@set -e; $(call board_rw,/) $(RSYNC) $(addprefix tools/target/,$(SYSTEM_SCRIPTS)) $(TARGET):/usr/bin/
 	@echo -e "Deployed $(SYSTEM_SCRIPTS) to $(TARGET):/usr/bin"
 	@echo -e "$(DIM)Not restarted. e.g.  ssh $(TARGET) systemctl restart btbench-wifi$(OFF)"

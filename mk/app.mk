@@ -84,9 +84,10 @@ btbenchd-cross: check-submodules check-sdk ## Cross-build btbenchd with the SDK 
 .PHONY: deploy-daemon
 deploy-daemon: btbenchd-cross ## Copy btbenchd and its www to the board and restart it (TARGET=, RESTART=0)
 	@echo -e "$(BOLD)btbenchd → $(TARGET)$(OFF)"
-	@$(SSH) $(TARGET) 'systemctl stop btbenchd'
-	@$(RSYNC) $(APP_XBUILD)/btbenchd $(TARGET):$(BTBENCHD_BIN)
-	@$(RSYNC) --delete $(APP)/www/ $(TARGET):$(BTBENCHD_WWW)/
+	@set -e; $(call board_rw,/) \
+	$(SSH) $(TARGET) 'systemctl stop btbenchd'; \
+	$(RSYNC) $(APP_XBUILD)/btbenchd $(TARGET):$(BTBENCHD_BIN); \
+	$(RSYNC) --delete $(APP)/www/ $(TARGET):$(BTBENCHD_WWW)/
 	@if [ "$(RESTART)" != 0 ]; then $(SSH) $(TARGET) 'systemctl start btbenchd'; \
 	 else echo -e "$(DIM)RESTART=0: btbenchd left stopped$(OFF)"; fi
 
@@ -94,5 +95,5 @@ deploy-daemon: btbenchd-cross ## Copy btbenchd and its www to the board and rest
 .PHONY: deploy-www
 deploy-www: btbenchd ## Copy app/www to the board (no restart; the browser reloads it)
 	@echo -e "$(BOLD)app/www → $(TARGET):$(BTBENCHD_WWW)$(OFF)"
-	@$(RSYNC) --delete $(APP)/www/ $(TARGET):$(BTBENCHD_WWW)/
+	@set -e; $(call board_rw,/) $(RSYNC) --delete $(APP)/www/ $(TARGET):$(BTBENCHD_WWW)/
 	@echo -e "Done. Reload the page."

@@ -1,6 +1,6 @@
 #pragma once
 
-// The btmon capture ring in /data/btsnoop, written by btbench-btsnoop.service (not by us): list,
+// The btmon capture ring in /tmp/btsnoop (RAM), written by btbench-btsnoop.service (not by us): list,
 // download, delete, start/stop the service, and run `btmon -a` over a file.
 
 #include <cstddef>

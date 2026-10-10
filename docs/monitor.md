@@ -6,7 +6,7 @@ how long the controller holds our packets, controller buffer use, AVDTP stream s
 negotiated codec, and RTP loss and jitter. It does this without btmon running and without touching the
 traffic.
 
-It also gives access to the always-on btmon capture ring (`/data/btsnoop`), shows what is inside
+It also gives access to the always-on btmon capture ring (`/tmp/btsnoop`, in RAM), shows what is inside
 those files (a filtered packet list, decoded packets, graphs), shows the same filtered list live
 (per viewer, and only while someone watches), and can stream a live pcap to Wireshark.
 
@@ -277,13 +277,17 @@ decodes it like a btmon capture, marks included. It starts from the moment of co
 - A stream ends when the client disconnects (noticed within 1 s even when there is no traffic) or
   when btbenchd stops.
 
-## The capture ring (`/data/btsnoop`)
+## The capture ring (`/tmp/btsnoop`)
 
 `btbench-btsnoop.service` (source `tools/target/btbench-btsnoop`) keeps btmon writing
-`/data/btsnoop/hci-<YYYYmmdd-HHMMSS>.btsnoop` at all times:
-- it rotates at 16 MiB;
-- it keeps 8 files;
+`/tmp/btsnoop/hci-<YYYYmmdd-HHMMSS>.btsnoop` at all times:
+- it rotates at 8 MiB;
+- it keeps 4 files, 32 MB of RAM at most (`ROTATE_SIZE`, `ROTATE_COUNT` in
+  `/data/btbench/btsnoop.env`);
 - the newest file is the one being written.
+
+The ring is in RAM: a capture is written all the time, and the SD card is kept for settings
+(docs/system.md "The SD card"). It is gone at reboot; download a file to keep it.
 
 btbenchd does not write these files. It manages them, and writes one small file beside each new
 one: its [context](#context), `<name>.ctx`.
@@ -308,7 +312,7 @@ Note that `analyze` occupies an HTTP worker while btmon runs.
 
 ## Packet view
 
-Traffic → Captures can open any file of the ring (or any btsnoop file put in `/data/btsnoop`) and
+Traffic → Captures can open any file of the ring (or any btsnoop file put in `/tmp/btsnoop`) and
 show what is inside: a packet list with a filter, one packet's decoded fields and hex dump, and
 graphs over the whole capture. The code is `packet_view.{h,cpp}` (index, filter, routes' bodies)
 and `dissect.cpp` (summaries and fields). All three datalinks are read: 2001 (btmon), 1002 (H4)

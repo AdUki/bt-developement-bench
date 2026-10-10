@@ -50,25 +50,31 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   - `/data/btbench/setup.json` — Setup's state: `{plugins_off, roles_on, obex_off, settings}`.
   - `/data/btbench/main.conf` — written by btbenchd from the image's `/etc/bluetooth/main.conf` with
     Setup's settings applied (the image's file is never edited); absent while none is set.
-  - `/etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf` — written by btbenchd: the
-    Bluetooth roles (`override.bluez5.roles`) and Setup's WirePlumber settings, on top of the image's
-    `50-btbench.conf`.
+  - `/data/btbench/wireplumber-profiles.conf` — written by btbenchd: the Bluetooth roles
+    (`override.bluez5.roles`) and Setup's WirePlumber settings, on top of the image's
+    `50-btbench.conf`. WirePlumber reads it through `/etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf`,
+    a link to it (btbench-base; the root is read-only); btbench-data seeds it with a comment.
   - `/tmp/logs/` — btbench-logd (btbench-logs.service): the journal as one file per program, in that
     program's own format (for clog, `app/clog`): `bluez.log`, `pipewire.log`, `wireplumber.log`,
     `wpasupplicant.log`, `btbenchd.log`, `kernel.log`, `system.log` (the rest); each rotated once
-    (`.1`) at 2 MiB; `btsnoop` → `/data/btsnoop`. RAM (tmpfs), gone at reboot; journald keeps the lot.
+    (`.1`) at 2 MiB; `btsnoop` → `/tmp/btsnoop`. RAM (tmpfs), gone at reboot, like the journal.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
   - `/data/btbench/hid-remote.json` — the HID remote's, `{"enabled": true, "name": "btbench remote"}`.
-  - `/data/btbench/obex/` — OBEX files and obexd's root: `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
+  - `/tmp/btbench/obex/` — OBEX files and obexd's root, in RAM (btbenchd `--volatile-dir`): `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
+  - `/data/btbench/ssh/` — sshd's host keys (btbench-sshkeys); sshd reads them through `/run/btbench/ssh`.
+  - `/data/btbench/timesync/` — systemd-timesyncd's clock, bound over `/var/lib/systemd/timesync` (btbench-data).
   - `/data/btbench/wifi/` — wpa_supplicant networks.
   - `/data/bluetooth/` — persisted `/var/lib/bluetooth` (bonds survive reflashes of the rootfs? no: of deploys and kernel swaps; a reflash rewrites /data too).
-  - `/data/btsnoop/` — the always-on btmon ring (`hci-<YYYYmmdd-HHMMSS>.btsnoop`, newest is being written).
+  - `/tmp/btsnoop/` — the always-on btmon ring, in RAM (`hci-<YYYYmmdd-HHMMSS>.btsnoop`, newest is being written).
     btbenchd writes `<name>.ctx` beside each new file: the context it began with (the links,
     L2CAP/AVDTP signalling and ATT discovery still in force), btsnoop datalink 2001.
-- `/boot` — the FAT boot partition, mounted read-write.
-- `/run/btbench/` — runtime state (`wifi.json`, `wifi-scan.json`).
+- `/` and `/boot` (the FAT boot partition) — mounted read-only; `btbench-rw open|close MOUNT...`
+  remounts them for a writer (docs/system.md "The SD card"). `/data` holds settings only.
+- `/run/btbench/` — runtime state (`wifi.json`, `wifi-scan.json`, `ssh` → the host keys,
+  `bluetooth-cache/<adapter>` bound over each adapter's BlueZ cache).
+- `/run/btbench-rw/` — btbench-rw's counts.
 - Network: USB gadget `usb0` = `10.55.0.1/24` (DHCP server for the PC), Wi-Fi AP `10.42.0.1/24`,
   mDNS `<hostname>.local`.
 
@@ -107,11 +113,13 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
 ## btbenchd
 
 - Binary `/usr/bin/btbenchd`, unit `btbenchd.service`, www in `/usr/share/btbenchd/www`, runs as root.
-- Flags: `--port N` `--www DIR` `--data-dir DIR` (default `/data/btbench`) `--no-bluetooth`
+- Flags: `--port N` `--www DIR` `--data-dir DIR` (settings, default `/data/btbench`)
+  `--volatile-dir DIR` (OBEX transfers, default `/tmp/btbench`) `--capture-dir DIR` (default
+  `/tmp/btsnoop`) `--no-bluetooth`
   `--hci-replay FILE.btsnoop` (feed the HCI monitor from a capture, paced in real time).
 - WebSocket `/api/ws?topics=a,b` — messages `{"topic":"...","data":{...}}`.
 - OBEX (`/api/obex`, `app/src/obex/`): btbenchd runs `/usr/libexec/bluetooth/obexd -n -s -r
-  /data/btbench/obex` on first use (bluez5-obex; `-s` puts `org.bluez.obex` on the system bus,
+  /tmp/btbench/obex` on first use (bluez5-obex; `-s` puts `org.bluez.obex` on the system bus,
   which BlueZ's `obex.conf` allows root), unless the name is owned already.
 - Audio streams (`/api/audio/streams`, `app/src/audio/`) run, from PATH: `pw-cat` and `pw-dump`
   (pipewire-tools, with `PIPEWIRE_RUNTIME_DIR=/run/pipewire` from the unit), `aplay`/`arecord`
@@ -128,7 +136,7 @@ entry point:
 
 ```cpp
 namespace btb::hci {
-struct Options { std::string replay_file; std::string capture_dir = "/data/btsnoop";
+struct Options { std::string replay_file; std::string capture_dir = "/tmp/btsnoop";
                  std::string capture_unit = "btbench-btsnoop.service"; };
 using Publish = std::function<void(const std::string &topic, const nlohmann::json &data)>;
 class Monitor;  // owns the monitor socket (or replay) thread
@@ -147,7 +155,7 @@ Routes:
 - `GET /api/hci/live.pcap` — chunked pcap, linktype 254 (LINUX_BT_MONITOR), live from now on
 - `GET /api/hci/live?filter=&since=<seq>` — chunked NDJSON (`application/x-ndjson`), live packets filtered per stream with the packet view's filter syntax: packet lines `{"seq","n","ts_ms","t","index","dir","type","proto","handle","cid","psm","len","lat_ms","summary","err"?,"mark"?,"cont"?}` (the capture packet object, `n` = `seq`) and status lines `{"status":{"seq","cursor","scanned","sent","dropped","skipped","filter"?,"ring"?,"batch_ms"?,"lat_hold"?}}` (first, on every change of `dropped`/`skipped`, at least every 2 s). 150 ms batches of at most 200 packet lines; a ring of the last 2048 packets, fed only while a stream is open; at most 4 streams (503); 400 for a bad filter
 - `GET /api/hci/live/<seq>` — one packet of the live ring as `/api/capture/files/<name>/packets/<n>` answers (plus `"seq"`); 404 when no longer in the ring
-- `GET /api/capture` — `{"running":true,"unit":"btbench-btsnoop.service","dir":"/data/btsnoop","files":[{"name":"hci-20261009-120000.btsnoop","size":123,"mtime":<ms>,"active":true}]}`
+- `GET /api/capture` — `{"running":true,"unit":"btbench-btsnoop.service","dir":"/tmp/btsnoop","files":[{"name":"hci-20261009-120000.btsnoop","size":123,"mtime":<ms>,"active":true}]}`
 - `PUT /api/capture` `{"running":false}`; `GET|DELETE /api/capture/files/<name>`; `GET /api/capture/files/<name>/analyze` (text: `btmon -a`)
 - Packet view of a file (docs/monitor.md "Packet view" has the filter syntax and full shapes). Each answers within a 400 ms budget; `"complete":false` + `"next"` mean "repeat the request, it continues":
   - `GET /api/capture/files/<name>/packets?filter=&start=0&count=200` (or `at_t=SECONDS` / `at_n=FRAME`) — `{"total","start","complete","next","scanned","packets_in_file","indexed_bytes","file_size","datalink","t0_ms","filter","packets":[{"n","ts_ms","t","index","dir":"tx|rx|","type":"cmd|evt|acl|sco|iso|index|log|mgmt","proto":"att|..."|null,"handle","cid","psm","len","lat_ms","summary","err"?,"mark"?,"cont"?}]}`
@@ -161,8 +169,8 @@ Routes:
 ### btbench-btsnoop.service (audio + BlueZ area)
 
 Runs `/usr/bin/btbench-btsnoop` (source `tools/target/btbench-btsnoop`, audio + BlueZ area): a
-ring of btmon captures, `/data/btsnoop/hci-<YYYYmmdd-HHMMSS>.btsnoop`. It starts `btmon -w` on a
-new file, and when the current one passes `ROTATE_SIZE` (16 MiB) it starts the next btmon before
+ring of btmon captures in RAM, `/tmp/btsnoop/hci-<YYYYmmdd-HHMMSS>.btsnoop`. It starts `btmon -w` on a
+new file, and when the current one passes `ROTATE_SIZE` (8 MiB) it starts the next btmon before
 stopping the old one (no gap; a few packets land in both), then deletes the oldest beyond
-`ROTATE_COUNT` (8). Upstream btmon has no rotation of its own (`--write-rotate-*` is a local
+`ROTATE_COUNT` (4: 32 MB of RAM at most). Upstream btmon has no rotation of its own (`--write-rotate-*` is a local
 patch, not in bluez.git). Enabled by default, `Restart=on-failure`.

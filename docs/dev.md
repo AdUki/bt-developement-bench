@@ -93,6 +93,12 @@ first time). It caches them in `build/<board>/<comp>/.bbopts`:
 A deploy rsyncs the component's **whole stage** over the board's `/`. It never pushes single
 binaries: a library and the plugins built against it travel together.
 
+The board's root is read-only (docs/system.md "The SD card"). Every deploy target, `make pkg`
+and `make linux-deploy` first open it with `btbench-rw` on the board, and close it when the
+recipe ends, failed or not. A deploy that replaces a file a running process still uses (one that
+is not restarted, such as `btbench-wifi` after `make deploy-scripts`) leaves the root writable and
+says which unit to restart; then `btbench-rw reset`, or reboot.
+
 - **Nothing is deleted** on the board.
 - **Left out:** headers, pkg-config files, `.la`/`.a`, man pages, docs and `/var`. For BlueZ,
   `/etc/bluetooth/*.conf` is left out too: the image ships a tuned `main.conf`.

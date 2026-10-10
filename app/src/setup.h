@@ -30,7 +30,8 @@ namespace btb {
 struct SetupOptions {
   std::string data_dir = "/data/btbench";
   std::string base_main_conf = "/etc/bluetooth/main.conf";
-  std::string wireplumber_conf = "/etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf";
+  // On the board /etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf links to it.
+  std::string wireplumber_conf = "/data/btbench/wireplumber-profiles.conf";
   bool apply = true;  // restart services (false on a PC)
 };
 

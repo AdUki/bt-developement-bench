@@ -23,6 +23,8 @@
 #                  needs the downstream kernel to pass the reboot flag. Untested.
 #
 # Which slot is running: btbench.slot=test on the kernel command line (the trial boot adds it).
+# /boot and the root filesystem are read-only (btbench-rw): try, commit and rollback open /boot
+# while they write it, prune opens / (the modules), and both are closed when the command ends.
 # Exit status non-zero with a one-line reason on stderr on failure; no terminal needed.
 
 set -eu
@@ -272,12 +274,21 @@ cmd_prune() {
 	done
 }
 
+# Opens the mounts for writing until the script ends (btbench-rw; without it, an image from before
+# the card was read-only, they are writable anyway).
+writable() {
+	command -v btbench-rw >/dev/null 2>&1 || return 0
+	btbench-rw open "$@" || die "cannot open $* for writing"
+	# shellcheck disable=SC2064 # the mounts, now
+	trap "btbench-rw close $*" EXIT
+}
+
 case ${1:-} in
 status) cmd_status ;;
-try) shift; cmd_try "$@" ;;
-commit) shift; cmd_commit "$@" ;;
-rollback) cmd_rollback ;;
-prune) cmd_prune ;;
+try) shift; writable "$BOOT"; cmd_try "$@" ;;
+commit) shift; writable "$BOOT"; cmd_commit "$@" ;;
+rollback) writable "$BOOT"; cmd_rollback ;;
+prune) writable /; cmd_prune ;;
 -h | --help | help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0" ;;
 *) die "usage: btbench-kernel status|try|commit|rollback|prune (--help)" ;;
 esac

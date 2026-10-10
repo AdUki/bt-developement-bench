@@ -1,14 +1,28 @@
 SUMMARY = "Bluetooth development bench — the one image"
-DESCRIPTION = "A writable development image: BlueZ, PipeWire/WirePlumber, the bench \
-daemon and its web console, debugging and tracing tools, ssh and opkg. Deploys rsync over it and \
-kernel trials boot next to it, so nothing about it is read-only."
+DESCRIPTION = "A development image on a read-only SD card: BlueZ, PipeWire/WirePlumber, \
+the bench daemon and its web console, debugging and tracing tools, ssh and opkg. Only settings \
+(/data) are written in normal use; deploys and kernel trials open the root and /boot while they \
+write (btbench-rw)."
 LICENSE = "MIT"
 
 inherit core-image
 
-# Writable on purpose: `make deploy-*` rsyncs stage trees into /usr, and `make pkg` installs
-# packages with opkg.
-IMAGE_FEATURES += "ssh-server-openssh package-management"
+# The SD card is read-only (docs/system.md "The SD card"): the root filesystem (read-only-rootfs:
+# fstab, and volatile-binds put /var/lib, /var/cache, /var/spool in RAM) and /boot (base-files'
+# fstab). Settings are on /data; what changes often is in RAM. `make deploy-*`, `make pkg` and the
+# kernel trials still write the root and /boot: btbench-rw remounts them rw for that, and back.
+IMAGE_FEATURES += "ssh-server-openssh package-management read-only-rootfs"
+
+# read_only_rootfs_hook points sshd at keys regenerated in /var/run/ssh at every boot, with
+# /etc/ssh/sshd_config_readonly. They are kept on /data instead (btbench-sshkeys, btbench-base's
+# sshdgenkeys drop-in and HostKey lines), with sshd's own config. Later lines of /etc/default/ssh
+# win. An image preprocess command, not a rootfs postprocess one: the hook is one of those, and
+# runs after any this recipe adds.
+btbench_sshd_keys () {
+	echo "SYSCONFDIR=/run/btbench/ssh" >> ${IMAGE_ROOTFS}${sysconfdir}/default/ssh
+	echo "SSHD_OPTS=" >> ${IMAGE_ROOTFS}${sysconfdir}/default/ssh
+}
+IMAGE_PREPROCESS_COMMAND += "btbench_sshd_keys"
 
 IMAGE_INSTALL = " \
     packagegroup-core-boot \

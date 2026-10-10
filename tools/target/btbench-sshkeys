@@ -1,0 +1,30 @@
+#!/bin/sh
+# btbench-sshkeys — sshd's host keys, kept where a read-only root filesystem allows. Run by
+# sshdgenkeys.service (btbench-base replaces its command), before the first ssh connection.
+#
+# The root filesystem is read-only (docs/system.md "The SD card"), so the keys cannot be made in
+# /etc/ssh at first boot. They go on /data with the other settings, and stay the same across
+# reboots; if /data did not mount, into /run for this boot only, so the board is still reachable
+# over ssh to fix that (with a host key that changes). Either way /run/btbench/ssh points at
+# them, which is where sshd's HostKey lines (sshd_config.d/20-btbench-hostkeys.conf) look.
+#
+# Never fails: a missing key type is logged and the others are still offered.
+
+log() { echo "btbench-sshkeys: $*"; }
+
+if mountpoint -q /data; then
+    dir=/data/btbench/ssh
+else
+    dir=/run/btbench/ssh-keys
+    log "/data is not mounted: host keys in $dir for this boot only"
+fi
+mkdir -p "$dir" /run/btbench
+chmod 700 "$dir"
+for t in ed25519 ecdsa rsa; do
+    k=$dir/ssh_host_${t}_key
+    [ -s "$k" ] && [ -s "$k.pub" ] && continue
+    rm -f "$k" "$k.pub"
+    ssh-keygen -q -t "$t" -N '' -f "$k" || log "could not make a $t key"
+done
+ln -sfn "$dir" /run/btbench/ssh
+exit 0

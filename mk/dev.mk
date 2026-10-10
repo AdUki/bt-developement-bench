@@ -207,9 +207,12 @@ DEPLOY_RSYNC = $(RSYNC) --keep-dirlinks --exclude=/usr/include/ --exclude=pkgcon
                --exclude=/usr/share/doc/ --exclude=/var/
 
 # $(call deploy_stage,<comp>,<extra rsync options>)
+# The root stays open (board_rw) until the shell this starts ends: what follows it on the same
+# recipe line (ldconfig writes /etc/ld.so.cache) is inside.
 deploy_stage = set -e; \
 	[ -d $(STAGE)/$(1) ] || { echo -e "Nothing staged for $(1).  $(BOLD)make $(1)$(OFF) first."; exit 1; }; \
 	echo -e "$(BOLD)deploy $(1)$(OFF) $(DIM)$(STAGE:$(ROOT)/%=%)/$(1) → $(TARGET):/$(OFF)"; \
+	$(call board_rw,/) \
 	$(DEPLOY_RSYNC) $(2) $(STAGE)/$(1)/ $(TARGET):/
 
 # Run on the board after a deploy: unit files may have changed, libraries may have new names.
@@ -221,22 +224,23 @@ remote_if_pipewire = if [ "$$(btbench-audio get 2>/dev/null)" = pipewire ]; then
 
 .PHONY: deploy-bluez deploy-pipewire deploy-wireplumber deploy-audio-scripts deploy
 deploy-bluez: ## Push the BlueZ stage to the board, restart bluetooth (RESTART=0: don't)
-	@$(call deploy_stage,bluez,'--exclude=/etc/bluetooth/*.conf')
-	@$(SSH) $(TARGET) '$(remote_reload); \
+	@$(call deploy_stage,bluez,'--exclude=/etc/bluetooth/*.conf'); \
+	$(SSH) $(TARGET) '$(remote_reload); \
 	  $(if $(filter 0,$(RESTART)),true,systemctl restart bluetooth && echo "bluetooth restarted")'
 
 deploy-pipewire: ## Push the PipeWire stage, restart pipewire + wireplumber if the audio mode is pipewire
-	@$(call deploy_stage,pipewire)
-	@$(SSH) $(TARGET) '$(remote_reload); \
+	@$(call deploy_stage,pipewire); \
+	$(SSH) $(TARGET) '$(remote_reload); \
 	  $(if $(filter 0,$(RESTART)),true,$(call remote_if_pipewire,systemctl restart pipewire.service wireplumber.service && echo "pipewire + wireplumber restarted",pipewire))'
 
 deploy-wireplumber: ## Push the WirePlumber stage, restart wireplumber if the audio mode is pipewire
-	@$(call deploy_stage,wireplumber)
-	@$(SSH) $(TARGET) '$(remote_reload); \
+	@$(call deploy_stage,wireplumber); \
+	$(SSH) $(TARGET) '$(remote_reload); \
 	  $(if $(filter 0,$(RESTART)),true,$(call remote_if_pipewire,systemctl restart wireplumber.service && echo "wireplumber restarted",wireplumber))'
 
 deploy-audio-scripts: ## Push tools/target/btbench-audio and btbench-btsnoop to /usr/bin on the board
-	@$(RSYNC) --chmod=F755 $(ROOT)/tools/target/btbench-audio $(ROOT)/tools/target/btbench-btsnoop $(TARGET):/usr/bin/
+	@set -e; $(call board_rw,/) \
+	$(RSYNC) --chmod=F755 $(ROOT)/tools/target/btbench-audio $(ROOT)/tools/target/btbench-btsnoop $(TARGET):/usr/bin/
 	@$(SSH) $(TARGET) '$(if $(filter 0,$(RESTART)),true,systemctl try-restart btbench-btsnoop.service; true)'
 	@echo -e "$(BOLD)btbench-audio, btbench-btsnoop$(OFF) deployed"
 

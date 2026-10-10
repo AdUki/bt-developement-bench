@@ -1,5 +1,5 @@
 'use strict';
-// Capture: the always-on btmon ring (btbench-btsnoop.service) in /data/btsnoop, and a packet
+// Capture: the always-on btmon ring (btbench-btsnoop.service) in /tmp/btsnoop (RAM), and a packet
 // viewer for its files. Files download as they are — btmon -r and Wireshark both read btsnoop —
 // and "analyze" is btmon -a on the board. "view" opens the file in the viewer: a filter, a
 // virtualised packet table, the decoded fields and hex of one packet, and a graph strip of the
@@ -25,7 +25,9 @@
     setClass($('cap-state'), 'pill ' + (s.running ? 'good' : word ? '' : 'bad'));
     $('cap-state').title = word ? '' : st;
     setText($('cap-toggle'), s.running ? 'Stop recording' : 'Start recording');
-    setText($('cap-dir'), s.running ? 'btmon writes every HCI packet to a ring of files here.' : '');
+    // The ring is in RAM (the SD card is kept for settings): what is worth keeping is downloaded.
+    const ram = /^\/(tmp|run)\//.test(s.dir || '');
+    setText($('cap-dir'), s.running ? `btmon writes every HCI packet to a ring of files here${ram ? ', in RAM: gone at reboot, download a file to keep it' : ''}.` : '');
     $('cap-dir').title = `${s.unit} → ${s.dir}`;
     setHTML($('cap-files'), s.files.length ? `<tr><th>File</th><th>Size</th><th>Last written</th><th></th></tr>` +
       s.files.map(f => `<tr${f.name === cv.name ? ' class="sel"' : ''}><td class="mono">${esc(f.name)}${f.active ? ' ' + pill('writing', 'good') : ''}</td>

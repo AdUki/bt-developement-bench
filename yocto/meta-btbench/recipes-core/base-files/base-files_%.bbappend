@@ -6,10 +6,12 @@ hostname = "${BTBENCH_HOSTNAME}"
 
 # The two partitions next to the root filesystem (wic/btbench-rpi.wks), by label, so the entries
 # hold whatever the SD card's device is called under a given kernel:
-#   /boot  the firmware's FAT partition, read-write: the kernel trial flow writes test and previous
-#          kernels under /boot/bench and U-Boot's environment (/boot/uboot.env) there.
-#   /data  the bench's state: settings, Wi-Fi networks, pairings, captures. Grown to fill the card
-#          at first boot (btbench-data).
+#   /boot  the firmware's FAT partition, read-only like the root filesystem: the kernel trial flow
+#          (btbench-kernel) opens it with btbench-rw while it writes the test and previous kernels
+#          under /boot/bench and U-Boot's environment (/boot/uboot.env).
+#   /data  the bench's settings: Setup's files, Wi-Fi networks, pairings, sshd's host keys. The only
+#          partition written in normal use; what changes often is in RAM (docs/system.md "The SD
+#          card"). Grown to fill the card at first boot (btbench-data).
 #
 # nofail on both: a partition that is missing or damaged must not drop the board into
 # emergency.target, which on a headless board looks exactly like a hang. The device timeout is NOT
@@ -18,7 +20,7 @@ hostname = "${BTBENCH_HOSTNAME}"
 # board that booted. Without
 # /boot the trial flow cannot work, and without /data the bench keeps its state on the root
 # filesystem, but the board stays reachable to fix either. /data gets an fsck pass (a power cut
-# mid-capture is the normal way a bench is switched off); a FAT check needs dosfstools, which the
+# mid-write is the normal way a bench is switched off); a FAT check needs dosfstools, which the
 # image does not carry.
 #
 # These must be the only /boot and /data entries in the image: wic's own fstab update is turned
@@ -26,7 +28,7 @@ hostname = "${BTBENCH_HOSTNAME}"
 # "defaults", and systemd's fstab-generator lets the last entry for a mountpoint win.
 do_install:append() {
     cat >>${D}${sysconfdir}/fstab <<'EOF2'
-LABEL=boot  /boot  vfat  defaults,noatime,nofail,x-systemd.device-timeout=90s  0  0
+LABEL=boot  /boot  vfat  ro,noatime,nofail,x-systemd.device-timeout=90s  0  0
 LABEL=data  /data  ext4  defaults,noatime,nofail,x-systemd.device-timeout=90s  0  2
 EOF2
     install -d ${D}/data

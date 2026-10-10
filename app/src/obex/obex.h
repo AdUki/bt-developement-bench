@@ -43,7 +43,7 @@ namespace btb::obex {
 
 struct Options {
   std::string obexd = "/usr/libexec/bluetooth/obexd";
-  std::string root = "/data/btbench/obex";
+  std::string root = "/tmp/btbench/obex";  // RAM: transfers are not settings
 };
 
 // The targets obexd's Client1.CreateSession takes, as the API names them.

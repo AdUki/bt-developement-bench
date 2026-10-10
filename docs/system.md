@@ -7,25 +7,61 @@ other parts rely on are in [contracts.md](contracts.md).
 
 | Partition | Size | Mounted | What |
 |---|---|---|---|
-| `boot` (FAT) | ≥ 256 MB | `/boot`, read-write | firmware, U-Boot, the good kernel; trial kernels in `/boot/bench/{test,prev}`, U-Boot's `uboot.env` |
-| `root` (ext4) | packages + 512 MB | `/`, read-write | the image; deploys rsync into it |
-| `data` (ext4) | rest of the card | `/data` | the bench's state |
+| `boot` (FAT) | ≥ 256 MB | `/boot`, **read-only** | firmware, U-Boot, the good kernel; trial kernels in `/boot/bench/{test,prev}`, U-Boot's `uboot.env` |
+| `root` (ext4) | packages + 512 MB | `/`, **read-only** | the image; deploys rsync into it, opened for that |
+| `data` (ext4) | rest of the card | `/data`, read-write | settings, and nothing else |
 
 The root is found by `PARTUUID=b7be4c4e-02`: the image recipe fixes the disk identifier. `/boot`
 and `/data` are mounted by label with `nofail`: a damaged one costs you its function, not the board.
 
-`/data`:
+The card is read-only except for settings. A card that is not written does not wear out, and a
+power cut (the usual way a bench is switched off) cannot corrupt the root or `/boot`.
+- **The root and `/boot` are mounted read-only.** The root uses Yocto's `read-only-rootfs`;
+  volatile-binds give `/var/lib`, `/var/cache`, `/var/spool` and `/srv` a copy in RAM, made at
+  boot, and `/var/log` is a link into `/var/volatile`. opkg's database is in `/usr/lib/opkg`, on
+  the root, so what `make pkg` installs stays known to opkg.
+- **`/data` holds settings only, written when one changes:**
+  - `btbench/`: Setup's files, `audio-mode`, `bluetoothd.env`, `btsnoop.env`, the HID and radio
+    settings, `wifi/` (networks), `ssh/` (sshd's host keys), `wireplumber-profiles.conf`;
+  - `btbench/timesync/`: timesyncd's clock, one small write per NTP sync, so a board without a
+    network does not start at the image's build date;
+  - `bluetooth/`: BlueZ's pairings, bind-mounted over `/var/lib/bluetooth`.
+- **What changes often is in RAM,** and gone at reboot:
+  - the journal (`/run/log/journal`, uncompressed, 32 MB);
+  - the per-program logs (`/tmp/logs`);
+  - the HCI capture ring (`/tmp/btsnoop`, 4 × 8 MB; download a file to keep it);
+  - OBEX transfers (`/tmp/btbench/obex`);
+  - BlueZ's device cache (each adapter's `cache/`, bound to `/run/btbench/bluetooth-cache`);
+  - the rest of `/var`.
 
-- `btbench/` — settings: `audio-mode`, `bluetoothd.env`, `wifi/` (networks, policy)
-- `bluetooth/` — BlueZ's pairings, bind-mounted over `/var/lib/bluetooth`
-- `btsnoop/` — the HCI capture ring
+Settings that have to be in `/etc` are links to `/data`
+(`/etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf`), or are read from a fixed path in
+`/run` (sshd's `HostKey /run/btbench/ssh/…`, which `btbench-sshkeys` points at `/data/btbench/ssh`,
+or at `/run` for that boot if `/data` did not mount).
+
+**Writing the root or `/boot`:** `btbench-rw open / /boot` remounts them read-write, and
+`btbench-rw close` remounts them read-only. Every writer goes through it:
+- `make deploy-*`, `make pkg` and `make linux-deploy`, through the Makefile's `board_rw`; the
+  close runs in an EXIT trap, so a failed deploy closes too;
+- `btbench-kernel` (`try`, `commit`, `rollback` open `/boot`; `prune` opens `/`);
+- `btbench-btdebug keep` (its modprobe.d file).
+
+Uses are counted, so overlapping ones do not close each other's mounts. `btbench-rw status` shows
+the state; `btbench-rw reset` closes everything after a killed deploy, and so does a reboot.
+
+The kernel will not remount read-only while a process still runs a file that a deploy replaced:
+rsync renames the new copy over the old one, which lives on, deleted, until its process ends.
+The close then names the units (after `make deploy-scripts`, usually `btbench-wifi.service`) and
+leaves the root writable. Restart them and run `btbench-rw reset`, or reboot. Deploys that restart
+what they replace (bluetooth, PipeWire, btbenchd) are not affected.
 
 A reflash rewrites `/data` too. Deploys and kernel swaps leave it alone.
 
 ## First boot
 
 1. `btbench-data` grows the data partition and its filesystem to the end of the card, then creates
-   the directories above. Later boots find nothing to grow.
+   the directories above and binds timesyncd's clock to `/data`. Later boots find nothing to grow.
+   `btbench-sshkeys` makes sshd's host keys in `/data/btbench/ssh` the first time.
 2. `sshdgenkeys` makes the ssh host keys (a new set with every flash; the Makefile does not check
    them).
 3. `btbench-wifi` copies the network from the device conf to `/data/btbench/wifi/`, if one was

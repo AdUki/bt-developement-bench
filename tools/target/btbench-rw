@@ -1,0 +1,177 @@
+#!/bin/sh
+# btbench-rw — open the board's read-only filesystems for writing, and close them again.
+#
+# The SD card is kept read-only (docs/system.md "The SD card"): the root filesystem and /boot are
+# mounted ro, and only /data, which holds settings, is written in normal use. What changes often
+# lives in RAM. Whatever does have to write the root or /boot — a deploy from the PC (make
+# deploy-*, make pkg, make linux-deploy), a kernel trial (btbench-kernel), a setting kept on the
+# root (btbench-btdebug keep) — goes through this:
+#
+#   btbench-rw open MOUNT...           remount rw (/, /boot); counted, so overlapping users nest
+#   btbench-rw close MOUNT...          one user done: the last one out syncs and remounts ro
+#   btbench-rw run MOUNT... -- CMD...  open, run CMD, close (also when CMD fails); CMD's status
+#   btbench-rw status                  JSON: each mount, rw or ro, and how many have it open
+#   btbench-rw reset                   forget the counts and remount ro (after a deploy was killed)
+#
+# A filesystem that was already rw when the first user opened it (an image from before the card
+# was read-only, or someone's own `mount -o remount,rw`) is left rw on close. A close whose
+# remount fails says why and leaves it rw (count zero) without failing: the kernel refuses while
+# a process still runs a file the deploy replaced (rsync renames the new copy over the old, which
+# lives on, deleted, until its user ends) — btbench-wifi after `make deploy-scripts`, say. The
+# message names those units; restarted, `btbench-rw reset` (or the next boot) makes it ro. The counts live in /run, so a reboot starts with none — and every
+# mount is ro again, as fstab says.
+# Exit status non-zero with a one-line reason on stderr on failure; no terminal needed.
+
+set -u
+
+STATE=${BTBENCH_RW_STATE:-/run/btbench-rw}
+MOUNTS="/ /boot"
+
+die() { echo "btbench-rw: $*" >&2; exit 1; }
+
+known() {
+	for m in $MOUNTS; do [ "$1" = "$m" ] && return 0; done
+	return 1
+}
+
+key() { [ "$1" = / ] && echo root || echo "$1" | tr -d / ; }
+
+# rw or ro, as mounted now.
+mode() {
+	opts=$(findmnt -no OPTIONS --mountpoint "$1" 2>/dev/null) || return 1
+	case ",$opts," in *,rw,*) echo rw ;; *) echo ro ;; esac
+}
+
+count() { cat "$STATE/$(key "$1").count" 2>/dev/null || echo 0; }
+
+# All changes to the counts under one lock: two deploys at once must not interleave a remount.
+locked() {
+	mkdir -p "$STATE"
+	exec 9> "$STATE/lock"
+	flock 9
+}
+
+open1() {
+	m=$1
+	n=$(count "$m")
+	if [ "$n" -eq 0 ]; then
+		if [ "$(mode "$m")" = rw ]; then
+			# Not ours to close: it was writable before.
+			echo 1 > "$STATE/$(key "$m").was-rw"
+		else
+			rm -f "$STATE/$(key "$m").was-rw"
+			mount -o remount,rw "$m" || die "cannot remount $m rw"
+		fi
+	fi
+	echo $((n + 1)) > "$STATE/$(key "$m").count"
+}
+
+close1() {
+	m=$1
+	n=$(count "$m")
+	[ "$n" -gt 0 ] && n=$((n - 1))
+	echo "$n" > "$STATE/$(key "$m").count"
+	[ "$n" -eq 0 ] || return 0
+	[ -e "$STATE/$(key "$m").was-rw" ] && return 0
+	sync
+	# A writer that has just finished can still hold the filesystem for a moment.
+	for t in 1 2 3; do
+		mount -o remount,ro "$m" 2>/dev/null && return 0
+		sleep 1
+	done
+	held=$(holders "$m")
+	if [ -n "$held" ]; then
+		echo "btbench-rw: $m stays rw until these restart (they run files that were replaced): $held." >&2
+		echo "btbench-rw: then \`btbench-rw reset\` makes it read-only (or the next boot does)." >&2
+	else
+		echo "btbench-rw: $m stays rw: something has a file open for writing (fuser -vm $m)" >&2
+	fi
+	return 0
+}
+
+# The units (or commands) of processes that hold a deleted file of mount m open: what keeps the
+# kernel from making it read-only after a deploy replaced their files.
+holders() {
+	# "pid<TAB>path" of every deleted file held open, from one ls over all processes (a readlink
+	# per descriptor takes seconds on a Zero W with PipeWire's hundreds). memfd buffers are not
+	# files of any mount.
+	ls -l /proc/[0-9]*/fd/ /proc/[0-9]*/exe 2>/dev/null | awk '
+		/^\/proc\/[0-9]+\/fd\/?:$/ { split($0, a, "/"); pid = a[3]; next }
+		/ -> .* \(deleted\)$/ {
+			if ($0 ~ /^l.* \/proc\/[0-9]+\/exe -> /) { split($0, b, "/proc/"); split(b[2], c, "/"); p = c[1] } else p = pid
+			t = $0; sub(/^.* -> /, "", t); sub(/ \(deleted\)$/, "", t)
+			if (t !~ /^\/memfd:/ && t ~ /^\//) printf "%s\t%s\n", p, t
+		}' | awk -F'\t' -v m="$1" -v mounts="$(findmnt -rno TARGET | tr '\n' ' ')" '
+		BEGIN { n = split(mounts, mp, " ") }
+		{
+			# The mount a path is on: the longest mount point it starts with.
+			best = "/"
+			for (i = 1; i <= n; i++) {
+				t = mp[i]
+				if (t != "/" && (index($2, t "/") == 1) && length(t) > length(best)) best = t
+			}
+			if (best == m) print $1
+		}' | sort -u | while read -r pid; do
+		unit=$(sed -n 's|.*/\([^/]*\.service\)$|\1|p' "/proc/$pid/cgroup" 2>/dev/null | head -n 1)
+		echo "${unit:-$(cat "/proc/$pid/comm" 2>/dev/null)}"
+	done | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+status() {
+	printf '{'
+	sep=
+	for m in $MOUNTS; do
+		md=$(mode "$m") || continue
+		printf '%s"%s":{"mode":"%s","open":%s}' "$sep" "$m" "$md" "$(count "$m")"
+		sep=,
+	done
+	printf '}\n'
+}
+
+[ $# -ge 1 ] || die "usage: btbench-rw open|close|run|status|reset (--help)"
+cmd=$1
+shift
+case $cmd in
+open | close)
+	[ $# -ge 1 ] || die "$cmd: which mount (/ or /boot)"
+	for m in "$@"; do known "$m" || die "$m: not one of $MOUNTS"; done
+	locked
+	rc=0
+	for m in "$@"; do
+		if [ "$cmd" = open ]; then open1 "$m"; else close1 "$m" || rc=1; fi
+	done
+	exit $rc
+	;;
+run)
+	mounts=
+	while [ $# -gt 0 ] && [ "$1" != -- ]; do
+		known "$1" || die "$1: not one of $MOUNTS"
+		mounts="$mounts $1"
+		shift
+	done
+	[ $# -gt 0 ] && shift
+	[ -n "$mounts" ] && [ $# -gt 0 ] || die "usage: btbench-rw run MOUNT... -- CMD..."
+	# shellcheck disable=SC2086 # a list of mount points
+	"$0" open $mounts || exit 1
+	"$@"
+	rc=$?
+	# shellcheck disable=SC2086
+	"$0" close $mounts || [ $rc -ne 0 ] || rc=1
+	exit $rc
+	;;
+status) status ;;
+reset)
+	locked
+	rc=0
+	for m in $MOUNTS; do
+		mode "$m" >/dev/null || continue
+		echo 0 > "$STATE/$(key "$m").count"
+		rm -f "$STATE/$(key "$m").was-rw"
+		sync
+		[ "$(mode "$m")" = ro ] || mount -o remount,ro "$m" || { echo "btbench-rw: $m stays rw" >&2; rc=1; }
+	done
+	exit $rc
+	;;
+-h | --help | help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0" ;;
+*) die "usage: btbench-rw open|close|run|status|reset (--help)" ;;
+esac

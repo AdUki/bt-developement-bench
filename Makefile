@@ -66,6 +66,15 @@ SSH_OPTS := -o ControlMaster=auto -o ControlPath=$(ROOT)/build/.ssh-%C -o Contro
 SSH      := ssh $(SSH_OPTS)
 RSYNC    := rsync -rlptD --info=stats0 -e "ssh $(SSH_OPTS)"
 
+# The board's root filesystem and /boot are read-only (docs/system.md "The SD card"). A recipe that
+# writes them starts its shell with $(call board_rw,/ /boot): btbench-rw opens them on the board,
+# and an EXIT trap closes them when that shell ends, a failed step included. So everything that
+# writes must be in the same shell: one recipe line, continued with backslashes. btbench-rw counts
+# its users, so two deploys at once (or a deploy and a kernel trial) do not close each other's
+# mounts. An image from before it (no btbench-rw) is writable anyway: nothing is done there.
+board_rw_cmd = $(SSH) $(TARGET) 'command -v btbench-rw >/dev/null || exit 0; btbench-rw $(1) $(2)'
+board_rw = $(call board_rw_cmd,open,$(1)); trap "$(call board_rw_cmd,close,$(1))" EXIT;
+
 BOLD := \033[1m
 DIM  := \033[2m
 OFF  := \033[0m

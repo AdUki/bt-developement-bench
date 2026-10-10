@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
   app.add_option("--dir", dir, "Where the files go (default /tmp/logs)");
   app.add_option("--max-kib", cap_kib, "A file's size before it is rotated to <name>.1 (default 2048)");
   app.add_option("--backlog", backlog, "Journal entries written at start, before following (default 1000)");
-  app.add_option("--link", links, "NAME=TARGET: a symbolic link in the directory (btsnoop=/data/btsnoop)");
+  app.add_option("--link", links, "NAME=TARGET: a symbolic link in the directory (btsnoop=/tmp/btsnoop)");
   CLI11_PARSE(app, argc, argv);
 
   mkdir(dir.c_str(), 0755);

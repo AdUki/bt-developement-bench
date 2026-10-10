@@ -2,7 +2,7 @@
 
 The board runs bluetoothd from BlueZ master and either PipeWire or nothing on top of it. You pick
 the setup at runtime; nothing needs a rebuild. An always-on btmon ring records every HCI packet
-to `/data/btsnoop`.
+to `/tmp/btsnoop`, in RAM.
 
 | mode | what runs | use it for |
 |---|---|---|
@@ -228,8 +228,9 @@ or a virtual controller: `btvirt -l2` or a vhci device.
 `btbench-btsnoop.service` is enabled by default. It runs `/usr/bin/btbench-btsnoop`, a loop
 around `btmon -w`:
 
-- **Files.** Each one is `/data/btsnoop/hci-<YYYYmmdd-HHMMSS>.btsnoop`. The newest is the one
-  being written.
+- **Files.** Each one is `/tmp/btsnoop/hci-<YYYYmmdd-HHMMSS>.btsnoop`. The newest is the one
+  being written. They are in RAM and gone at reboot: the SD card is kept for settings
+  (docs/system.md "The SD card"). Download one to keep it.
 - **Rotation.** When the current file passes `ROTATE_SIZE`, a new btmon starts on the next file
   and the old one is stopped a second later. There is no gap: a few packets land in both files.
   Upstream btmon cannot rotate by itself.
@@ -238,10 +239,10 @@ around `btmon -w`:
 
   | variable | default | |
   |---|---|---|
-  | `ROTATE_SIZE` | `16M` | bytes, or with a K/M/G suffix |
-  | `ROTATE_COUNT` | `8` | files kept, including the one being written |
+  | `ROTATE_SIZE` | `8M` | bytes, or with a K/M/G suffix |
+  | `ROTATE_COUNT` | `4` | files kept, including the one being written (32 MB of RAM by default) |
   | `CHECK_INTERVAL` | `5` | seconds between size checks |
-  | `BTSNOOP_DIR` | `/data/btsnoop` | |
+  | `BTSNOOP_DIR` | `/tmp/btsnoop` | `/data/...` puts the ring back on the SD card |
   | `BTMON_ARGS` | | extra btmon options, e.g. `-i 0` |
 
 - **Using it.** btbenchd lists, downloads, deletes and analyses the files (`/api/capture`). Open

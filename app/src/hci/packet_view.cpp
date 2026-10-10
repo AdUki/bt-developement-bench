@@ -38,7 +38,7 @@ constexpr size_t kRecHdr = 24;
 constexpr uint32_t kMaxRecord = 65536 + 16;  // what BtsnoopReader accepts; beyond is corruption
 constexpr size_t kReadChunk = 256 * 1024;
 constexpr size_t kMaxContextBytes = 4 * 1024 * 1024;  // a .ctx file is a few hundred KiB at most
-// A file far beyond the ring's 16 MiB (someone copied a long capture into /data/btsnoop) is
+// A file far beyond the ring's 16 MiB (someone copied a long capture into the capture dir) is
 // indexed up to here and reported as truncated: 32 MB of index is all the Zero W can spare.
 constexpr size_t kMaxEntries = 1000000;
 constexpr size_t kMaxQueries = 4;  // cached filter results per file

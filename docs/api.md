@@ -450,8 +450,9 @@ one is saved); `PUT /api/audio/radio` `{"stations": [...]}` saves them to
 ## OBEX
 
 btbenchd drives BlueZ's obexd: started on first use with `--system-bus` (or adopted when something
-already owns `org.bluez.obex`), stopped with btbenchd. Files live under `/data/btbench/obex`
-(obexd's root too: it writes nowhere else): `out/` what is sent, `in/` what is received or
+already owns `org.bluez.obex`), stopped with btbenchd. Files live under `/tmp/btbench/obex`,
+in RAM and gone at reboot (obexd's root too: it writes nowhere else; the SD card is kept for
+settings): `out/` what is sent, `in/` what is received or
 pulled, `shared/` anything put there for others. A device browsing the board over FTP sees all
 three.
 

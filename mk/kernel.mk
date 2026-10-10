@@ -202,6 +202,7 @@ linux-deploy: ## Copy the built kernel to the board's test slot (/boot/bench/tes
 	  exit 1; \
 	fi; \
 	echo -e "$(BOLD)Deploying$(OFF) $$release → $(TARGET):/boot/bench/test"; \
+	$(call board_rw,/ /boot) \
 	$(SSH) $(TARGET) "mkdir -p /boot/bench/test && rm -f /boot/bench/test/* && rm -rf /lib/modules/$$release"; \
 	$(RSYNC) --no-perms --no-owner --no-group --modify-window=1 \
 	  $(KSTAGE)/boot/$(KIMAGE) $(KSTAGE)/boot/board.dtb $(KSTAGE)/boot/version $(TARGET):/boot/bench/test/; \

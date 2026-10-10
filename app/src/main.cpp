@@ -68,7 +68,10 @@ int main(int argc, char** argv) {
   std::string host = "0.0.0.0";
   std::string www = "/usr/share/btbenchd/www";
   std::string data_dir = "/data/btbench";
-  std::string capture_dir = "/data/btsnoop";
+  // Settings on the SD card (/data), what changes often in RAM: the card is otherwise read-only
+  // (docs/system.md "The SD card").
+  std::string capture_dir = "/tmp/btsnoop";
+  std::string volatile_dir = "/tmp/btbench";
   std::string scripts_dir;
   std::string bt_adapter;
   std::string hci_replay;
@@ -81,7 +84,9 @@ int main(int argc, char** argv) {
   app.add_option("--host", host, "Address to listen on (default all)");
   app.add_option("--www", www, "Directory of the web console's files");
   app.add_option("--data-dir", data_dir, "Where the bench keeps its state: bluetoothd.env (default /data/btbench)");
-  app.add_option("--capture-dir", capture_dir, "The btsnoop ring the capture routes manage (default /data/btsnoop)");
+  app.add_option("--capture-dir", capture_dir, "The btsnoop ring the capture routes manage (default /tmp/btsnoop)");
+  app.add_option("--volatile-dir", volatile_dir,
+                 "Where what changes often and need not survive a reboot goes: OBEX transfers (default /tmp/btbench)");
   app.add_option("--logs-dir", logs_dir, "btbench-logd's per-program log files, served by the API (default /tmp/logs)");
   app.add_option("--scripts-dir", scripts_dir,
                  "Also look here for btbench-audio/-wifi/-kernel (default: PATH only)");
@@ -167,7 +172,7 @@ int main(int argc, char** argv) {
 
   // OBEX (obexd on the system bus), started on first use; its files live under the data dir.
   btb::obex::Options oopt;
-  oopt.root = data_dir + "/obex";
+  oopt.root = volatile_dir + "/obex";
   btb::obex::ObexManager obex(oopt, publish, [&hub](const std::string& t) { return hub.has_subscribers(t); });
 
   // The HID host side: Bluetooth input devices, their events, and their media keys driving the
@@ -214,7 +219,9 @@ int main(int argc, char** argv) {
   btb::SetupOptions sopt;
   sopt.data_dir = data_dir;
   sopt.apply = !pc;
-  if (pc) sopt.wireplumber_conf = data_dir + "/wireplumber-profiles.conf";
+  // On the board /etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf is a link to this
+  // (btbench-base): the root filesystem is read-only, the fragment is a setting.
+  sopt.wireplumber_conf = data_dir + "/wireplumber-profiles.conf";
   btb::Setup setup(sopt, [&hid_remote] { return hid_remote.state().value("enabled", false); },
                    [&hid_remote](bool on, std::string* err) {
                      // Already so: nothing to do (registering again would only be refused).

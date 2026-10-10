@@ -16,6 +16,8 @@ SRC_URI = " \
     file://btbench-bdaddr \
     file://btbench-gadget \
     file://btbench-wifi \
+    file://btbench-rw \
+    file://btbench-sshkeys \
     file://btbench-data.service \
     file://btbench-bdaddr.service \
     file://btbench-gadget.service \
@@ -31,6 +33,7 @@ SRC_URI = " \
     file://sshd-early.conf \
     file://sshd-at-early.conf \
     file://sshdgenkeys-early.conf \
+    file://sshd-hostkeys.conf \
     file://btbench-tmpfiles.conf \
     file://profile-btbench.sh \
 "
@@ -81,6 +84,8 @@ RDEPENDS:${PN} = " \
     util-linux-partx \
     util-linux-findmnt \
     util-linux-flock \
+    util-linux-mountpoint \
+    openssh-keygen \
     e2fsprogs-resize2fs \
     e2fsprogs-e2fsck \
 "
@@ -100,7 +105,7 @@ def btbench_shq(d, var):
 
 do_install() {
     install -d ${D}${bindir}
-    for s in btbench-data btbench-bdaddr btbench-gadget btbench-wifi; do
+    for s in btbench-data btbench-bdaddr btbench-gadget btbench-wifi btbench-rw btbench-sshkeys; do
         install -m 0755 ${WORKDIR}/$s ${D}${bindir}/
     done
 
@@ -170,12 +175,18 @@ EOF
     # --- ssh --------------------------------------------------------------------------------
     install -d ${D}${sysconfdir}/ssh/sshd_config.d
     install -m 0644 ${WORKDIR}/sshd-btbench.conf ${D}${sysconfdir}/ssh/sshd_config.d/10-btbench.conf
+    install -m 0644 ${WORKDIR}/sshd-hostkeys.conf ${D}${sysconfdir}/ssh/sshd_config.d/20-btbench-hostkeys.conf
     install -d ${D}${systemd_system_unitdir}/sshd.socket.d
     install -m 0644 ${WORKDIR}/sshd-early.conf ${D}${systemd_system_unitdir}/sshd.socket.d/10-early.conf
     install -d ${D}${systemd_system_unitdir}/sshd@.service.d
     install -m 0644 ${WORKDIR}/sshd-at-early.conf ${D}${systemd_system_unitdir}/sshd@.service.d/10-early.conf
     install -d ${D}${systemd_system_unitdir}/sshdgenkeys.service.d
     install -m 0644 ${WORKDIR}/sshdgenkeys-early.conf ${D}${systemd_system_unitdir}/sshdgenkeys.service.d/10-early.conf
+
+    # --- settings that must be on the read-only root: links to /data ----------------------
+    # Setup's WirePlumber fragment (btbenchd writes the /data file; btbench-data seeds it).
+    install -d ${D}${sysconfdir}/wireplumber/wireplumber.conf.d
+    ln -sf /data/btbench/wireplumber-profiles.conf ${D}${sysconfdir}/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf
 
     # --- misc -------------------------------------------------------------------------------
     install -d ${D}${nonarch_libdir}/tmpfiles.d
