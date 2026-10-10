@@ -580,8 +580,17 @@ bool Setup::change(const json& body, json* out, std::string* err, int* status) {
   *status = 500;
   if (!save(err) || !write_files(&bt, &wp, err)) return false;
   json restarted = json::array();
-  // On the board, what reads a file is restarted: WirePlumber first, so its Bluetooth monitor is
-  // up when bluetoothd comes back and registers its endpoints at once.
+  const std::string obex = obexd_noplugin(st_.obex_off);
+  lk.unlock();
+  // obexd first: a running obexd registers its servers again with every bluetoothd that comes up,
+  // so restarted after bluetoothd, the old one would have put back the servers just switched off
+  // (and the new one be refused them: "UUID already registered").
+  if (obex_changed && obex_apply_) {
+    obex_apply_(obex);
+    restarted.push_back("obexd");
+  }
+  // Then, on the board, what reads a file: WirePlumber before bluetoothd, so its Bluetooth monitor
+  // is up when bluetoothd comes back and registers its endpoints at once.
   if (opt_.apply) {
     if (wp) {
       const ExecResult r = run_cmd({"systemctl", "restart", "wireplumber.service"}, 30000);
@@ -597,13 +606,7 @@ bool Setup::change(const json& body, json* out, std::string* err, int* status) {
       restarted.push_back("bluetooth.service");
     }
   }
-  const std::string obex = obexd_noplugin(st_.obex_off);
-  json result = state_locked();
-  lk.unlock();
-  if (obex_changed && obex_apply_) {
-    obex_apply_(obex);
-    restarted.push_back("obexd");
-  }
+  json result = state();
   if (remote_want >= 0 && remote_set_) {
     std::string e;
     if (!remote_set_(remote_want == 1, &e)) {
