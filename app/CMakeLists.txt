@@ -80,6 +80,13 @@ target_include_directories(third_party SYSTEM INTERFACE
 # labels a raw upload (POST /api/obex/files) that way, so the cap is the upload limit instead.
 target_compile_definitions(third_party INTERFACE SPDLOG_HEADER_ONLY CPPHTTPLIB_THREAD_POOL_COUNT=3
                            CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH=33554432)
+# gzip for what httplib deems compressible (JSON, text, JS/CSS/HTML) when the browser asks: a log
+# page of thousands of lines is megabytes of JSON, and the board's Wi-Fi moves about 2 MB/s, while
+# deflating it costs the Zero W a fraction of that. The streams (pcap, ndjson, WAV) and btsnoop
+# downloads are of types it leaves alone. zlib is in every image.
+find_package(ZLIB REQUIRED)
+target_compile_definitions(third_party INTERFACE CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(third_party INTERFACE ZLIB::ZLIB)
 
 add_library(btbench_core STATIC
   src/a2dp_codec.cpp
@@ -106,6 +113,7 @@ add_library(btbench_core STATIC
   src/jobs.cpp
   src/obex/obex.cpp
   src/journal.cpp
+  src/logview.cpp
   src/scripts.cpp
   src/setup.cpp
   src/system.cpp

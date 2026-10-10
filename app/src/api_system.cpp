@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "http_util.h"
+#include "logview.h"
 #include "util/exec.h"
 #include "util/log.h"
 #include "util/strings.h"
@@ -125,6 +126,61 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
   // ---- Log files (btbench-logd, /tmp/logs) --------------------------------------------------------
 
   // {dir, files: [{name, size, mtime_ms, link}]}: what is in the directory, links included (btsnoop).
+  // The log viewer (logview.h): ?src=j:UNIT (the journal; j:kernel the kernel's) or f:NAME (a file
+  // here), &lines=N (up to 20000), &before= (older than: a cursor or offset from an earlier
+  // answer), &after=OFFSET (a file's lines since, for following), &q= (the filter) and &prio=
+  // (the lowest priority, 0..7). Answers {src, entries, before, end, reset, scanned, limited}.
+  svr.Get("/api/system/logs/view", [opt](const httplib::Request& req, httplib::Response& res) {
+    const std::string src = query(req, "src", "j:bluetooth.service");
+    LogQuery q;
+    q.lines = static_cast<int>(std::clamp(query_long(req, "lines", 1000), 1L, 20000L));
+    q.before = query(req, "before", "");
+    if (req.has_param("after")) q.after = std::atoll(query(req, "after", "0").c_str());
+    std::string err;
+    if (!q.filter.parse(query(req, "q", ""), static_cast<int>(query_long(req, "prio", 7)), &err))
+      return send_error(res, 400, err);
+    LogPage page;
+    if (src.rfind("f:", 0) == 0) {
+      const std::string name = src.substr(2);
+      const std::string p = opt.logs_dir + "/" + name;
+      struct stat st {};
+      if (name.empty() || name[0] == '.' || name.find('/') != std::string::npos || lstat(p.c_str(), &st) != 0 ||
+          !S_ISREG(st.st_mode))
+        return send_error(res, 404, "no such log file");
+      if (!read_log_file(p, q, &page, &err)) return send_error(res, 500, err);
+    } else if (src.rfind("j:", 0) == 0) {
+      std::string unit;
+      if (!journal_unit_name(src.substr(2), &unit)) return send_error(res, 400, "bad unit name");
+      if (!read_journal(unit, q, &page, &err)) return send_error(res, 503, err);
+    } else {
+      return send_error(res, 400, "src is j:UNIT or f:NAME");
+    }
+    std::string body = "{\"src\":";
+    append_json_string(src, &body);
+    body += ",\"entries\":";
+    append_entries_json(page.entries, &body);
+    body += ",\"before\":";
+    if (page.before.empty()) body += "null";
+    else append_json_string(page.before, &body);
+    body += ",\"end\":" + (page.end >= 0 ? std::to_string(page.end) : std::string("null"));
+    body += std::string(",\"reset\":") + (page.reset ? "true" : "false");
+    body += ",\"scanned\":" + std::to_string(page.scanned);
+    body += std::string(",\"limited\":") + (page.limited ? "true" : "false") + "}";
+    res.set_header("Cache-Control", "no-store");
+    // Gzipped here at level 1, not by httplib at its 6: on log text that is nearly as small and
+    // a third of the Zero W's time (a 20000-line answer: 2.8 MB, 0.5 s at 6). The type is one
+    // httplib does not compress, so it is not done twice; the page parses it as JSON anyway.
+    const std::string type = "application/vnd.btbench.logs+json";
+    std::string gz;
+    if (req.get_header_value("Accept-Encoding").find("gzip") != std::string::npos && gzip_fast(body, &gz)) {
+      res.set_header("Content-Encoding", "gzip");
+      res.set_header("Vary", "Accept-Encoding");
+      res.set_content(std::move(gz), type);
+    } else {
+      res.set_content(std::move(body), type);
+    }
+  });
+
   svr.Get("/api/system/logs", [opt](const httplib::Request&, httplib::Response& res) {
     json files = json::array();
     if (DIR* dir = opendir(opt.logs_dir.c_str())) {

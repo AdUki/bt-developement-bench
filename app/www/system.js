@@ -159,9 +159,13 @@ function setupBtDebug() {
 registerTab('system', {
   topics: () => logsTopics().concat(jobSel ? ['job.' + jobSel] : []),
   show() {
-    refreshSystem().then(logsShow);
+    // The log does not wait for the rest: its source list fills in when /system answers.
+    logsShow();
+    refreshSystem();
     refreshJobs();
-    refreshBtDebug();
+    // Its status is an awk over the kernel's whole dynamic debug table, most of a second of the one
+    // core: after the log, which is what is looked at first.
+    setTimeout(refreshBtDebug, 1200);
     refreshLogFiles();
   },
   onMessage(topic, d) {

@@ -641,6 +641,7 @@ servers did. A restart drops every connection. Answers with the state plus `rest
 | `GET /api/system/journal?unit=bluetooth&lines=200` | `{unit, entries: [{ts, prio, unit, ident, pid, msg}]}`, oldest first; `unit=kernel` is the kernel's log (`journalctl -k`) |
 | `GET /api/system/logs` | `{dir, files: [{name, size, mtime_ms, link}]}`: btbench-logd's files (`/tmp/logs`, `--logs-dir`); `link` is a symbolic link's target (`btsnoop`) |
 | `GET /api/system/logs/{name}?tail=2000&download=1` | one file as `text/plain`, or its last `tail` lines; `download=1` as an attachment. `X-Size` is its size |
+| `GET /api/system/logs/view?src=j:UNIT\|j:kernel\|f:NAME&lines=1000&q=&prio=7&before=&after=` | the log viewer's reading (see below) |
 | `GET /api/system/logs/{name}?from=OFFSET` | what was appended after `OFFSET`, in whole lines, for following a file; `X-Size` is the offset to ask from next, `X-Reset: 1` that the file was rotated or more than 1 MiB came, and the text starts afresh |
 | `GET /api/system/btdebug` | the kernel's Bluetooth debug messages by area: `btbench-btdebug status` (docs/contracts.md); 503 on a PC |
 | `PUT /api/system/btdebug` `{"on": ["l2cap", "smp"], "off": ["all"], "keep": ["l2cap"]}` | any of them, applied off → on → keep; `keep` replaces the areas on from boot (`[]`: none). Answers with the status |
@@ -651,6 +652,38 @@ servers did. A restart drops every connection. Answers with the state plus `rest
 Bluetooth UART long before anything else notices, so `seen` is latched since btbenchd started.
 `board` and `device` are `/etc/btbench/board.env` and `device.env`. Reboot and restarts answer 403
 on a PC (`btbenchd --pc`).
+
+### The log viewer's route
+
+`GET /api/system/logs/view` reads the journal (`src=j:bluetooth.service`, `j:kernel`) or one of
+btbench-logd's files (`src=f:bluez.log`) on the board, as the same entries, newest last:
+
+```json
+{"src": "f:bluez.log", "entries": [{"ts": 1791620110152, "prio": 7, "who": "bluetoothd", "pid": 22948,
+  "msg": "src/device.c:device_add_connection() Device 0C:32:3A:D6:C3:44 is already connected"}],
+ "before": "1840221", "end": 2097245, "reset": false, "scanned": 1000, "limited": false}
+```
+
+- Entries: `ts` (ms; 0 for a file line in no known format), `prio` (0–7), and when known `who`
+  (the program), `pid`, `tid` ("pid.tid", nsdk format), `topic` (PipeWire's and WirePlumber's) and
+  `msg`. A file line is parsed back from the format btbench-logd wrote it in.
+- `lines` (1–20000) is how many to return. They are the newest that match, read from the end.
+- `q` is the filter: words that must all appear (case-insensitive), `!word` that must not,
+  `/regex/` (POSIX extended, with JavaScript's `\d`, `\s` and `(?:`; case-insensitive unless it has a
+  capital), and `"a phrase"`. `prio` is the lowest priority kept.
+- `before` (from an earlier answer) continues older than that answer's oldest entry; `before` is
+  `null` when there is nothing older. A journal search stops after 1.5 s and says `limited`:
+  ask again with its `before` to search further back.
+- `after=OFFSET` (files) returns what was appended after `end`, for following. `reset` means the
+  file was rotated and the entries start afresh.
+- The answer is gzipped (level 1) for a client that accepts it; its type is
+  `application/vnd.btbench.logs+json`.
+
+The journal is read from the files being written first (in RAM: the image's journald keeps it in
+`/run`, uncompressed); older files are opened only when those run out. On a Zero W: a file's 1000
+lines in about 0.1 s and its 20 000 in about 1 s, the journal's 1000 entries in about 0.3 s
+(libsystemd's own pace, about 0.2 ms an entry). The console asks for 1000 first and fetches the
+rest of what was asked for in chunks after.
 
 ## Jobs
 

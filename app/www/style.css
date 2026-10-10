@@ -814,6 +814,8 @@ label.set-row { cursor: pointer; }
 .lg-line.p5 { font-weight: 600; }
 .lg-line.p7 { color: var(--muted); }
 .lg-note { color: var(--muted); font-style: italic; text-align: center; }
+.lg-more { text-align: center; padding: 0.3rem 0 0.5rem; font-family: system-ui, sans-serif; }
+.lg-topic { color: var(--muted); }
 .lg-ts, .lg-pid { color: var(--muted); font-weight: 400; }
 .lg-who { font-weight: 600; }
 .lg-lvl { font-size: 10px; letter-spacing: 0.02em; opacity: 0.75; }

@@ -24,6 +24,8 @@ add_btb_test(test_pwtop)
 add_btb_test(test_setup)
 add_btb_test(test_logd)
 target_link_libraries(test_logd PRIVATE btb_logd)
+add_btb_test(test_logview)
+target_link_libraries(test_logview PRIVATE btb_logd)
 # The UUID table is read from the source tree, never copied.
 target_compile_definitions(test_uuids PRIVATE BTB_WWW_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../www")
 target_compile_definitions(test_bluez_model PRIVATE BTB_WWW_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../www")

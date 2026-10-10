@@ -1,23 +1,37 @@
 'use strict';
 // System → Logs: one viewer for the journal (a unit, or the kernel) and btbench-logd's files in
-// /tmp/logs (each program's own format). Lines are coloured by priority and by program, and what
-// people look for in a Bluetooth log stands out: addresses, D-Bus object paths, source locations,
-// hex, failures. The filter narrows what is shown, in the browser, over what was loaded: words
-// (all of them), !word to hide, /regex/, "a phrase", and a lowest priority. Following a source
-// keeps adding to it: the journal over the "journal" topic, a file by asking for what was
-// appended (?from=) every second and a half.
+// /tmp/logs. The board does the reading (GET /api/system/logs/view, logview.cpp): both kinds come
+// as the same entries — time, priority, program, pid, topic, message — read from the end, filtered
+// there so a search covers the whole log, and gzipped. The page colours them: by priority, the
+// program in its own colour, and what people look for in a Bluetooth log picked out (addresses,
+// D-Bus object paths, source locations, hex, failures), the filter's hits marked.
+//
+// The filter is words (all of them), !word to hide, /regex/, "a phrase", and a lowest priority.
+// "Load older" asks for the page before the oldest shown. Following adds to it as it comes: the
+// journal over the "journal" topic, a file by asking for what was appended (?after=) every 1.5 s;
+// new lines are filtered here, with the same rules.
 
-const LG_KEEP = 5000;   // lines kept in the page
-const LG_SHOW = 2000;   // lines drawn: the newest matches (a log of thousands is read from its end)
+const LG_KEEP = 40000;  // entries kept in the page (two pages of the largest size)
+const LG_DRAW = 1500;   // entries drawn at a time; scrolling to the top draws the next ones
+// The first answer is small so it is on screen at once (0.1–0.3 s on the Zero W); the rest of what
+// was asked for follows in bigger chunks, older first, while the newest are already readable.
+const LG_FIRST = 1000;
+const LG_CHUNK = 5000;
 
 const lg = {
   src: lsGet('btbench.lg.src') || 'j:bluetooth.service',
-  entries: [],          // {ts, prio, who, pid, msg} (journal) or {prio, msg, file: true}
+  entries: [],          // oldest first: {ts, prio, who, pid, tid, topic, msg} (note: a marker line)
   units: [], files: [],
-  follow: false, gen: 0,
-  fileAt: 0, fileTimer: null, rest: '',
+  before: null,         // where older entries start (a cursor or an offset); null: none
+  end: null,            // a file: the offset to follow from
+  limited: false,       // the board stopped searching (its time budget) before filling the page
+  follow: false, gen: 0, busy: false,
+  target: 1000,         // how many entries this view is filling up to
+  scanned: 0,           // entries the board looked at for them (a search)
+  fileTimer: null,
   prio: Number(lsGet('btbench.lg.prio')) || 7,
-  filter: null, pending: false,
+  q: '', filter: null, pending: false,
+  drawn: 0,             // how many of the newest matches are drawn
 };
 
 // ---------------------------------------------------------------- sources
@@ -43,7 +57,6 @@ function logsSources() {
   if ($('lg-src').value !== lg.src && $('lg-src').options.length) $('lg-src').value = lg.src;
 }
 
-const lgUnit = () => lg.src.slice(2);
 const lgIsFile = () => lg.src.startsWith('f:');
 
 // Opens a source (a select change, or System's shortcuts: kernel logs, a file's name).
@@ -55,60 +68,100 @@ function logsOpen(src, follow) {
   logsLoad();
 }
 
+const lgUrl = extra => `/system/logs/view?src=${encodeURIComponent(lg.src)}&q=${encodeURIComponent(lg.q)}&prio=${lg.prio}${extra}`;
+
+// The newest page: on opening a source, and whenever the filter or the priority changes (the board
+// searches the whole log for it).
 function logsLoad() {
   const gen = ++lg.gen;
   clearInterval(lg.fileTimer);
   lg.fileTimer = null;
   lg.entries = [];
-  lg.rest = '';
+  lg.before = lg.end = null;
+  lg.limited = false;
+  lg.busy = true;
+  lg.target = Number($('lg-lines').value);
+  lg.scanned = 0;
+  lg.took = null;
   setText($('lg-err'), '');
-  setHTML($('lg-view'), '<div class="muted loading-line"><span class="spin"></span>Loading…</div>');
-  // The journal is read entry by entry on the board: about 3 ms each on a Zero W.
   setText($('lg-count'), 'loading…');
-  const n = $('lg-lines').value;
-  if (lgIsFile()) {
-    fetch(`/api/system/logs/${encodeURIComponent(lgUnit())}?tail=${n}`).then(async r => {
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-      const text = await r.text();
-      if (gen !== lg.gen) return;
-      lg.fileAt = Number(r.headers.get('X-Size')) || 0;
-      lgFileText(text, false);
-      logsFollow();
-    }).catch(e => { if (gen === lg.gen) lgError(e); });
-  } else {
-    api(`/system/journal?unit=${encodeURIComponent(lgUnit())}&lines=${n}`).then(r => {
-      if (gen !== lg.gen) return;
-      r.entries.forEach(e => lg.entries.push(lgFromJournal(e)));
-      lgRender();
-      logsFollow();
-    }).catch(e => { if (gen === lg.gen) lgError(e); });
-  }
+  lg.t0 = performance.now();
+  api(lgUrl(`&lines=${Math.min(lg.target, LG_FIRST)}`)).then(r => {
+    if (gen !== lg.gen) return;
+    lg.busy = false;
+    lg.entries = r.entries;
+    lg.before = r.before;
+    lg.end = r.end;
+    lg.limited = r.limited;
+    lg.scanned = r.scanned;
+    lg.drawn = 0;
+    lgRender(false);
+    logsFollow();
+    lgFill(gen);
+  }).catch(e => { if (gen === lg.gen) { lg.busy = false; lgError(e); } });
+}
+
+// Older entries until the view holds what was asked for (or the log has no more), a chunk at a
+// time. A search the board cut short (its time budget) carries on the same way, so it covers the
+// whole log; a new source, filter or reload stops it (gen).
+function lgFill(gen) {
+  if (gen !== lg.gen || lg.before == null || lg.entries.length >= lg.target) return lgDone(gen);
+  lg.busy = true;
+  lgStatus();
+  const want = Math.min(LG_CHUNK, lg.target - lg.entries.length);
+  api(lgUrl(`&lines=${want}&before=${encodeURIComponent(lg.before)}`)).then(r => {
+    if (gen !== lg.gen) return;
+    lg.busy = false;
+    lg.entries = r.entries.concat(lg.entries);
+    if (lg.entries.length > LG_KEEP) lg.entries.splice(LG_KEEP);
+    lg.before = r.before;
+    lg.limited = r.limited;
+    lg.scanned += r.scanned;
+    // Older lines are kept but drawn only when scrolled up to: the view stays where it is.
+    lgRender(true, true);
+    lgFill(gen);
+  }).catch(e => { if (gen === lg.gen) { lg.busy = false; lgError(e); } });
+}
+
+function lgDone(gen) {
+  if (gen !== lg.gen) return;
+  lg.busy = false;
+  lg.took = Math.round(performance.now() - lg.t0);
+  lgStatus();
+}
+
+// "Load older": as many again, before the oldest held.
+function logsOlder() {
+  if (lg.before == null || lg.busy) return;
+  lg.target = lg.entries.length + Number($('lg-lines').value);
+  lg.t0 = performance.now();
+  lg.drawn = Math.max(lg.drawn, Math.min(lg.entries.length, LG_KEEP)) + LG_DRAW;
+  lgFill(lg.gen);
 }
 
 function lgError(e) {
-  setHTML($('lg-view'), '');
   setText($('lg-err'), e.message);
-  setText($('lg-count'), '');
+  lgStatus('');
 }
 
 // Follow: the journal through the topic (the board follows one unit for everyone), a file by
-// polling for what was appended.
+// asking for what was appended.
 function logsFollow() {
   lg.follow = $('lg-follow').checked;
   clearInterval(lg.fileTimer);
   lg.fileTimer = null;
-  if (lg.follow && !lgIsFile()) put('/system/journal', {unit: lgUnit()}).catch(fail);
-  if (lg.follow && lgIsFile()) {
+  if (lg.follow && !lgIsFile()) put('/system/journal', {unit: lg.src.slice(2)}).catch(fail);
+  if (lg.follow && lgIsFile() && lg.end != null) {
     const gen = lg.gen;
     lg.fileTimer = setInterval(() => {
-      if (currentTab !== 'system' || gen !== lg.gen) return;
-      fetch(`/api/system/logs/${encodeURIComponent(lgUnit())}?from=${lg.fileAt}`).then(async r => {
-        if (!r.ok || gen !== lg.gen) return;
-        const text = await r.text();
-        lg.fileAt = Number(r.headers.get('X-Size')) || lg.fileAt;
+      if (currentTab !== 'system' || gen !== lg.gen || lg.end == null) return;
+      api(lgUrl(`&after=${lg.end}`)).then(r => {
+        if (gen !== lg.gen) return;
+        lg.end = r.end;
         // Rotated (btbench-logd renames it to .1 and starts afresh): what came before stays.
-        if (r.headers.get('X-Reset')) lg.entries.push({prio: 5, msg: '— the file was rotated —', note: true});
-        if (text) lgFileText(text, true);
+        if (r.reset) lg.entries.push({prio: 5, msg: '— the file was rotated —', note: true});
+        r.entries.forEach(e => lg.entries.push(e));
+        if (r.entries.length || r.reset) lgAdd(null);
       }).catch(() => {});
     }, 1500);
   }
@@ -120,41 +173,17 @@ function logsTopics() {
 }
 
 function logsShow() {
-  if (!lg.entries.length) logsLoad();
+  if (!lg.entries.length && !lg.busy) logsLoad();
 }
 
-function logsJournal(e) {
+function logsJournal(d) {
   if (!lg.follow || lgIsFile()) return;
-  const u = lgUnit();
+  const u = lg.src.slice(2);
   // The topic follows the board's one unit: a message for another (someone else changed it)
   // does not belong here.
-  if (u !== 'kernel' && e.unit && e.unit !== u) return;
-  lgAdd(lgFromJournal(e));
-}
-
-// ---------------------------------------------------------------- lines
-
-const lgFromJournal = e => ({ts: e.ts, prio: e.prio, who: e.ident || e.unit, pid: e.pid, msg: e.msg});
-
-// A line of a btbench-logd file, in its program's own format (app/logd/format.cpp): the priority
-// is read back from where that format puts it.
-function lgPrio(line) {
-  let m = /^\[([TDIWE])\]\[/.exec(line);                                      // PipeWire
-  if (m) return {T: 7, D: 7, I: 6, W: 4, E: 3}[m[1]];
-  m = /^([DIMWEC]) \d\d:\d\d:\d\d\./.exec(line);                               // WirePlumber
-  if (m) return {D: 7, I: 6, M: 5, W: 4, E: 3, C: 2}[m[1]];
-  m = /\b(DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|FATAL|CRIT)\b/.exec(line.slice(0, 80));  // bluez, nsdk
-  if (m) return {DEBUG: 7, INFO: 6, NOTICE: 5, WARN: 4, WARNING: 4, ERROR: 3, FATAL: 2, CRIT: 2}[m[1]];
-  return 6;
-}
-
-function lgFileText(text, append) {
-  const all = lg.rest + text;
-  const lines = all.split('\n');
-  lg.rest = lines.pop();  // a line still being written
-  for (const l of lines) if (l) lg.entries.push({prio: lgPrio(l), msg: l, file: true});
-  if (!append) lgRender();
-  else lgAdd(null);
+  if (u !== 'kernel' && d.unit && d.unit !== u) return;
+  const e = {ts: d.ts, prio: d.prio, who: d.ident || d.unit, pid: d.pid, msg: d.msg};
+  if (lgMatch(e, lg.filter)) lgAdd(e);
 }
 
 function lgAdd(e) {
@@ -166,10 +195,10 @@ function lgAdd(e) {
   requestAnimationFrame(() => { lg.pending = false; lgRender(true); });
 }
 
-// ---------------------------------------------------------------- the filter
+// ---------------------------------------------------------------- the filter (for followed lines)
 
-// Words must all appear (case-insensitive), !word must not, /re/ is a regex (its own flags, "i"
-// by default), "a phrase" is one word with spaces.
+// The same rules as the board's (logview.cpp LogFilter), for lines that arrive while following, and
+// for marking hits.
 function lgParse(src) {
   const terms = [];
   const re = /(!?)(?:"([^"]*)"|\/((?:\\.|[^/])+)\/([gimsuy]*)|(\S+))/g;
@@ -178,7 +207,8 @@ function lgParse(src) {
     const neg = m[1] === '!';
     if (m[3] != null) {
       try {
-        terms.push({neg, re: new RegExp(m[3], m[4].includes('i') || !/[A-Z]/.test(m[3]) ? 'i' + m[4].replace('i', '') : m[4])});
+        const icase = m[4].includes('i') || !/[A-Z]/.test(m[3]);
+        terms.push({neg, re: new RegExp(m[3], (icase ? 'i' : '') + m[4].replace('i', ''))});
       } catch (e) {
         return {error: `bad regex /${m[3]}/: ${e.message}`};
       }
@@ -190,12 +220,11 @@ function lgParse(src) {
   return {terms};
 }
 
-function lgText(e) {
-  return e.file ? e.msg : `${e.who || ''}${e.pid ? '[' + e.pid + ']' : ''}: ${e.msg}`;
-}
+const lgText = e => `${e.who || ''}${e.pid ? '[' + e.pid + ']' : ''}${e.who || e.pid ? ': ' : ''}${e.topic ? e.topic + ' ' : ''}${e.msg}`;
 
 function lgMatch(e, f) {
-  if (e.prio > lg.prio && !e.note) return false;
+  if (e.note) return true;
+  if (e.prio > lg.prio) return false;
   if (!f || !f.terms.length) return true;
   const t = lgText(e), low = t.toLowerCase();
   for (const term of f.terms) {
@@ -272,64 +301,60 @@ function lgWhoClass(who) {
   return 'lg-who c' + (Math.abs(h) % 8);
 }
 
-// A btbench-logd line split into its parts (app/logd/format.cpp), each drawn like a journal
-// line's: the time quiet, the program in its colour, the level as a tag, then the message.
-const LG_FORMATS = [
-  // bluez: bluetoothd[13077]: 20220309 12:06:48.280 DEBUG src/adapter.c:adapter_service_insert() ...
-  [/^(bluetoothd)(\[\d+\]): (\d{8} [\d:.]+) ([A-Z]+) (.*)$/, m => ({who: m[1], pid: m[2], ts: m[3], lvl: m[4], msg: m[5]})],
-  // nsdk: 20220403 11:35:59.169 [778.781] INFO Networking: Enter ... (system.log: "ident: " first)
-  [/^(\d{8} [\d:.]+) (\[[\d.]+\]) ([A-Z]+) (?:([\w@.-]+(?:\[\d+\])?): )?(.*)$/, m => ({ts: m[1], pid: m[2], lvl: m[3], who: m[4], msg: m[5]})],
-  // PipeWire: [I][10:44:56.111404] pw.conf      | [          conf.c:  423 conf_load()] ...
-  [/^\[([A-Z])\]\[([\d:.]+)\] (\S+)\s*\| (.*)$/, m => ({lvl: m[1], ts: m[2], who: m[3], msg: m[4]})],
-  // WirePlumber: I 16:45:19.152172    m-lua-scripting config.c:104:load_file: ...
-  [/^([DIMWEC]) ([\d:.]+) +(\S+) (.*)$/, m => ({lvl: m[1], ts: m[2], who: m[3], msg: m[4]})],
-];
-
-function lgFileLine(line, marks) {
-  for (const [re, f] of LG_FORMATS) {
-    const m = re.exec(line);
-    if (!m) continue;
-    const p = f(m);
-    return `<span class="lg-ts">${lgMark(p.ts, marks)}</span> ` +
-      (p.who ? `<span class="${lgWhoClass(p.who)}">${lgMark(p.who, marks)}</span>` : '') +
-      (p.pid ? `<span class="lg-pid">${lgMark(p.pid, marks)}</span>` : '') +
-      (p.lvl ? ` <span class="lg-lvl">${esc(p.lvl)}</span> ` : ' ') + lgColour(p.msg, marks);
-  }
-  return lgColour(line, marks);
-}
 
 const LG_PRIO = ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug'];
 
 function lgLineHTML(e, marks) {
   const cls = `lg-line p${Math.min(7, Math.max(0, e.prio))}${e.note ? ' lg-note' : ''}`;
-  if (e.file) return `<div class="${cls}">${lgFileLine(e.msg, marks)}</div>`;
-  const t = new Date(e.ts);
-  const ms = String(t.getMilliseconds()).padStart(3, '0');
-  return `<div class="${cls}" title="${LG_PRIO[e.prio] || e.prio}"><span class="lg-ts">${fmtTime(e.ts)}.${ms}</span> ` +
-    `<span class="${lgWhoClass(e.who || '')}">${esc(e.who || '')}</span>${e.pid ? `<span class="lg-pid">[${e.pid}]</span>` : ''} ` +
-    `${lgColour(e.msg, marks)}</div>`;
+  if (e.note) return `<div class="${cls}">${esc(e.msg)}</div>`;
+  let head = '';
+  if (e.ts) {
+    const ms = String(new Date(e.ts).getMilliseconds()).padStart(3, '0');
+    head += `<span class="lg-ts">${fmtTime(e.ts)}.${ms}</span> `;
+  }
+  if (e.who) head += `<span class="${lgWhoClass(e.who)}">${lgMark(e.who, marks)}</span>`;
+  if (e.pid) head += `<span class="lg-pid" title="${esc(e.tid ? 'pid.tid ' + e.tid : 'pid')}">[${e.tid || e.pid}]</span>`;
+  if (head && !head.endsWith(' ')) head += ' ';
+  if (e.topic) head += `<span class="lg-topic">${lgMark(e.topic, marks)}</span> `;
+  return `<div class="${cls}" title="${LG_PRIO[e.prio] || e.prio}">${head}${lgColour(e.msg, marks)}</div>`;
 }
 
 // ---------------------------------------------------------------- drawing
 
-function lgRender(keepPlace) {
-  if (!lg.entries.length && $('lg-count').textContent === 'loading…') return;
+// The newest `drawn` entries (at least LG_DRAW); scrolling to the top draws more, then a button
+// asks the board for older ones.
+function lgRender(keepPlace, older) {
   const view = $('lg-view');
   const atEnd = !keepPlace || view.scrollTop + view.clientHeight >= view.scrollHeight - 8;
-  const f = lg.filter;
-  const shown = [];
-  for (let i = lg.entries.length - 1; i >= 0 && shown.length < LG_SHOW; i--) {
-    if (lgMatch(lg.entries[i], f)) shown.push(lg.entries[i]);
+  const fromBottom = view.scrollHeight - view.scrollTop;
+  lg.drawn = Math.max(lg.drawn, LG_DRAW);
+  const n = lg.entries.length;
+  const first = Math.max(0, n - lg.drawn);
+  const marks = lg.filter && lg.filter.terms.filter(t => !t.neg);
+  const mk = marks && marks.length ? marks : null;
+  let html = '';
+  if (first > 0) html += `<div class="lg-more"><button class="small-btn" data-lg="draw">Show ${fmtNum(Math.min(LG_DRAW, first))} more of the ${fmtNum(first)} loaded above</button></div>`;
+  else if (lg.before != null && !lg.busy) html += `<div class="lg-more"><button class="small-btn" data-lg="older">Load ${fmtNum(Number($('lg-lines').value))} older</button></div>`;
+  for (let i = first; i < n; i++) html += lgLineHTML(lg.entries[i], mk);
+  if (!n) html += `<div class="muted">${lg.busy ? 'Searching…' : lg.q || lg.prio < 7 ? 'No line matches the filter.' : 'Nothing logged.'}</div>`;
+  view.innerHTML = html;
+  if (atEnd && !older) view.scrollTop = view.scrollHeight;
+  else view.scrollTop = view.scrollHeight - fromBottom;  // the same line stays under the eye
+  lgStatus();
+}
+
+function lgStatus(text) {
+  if (text != null && text !== '') return setText($('lg-count'), text);
+  const n = lg.entries.length;
+  const search = lg.q || lg.prio < 7;
+  const what = search ? 'matching lines' : 'lines';
+  const back = n && lg.entries[0].ts ? ` since ${fmtTime(lg.entries[0].ts)}` : '';
+  if (lg.busy) {
+    setText($('lg-count'), `${fmtNum(n)} ${what}${back} · ${search ? `searching (${fmtNum(lg.scanned)} looked at)` : `loading up to ${fmtNum(lg.target)}`}…`);
+    return;
   }
-  shown.reverse();
-  const marks = f && f.terms.filter(t => !t.neg);
-  setHTML(view, shown.length ? shown.map(e => lgLineHTML(e, marks && marks.length ? marks : null)).join('')
-    : `<div class="muted">${lg.entries.length ? 'No line matches the filter.' : 'Nothing logged.'}</div>`);
-  const all = lg.entries.length;
-  const filtered = (f && f.terms.length) || lg.prio < 7;
-  setText($('lg-count'), filtered ? `${fmtNum(shown.length)}${shown.length === LG_SHOW ? '+' : ''} of ${fmtNum(all)} lines`
-    : `${fmtNum(all)} lines${all > LG_SHOW ? ` (the newest ${fmtNum(LG_SHOW)} shown)` : ''}`);
-  if (atEnd) view.scrollTop = view.scrollHeight;
+  setText($('lg-count'), `${fmtNum(n)} ${what}${back}${lg.before == null ? ' (the whole log)' : ''}` +
+    `${search && lg.scanned ? ` · ${fmtNum(lg.scanned)} looked at` : ''}${lg.took != null ? ` · ${lg.took} ms` : ''}`);
 }
 
 const fmtNum = n => Number(n).toLocaleString();
@@ -343,33 +368,57 @@ function lgSetPrio(p) {
 function setupLogs() {
   lgSetPrio(lg.prio);
   $('lg-src').onchange = e => logsOpen(e.target.value);
-  $('lg-lines').onchange = logsLoad;
+  $('lg-lines').value = ['200', '1000', '5000', '20000'].includes(lsGet('btbench.lg.lines')) ? lsGet('btbench.lg.lines') : '1000';
+  $('lg-lines').onchange = () => { lsSet('btbench.lg.lines', $('lg-lines').value); logsLoad(); };
   $('lg-reload').onclick = logsLoad;
-  $('lg-clear').onclick = () => { lg.entries = []; lgRender(); };
+  $('lg-clear').onclick = () => { lg.entries = []; lg.drawn = 0; lgRender(false); };
   $('lg-follow').onchange = logsFollow;
   $('lg-wrap').onchange = e => $('lg-view').classList.toggle('wrap', e.target.checked);
   $('lg-prio').onclick = e => {
     const b = e.target.closest('[data-prio]');
     if (!b) return;
     lgSetPrio(Number(b.dataset.prio));
-    lgRender();
+    logsLoad();
   };
+  $('lg-view').onclick = e => {
+    const b = e.target.closest('[data-lg]');
+    if (!b) return;
+    if (b.dataset.lg === 'draw') {
+      lg.drawn += LG_DRAW;
+      lgRender(true, true);
+    } else {
+      logsOlder();
+    }
+  };
+  // At the top: the next lines that are loaded but not drawn come by themselves.
+  $('lg-view').addEventListener('scroll', () => {
+    const v = $('lg-view');
+    if (v.scrollTop < 40 && lg.entries.length > lg.drawn) {
+      lg.drawn += LG_DRAW;
+      lgRender(true, true);
+    }
+  }, {passive: true});
   let t = null;
   $('lg-filter').value = lsGet('btbench.lg.filter') || '';
-  const apply = () => {
-    const src = $('lg-filter').value;
-    lsSet('btbench.lg.filter', src);
+  const apply = load => {
+    const src = $('lg-filter').value.trim();
     const f = lgParse(src);
     setText($('lg-err'), f.error || '');
     $('lg-filter').classList.toggle('bad', !!f.error);
     if (f.error) return;
+    lsSet('btbench.lg.filter', src);
     lg.filter = f;
-    lgRender();
+    if (src === lg.q) return;
+    lg.q = src;
+    // The board searches the whole log: asked a moment after the last key.
+    if (load) logsLoad();
   };
-  // As you type, a moment after the last key: a few thousand lines redraw in a few ms.
-  $('lg-filter').oninput = () => { clearTimeout(t); t = setTimeout(apply, 150); };
-  $('lg-filter').onkeydown = e => { if (e.key === 'Escape') { $('lg-filter').value = ''; apply(); } };
-  apply();
+  $('lg-filter').oninput = () => { clearTimeout(t); t = setTimeout(() => apply(true), 350); };
+  $('lg-filter').onkeydown = e => {
+    if (e.key === 'Enter') { clearTimeout(t); apply(true); }
+    if (e.key === 'Escape') { $('lg-filter').value = ''; clearTimeout(t); apply(true); }
+  };
+  apply(false);
 }
 
 setupLogs();
