@@ -2,7 +2,9 @@
 
 // btsnoop files (bluez src/shared/btsnoop.c): a 16-byte header — "btsnoop\0", version 1, datalink
 // — then records of { orig len, incl len, flags, drops, timestamp } (all big-endian) + data. The
-// timestamp is µs since 0000-01-01, offset 0x00E03AB44A676000 from the Unix epoch.
+// timestamp is µs since 0000-01-01. BlueZ writes it as µs since 2000-01-01 plus 0x00E03AB44A676000
+// (year 0 → 2000); from the Unix epoch that is 0x00DCDDB30F2F8000 (year 0 → 1970), as Wireshark
+// reads it.
 //
 // Datalink 2001 (BlueZ monitor, what btmon -w writes) carries the controller index and monitor
 // opcode in flags; 1002 (H4/UART, what Android and many vendor stacks write) and 1001 (raw HCI)
@@ -18,7 +20,7 @@ namespace btb::hci {
 constexpr uint32_t kBtsnoopHci = 1001;
 constexpr uint32_t kBtsnoopUart = 1002;
 constexpr uint32_t kBtsnoopMonitor = 2001;
-constexpr int64_t kBtsnoopEpochDelta = 0x00E03AB44A676000LL;  // µs, year 0 → 1970
+constexpr int64_t kBtsnoopEpochDelta = 0x00DCDDB30F2F8000LL;  // µs, year 0 → 1970
 
 // The monitor opcode of a datalink 1002 record (its H4 type byte) or a 1001 one (type 0xff), from
 // that type and the btsnoop flags (bit 0: received, bit 1: command/event); 0xffff: skip it.

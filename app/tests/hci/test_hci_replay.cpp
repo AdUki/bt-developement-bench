@@ -91,6 +91,31 @@ std::vector<Pkt> session_connected() {
   return v;
 }
 
+// The timestamp as btmon writes it (src/shared/btsnoop.c): µs since 2000 plus 0x00E03AB44A676000.
+// A reader using that constant against the Unix epoch puts every capture 30 years early.
+void test_epoch() {
+  const std::string path = tmp_path("epoch.btsnoop");
+  const int64_t unix_us = 1791612221476915LL;  // 2026-10-10 06:03:41.476915 UTC
+  const uint8_t note[] = {'x', 0};
+  btb::hci::BtsnoopWriter w;
+  CHECK(w.open(path));
+  CHECK(w.write(unix_us, 0, 0x0d, note, sizeof note));
+  w.close();
+  uint8_t rec[40] = {};
+  FILE* f = std::fopen(path.c_str(), "rb");
+  CHECK(f && std::fread(rec, 1, sizeof rec, f) == sizeof rec);
+  if (f) std::fclose(f);
+  uint64_t raw = 0;
+  for (int i = 0; i < 8; ++i) raw = raw << 8 | rec[16 + 16 + i];
+  CHECK_EQ(raw, static_cast<uint64_t>((unix_us - 946684800LL * 1000000) + 0x00E03AB44A676000LL));
+  btb::hci::BtsnoopReader r;
+  std::string err;
+  CHECK(r.open(path, &err));
+  btb::hci::SnoopPacket p;
+  CHECK(r.read(&p));
+  CHECK_EQ(p.ts_us, unix_us);
+}
+
 void test_replay_fast() {
   const std::string path = tmp_path("a2dp.btsnoop");
   write_monitor_file(path, session_connected());
@@ -346,6 +371,7 @@ int main() {
   g_tmp = tmp;
 
   test_reader_roundtrip();
+  test_epoch();
   test_replay_fast();
   test_replay_h4();
   test_paced_pcap();
