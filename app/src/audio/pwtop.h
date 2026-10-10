@@ -3,7 +3,7 @@
 // PipeWire's own timing, from `pw-top -b` (its profiler data, one table a second): per driver the
 // quantum and rate, how long the graph cycle waited and worked, that as a share of the quantum
 // (the DSP load), and the xruns; per follower its own share. Published on the "pipewire" topic
-// for the Graphs tab and Audio → Stack, and only while someone is subscribed: pw-top is a process
+// for the Graphs tab and Audio → PipeWire, and only while someone is subscribed: pw-top is a process
 // of its own, and on an idle Zero W it is not started at all.
 
 #include <atomic>

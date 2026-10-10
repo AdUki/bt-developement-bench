@@ -97,19 +97,22 @@ for a browsable player, a browser: the now-playing list, its files (folders open
 search, and *play* or *add* (to now playing) per item. Under the phones, *This board's player*: what
 a car or speaker the board plays to sees (its track, play state and the adapters it is offered on),
 its controls, *Offer it* (on or off), and folded, its library (open a folder, *play* or *add*) and
-the now playing list. *Play and listen*: a new stream from a tone (its own
-frequency on the right channel if wanted), a sweep, white/pink/brown noise, silence, a URL
-(internet radio, a playlist, a file), a device's audio (capture — with a speaker as the sink,
-that is a tunnel from one device to another) or what a sink plays (its monitor), into any sink
-the stack has (`Play to`) or nowhere, and/or *also listen in this browser*; rate, channels, gain and
-the decoder are under *Format and gain*. Each running stream shows
-its level meters (RMS bar, peak mark, per channel), the radio title, a live gain slider and, for a
-tone, its frequency and level; listening adds the buffered time, a volume and a spectrum. The
-console keeps listening when you change views. *Internet radio*: the station list (edit it as
-`name | url` lines), play to the chosen sink or listen. *UPnP media servers*: search the LAN,
-browse a server's folders and play or listen to its tracks. *Stack*: the audio stack (PipeWire or
-none) with a confirmation, optionally restarting bluetoothd, then BlueZ's view, the
-same in every mode: transports (codec decoded, state, delay, an AVRCP absolute-volume slider; the
+the now playing list. *Play and listen*, top to bottom: *Output*, where everything on the page
+plays — the connected Bluetooth sinks by name and codec first (the first one is chosen until you
+pick another), PipeWire's default output, the other sinks, or nowhere — with the codec picker for a
+Bluetooth one and *also listen in this browser*; *Playing now*, each running stream with its level
+meters (RMS bar, peak mark, per channel), the radio title, Pause (and Previous/Next for a playlist)
+for a URL stream, a live gain slider and, for a tone, its frequency and level, listening adding the
+buffered time, a volume and a spectrum (the console keeps listening when you change views); then
+what to play. *Test signal*: a tone (its own frequency on the right channel if wanted), a sweep,
+white/pink/brown noise, silence, a device's audio (capture — with a speaker as the output, that is
+a tunnel from one device to another) or what an output plays (its monitor); rate, channels, gain
+and the decoder are under *Format and gain*. *Internet radio*: the station list (edit it as
+`name | url` lines) and a URL field (a stream, a playlist, a file), each played to the output or
+listened to. *Media servers*: search the LAN, browse a server's folders and play or listen to its
+tracks. What plays to a Bluetooth output shows on the device's display through the board's player,
+and the device's buttons pause, skip and stop it. *PipeWire*: the services and a Restart (with a
+confirmation, optionally restarting bluetoothd), then BlueZ's view: transports (codec decoded, state, delay, an AVRCP absolute-volume slider; the
 raw configuration and path under *Details*) and the remote stream endpoints with their capabilities, and the *AVDTP probe*: a device's own
 DISCOVER / GET_ALL_CAPABILITIES answer, every stream endpoint with its role, codec and other
 capabilities.
@@ -210,5 +213,5 @@ falling back to the good one on a panic, hang or power cycle), *commit* and *rol
 behind a confirmation.
 
 
-On a PC (`make run`, `make pc`) the board-only parts — audio mode, Wi-Fi, kernel, reboot — say
+On a PC (`make run`, `make pc`) the board-only parts — the audio stack's restart, Wi-Fi, kernel, reboot — say
 that they run on the board only.

@@ -41,9 +41,7 @@ BTBENCH_AP_PSK ?= "btbench-setup"
 BTBENCH_GADGET ?= "ecm"
 
 # --- Audio -------------------------------------------------------------------
-# The audio stack at first boot: pipewire or none (bluetoothd alone). Switch at any
-# time with `bench audio <mode>`; the choice is kept on the board.
-BTBENCH_AUDIO_MODE ?= "pipewire"
+# The audio stack is PipeWire with WirePlumber, always.
 # aptX and LDAC (libfreeaptx, ldacbt) in PipeWire.
 BTBENCH_EXTRA_CODECS ?= "0"
 # AAC (fdk-aac, LICENSE_FLAGS "commercial"; accepting it is yours to decide).

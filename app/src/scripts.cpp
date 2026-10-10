@@ -52,7 +52,6 @@ bool parse_script_json(const std::string& out, json* j, std::string* err) {
   return true;
 }
 
-bool audio_mode_ok(const std::string& m) { return m == "pipewire" || m == "none"; }
 
 bool bt_debug_area_ok(const std::string& a) {
   static const char* kAreas[] = {"hci", "mgmt", "l2cap", "smp", "iso", "sco", "rfcomm", "bnep", "hidp", "driver", "all"};

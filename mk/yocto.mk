@@ -28,7 +28,6 @@ DEF_WIFI_SSID    :=
 DEF_WIFI_PSK     :=
 DEF_WIFI_COUNTRY := SK
 DEF_AP_PSK       := btbench-setup
-DEF_AUDIO_MODE   := pipewire
 DEF_DL_DIR       := $(if $(wildcard $(HOME)/yocto/downloads),$(HOME)/yocto/downloads,$(ROOT)/$(YOCTO)/downloads)
 DEF_SSTATE_DIR   := $(ROOT)/$(YOCTO)/sstate-cache
 
@@ -123,7 +122,7 @@ pkg: check-host check-devconf $(BUILD_CONF) ## Build recipe(s) ARGS=... and opkg
 # Everything here can equally well be done by editing the files by hand; this target just means
 # you do not have to know which setting lives in which of them.
 .PHONY: configure
-configure: ## Set hostname, password, ssh key, Wi-Fi, audio mode and the Yocto cache dirs (interactive)
+configure: ## Set hostname, password, ssh key, Wi-Fi and the Yocto cache dirs (interactive)
 	@set -e; \
 	[ -f bench.conf ] || cp bench.conf.sample bench.conf; \
 	[ -f $(DEVCONF) ] || cp $(DEVCONF).sample $(DEVCONF); \
@@ -154,8 +153,6 @@ configure: ## Set hostname, password, ssh key, Wi-Fi, audio mode and the Yocto c
 	psk=""; [ -z "$$ssid" ] || { ask "Wi-Fi password" "$(DEF_WIFI_PSK)" "$$(get $(DEVCONF) BTBENCH_WIFI_PSK)"; psk="$$ANS"; }; \
 	ask "Wi-Fi country (2-letter regulatory domain)" "$(DEF_WIFI_COUNTRY)" "$$(get $(DEVCONF) BTBENCH_WIFI_COUNTRY)"; country="$$ANS"; \
 	ask "Setup AP password (the board's own AP when it has no network; 8+ chars)" "$(DEF_AP_PSK)" "$$(get $(DEVCONF) BTBENCH_AP_PSK)"; appsk="$$ANS"; \
-	echo -e "\n$(BOLD)Audio$(OFF) $(DIM)— the stack at first boot; switch any time with 'bench audio <mode>'.$(OFF)"; \
-	ask "Audio mode (pipewire/none)" "$(DEF_AUDIO_MODE)" "$$(get $(DEVCONF) BTBENCH_AUDIO_MODE)"; mode="$$ANS"; \
 	echo -e "\n$(BOLD)Build host$(OFF) $(DIM)— caches. Point them at a shared tree and every project reuses one.$(OFF)"; \
 	ask "Yocto download dir (DL_DIR)" "$(DEF_DL_DIR)" "$$(get $(SITECONF) DL_DIR)"; dl="$$ANS"; \
 	ask "Yocto sstate cache (SSTATE_DIR)" "$(DEF_SSTATE_DIR)" "$$(get $(SITECONF) SSTATE_DIR)"; ss="$$ANS"; \
@@ -166,7 +163,6 @@ configure: ## Set hostname, password, ssh key, Wi-Fi, audio mode and the Yocto c
 	setkey $(DEVCONF) BTBENCH_WIFI_PSK      "$$psk"; \
 	setkey $(DEVCONF) BTBENCH_WIFI_COUNTRY  "$$country"; \
 	setkey $(DEVCONF) BTBENCH_AP_PSK        "$$appsk"; \
-	setkey $(DEVCONF) BTBENCH_AUDIO_MODE    "$$mode"; \
 	mkdir -p $$(dirname $(SITECONF)) "$$dl" "$$ss"; \
 	{ echo "# Written by 'make configure'. Per-machine, not tracked by git."; \
 	  echo "# bitbake parses conf/site.conf before conf/local.conf, so these win over the"; \

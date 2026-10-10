@@ -232,6 +232,7 @@ button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad)
 button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
 .small-btn { font-size: 0.78rem; padding: 0.1rem 0.5rem; }
 .form-acts { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem 0.7rem; flex-wrap: wrap; margin-top: 0.8rem; }
+.url-row { margin-top: 0.8rem; gap: 0.5rem; }
 .form-acts.start { justify-content: flex-start; margin-top: 0; }
 .form-acts > .switch:first-child { margin-right: auto; }
 .seg-buttons { display: inline-flex; }
@@ -804,7 +805,7 @@ label.set-row { cursor: pointer; }
   .np-art.loading::after, .spin { animation: none; border-color: var(--accent); opacity: 0.5; }
 }
 
-/* Audio → Stack: PipeWire's graph (pw-top). */
+/* Audio → PipeWire: PipeWire's graph (pw-top). */
 .pw-tbl td { vertical-align: middle; }
 .pw-fol td:nth-child(2) { padding-left: 0.8rem; }
 .pw-load { display: inline-block; width: 3.5rem; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; vertical-align: middle; }

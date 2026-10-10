@@ -19,7 +19,7 @@ plus a `yocto/conf/boards/<name>.conf` away.
   a live pcap stream into Wireshark; live scrolling graphs of all of it (Traffic → Graphs); and a
   packet viewer for the captures, with filters, per-packet decoding and timeline graphs.
 - **Control:** web console (`http://10.55.0.1`) and `tools/bench`: pair, connect, GATT explorer,
-  advertising, local GATT server, audio mode, Wi-Fi, kernel slots, logs.
+  advertising, local GATT server, audio stack restart, Wi-Fi, kernel slots, logs.
 - **Links:** USB gadget (network + serial console) on the data micro-USB port; Wi-Fi with a setup
   AP (`btbench-XXXX`) when no network answers.
 
@@ -61,7 +61,7 @@ make clangd                      # compile_commands.json is already in every src
 |---|---|
 | [docs/dev.md](docs/dev.md) | the dev loop: src trees, builds, deploys, gdb, clangd, version pinning |
 | [docs/kernel.md](docs/kernel.md) | bluetooth-next vs linux-raspberrypi, trial/commit/rollback, recovery |
-| [docs/audio.md](docs/audio.md) | audio modes, codecs and licensing, headless PipeWire, bluetoothd args |
+| [docs/audio.md](docs/audio.md) | the audio stack, codecs and licensing, headless PipeWire, bluetoothd args |
 | [docs/monitor.md](docs/monitor.md) | what the HCI monitor measures and how; Wireshark live capture |
 | [docs/system.md](docs/system.md) | SD card layout, first boot, USB link, Wi-Fi and the setup AP |
 | [docs/web.md](docs/web.md) / [docs/api.md](docs/api.md) | the web console and the REST/WebSocket API |

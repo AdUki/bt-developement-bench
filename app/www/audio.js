@@ -1,5 +1,5 @@
 'use strict';
-// Audio: which stack owns Bluetooth audio (btbench-audio); the AVRCP players of connected phones
+// Audio: PipeWire and WirePlumber (btbench-audio restarts them); the AVRCP players of connected phones
 // (controls, metadata, browsing); streams — a test signal, a radio or UPnP URL, or one device's
 // audio — played into a sink and/or listened to here; and BlueZ's transports and endpoints.
 //
@@ -7,25 +7,19 @@
 // element (which buffers seconds and cannot say how much), and the AudioContext is made in the
 // click that asked for it, so autoplay rules let it play.
 
-const AUDIO_MODES = ['pipewire', 'none'];
 const au = {browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
   tick: null, radio: [], upnp: {server: null, path: []}};
 
 function renderAudio(s) {
-  setText($('au-mode'), s.mode);
-  setClass($('au-mode'), 'pill good');
-  setHTML($('au-buttons'), (s.modes || AUDIO_MODES).map(m =>
-    `<button data-mode="${esc(m)}"${m === s.mode ? ' disabled' : ''}>${esc(m)}</button>`).join(''));
   setHTML($('au-services'), Object.entries(s.services || {}).map(([k, v]) =>
     pill(k.replace(/\.service$/, ''), v === 'active' ? 'good' : v === 'failed' ? 'bad' : '')).join(' '));
 }
 
 function refreshAudio() {
   return api('/audio').then(s => { renderAudio(s); setText($('au-msg'), ''); }).catch(e => {
-    setText($('au-mode'), e.status === 503 ? 'not here' : 'error');
-    setHTML($('au-buttons'), '');
+    $('au-restart').disabled = e.status === 503;
     // On a PC the target scripts are not installed; say so plainly rather than as an error.
-    setText($('au-msg'), e.status === 503 ? 'The audio-mode switch runs on the board only (btbench-audio is not installed on this machine).' : e.message);
+    setText($('au-msg'), e.status === 503 ? 'Restarting the stack works on the board only (btbench-audio is not installed on this machine).' : e.message);
   });
 }
 
@@ -41,11 +35,21 @@ function renderEndpoints(ep) {
   // Without PipeWire the only endpoints are the loopback card's, played to with aplay.
   setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'no audio stack'}` +
     `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
+  // Bluetooth sinks first, by the device's name and codec: with nothing chosen before, the first
+  // connected speaker or car is where things play. Listening only is last, not the default.
   const sinkKind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
-  const sinks = [{value: '', label: 'nowhere (listen only)'}];
-  if (ep.backend === 'pipewire') sinks.push({value: 'pipewire:', label: 'the default sink'});
-  ep.sinks.forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: epLabel(e)}));
-  fillSelect($('st-sink'), sinks, idle($('st-sink')) ? lsGet('btbench.au.sink') : null);
+  const sinks = [];
+  const name = e => `${e.label}${e.codec ? ' · ' + e.codec.toUpperCase().replace('_', '-') : ''}`;
+  ep.sinks.filter(e => e.kind === 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
+  const def = ep.sinks.find(e => e.default);
+  if (ep.backend === 'pipewire') sinks.push({value: 'pipewire:', label: `Default output${def ? ' (' + def.label + ')' : ''}`});
+  ep.sinks.filter(e => e.kind !== 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
+  sinks.push({value: '', label: 'Nowhere: listen in this browser only'});
+  // A first fill keeps the saved choice or takes the first option: the empty select's value is ""
+  // too, which would pick listening only.
+  const sel = $('st-sink'), saved = idle(sel) ? lsGet('btbench.au.sink') : null;
+  fillSelect(sel, sinks, saved != null ? saved : sel.options.length ? sel.value : sinks[0].value);
+  renderOutCodec();
   const caps = ep.sources.map(e => ({value: `${e.backend}:${e.id}`, label: epLabel(e)}));
   if (ep.backend === 'pipewire') caps.unshift({value: 'pipewire:', label: 'the default source'});
   fillSelect($('st-capture'), caps);
@@ -55,6 +59,19 @@ function renderEndpoints(ep) {
 function refreshEndpoints(fresh) {
   return api('/audio/endpoints' + (fresh ? '?fresh=1' : '')).then(renderEndpoints)
     .catch(e => setText($('st-backend'), e.message));
+}
+
+// The codec of the chosen output when it is a Bluetooth device: the same picker as in Players, so
+// trying a codec does not mean leaving what plays.
+function renderOutCodec() {
+  const ep = au.endpoints, v = $('st-sink').value;
+  const e = ep && ep.sinks.find(k => v.endsWith(':' + k.id));
+  const d = e && e.address && au.devices && au.devices.devices.find(x => x.address === e.address);
+  $('st-codec-l').hidden = !d;
+  if (!d) return setHTML($('st-codec'), '');
+  const ae = document.activeElement;
+  if (ae && $('st-codec').contains(ae)) return;
+  setHTML($('st-codec'), codecSelect(d));
 }
 
 // The sink chosen in the form, as a stream's sink: null (listen only), or {type, target}.
@@ -79,7 +96,6 @@ function sourceFromForm() {
       return {type, from: num('st-from'), to: num('st-to'), seconds: num('st-secs'), log: $('st-log').checked,
         repeat: $('st-repeat').checked, level_db: num('st-level')};
     case 'noise': return {type, color: $('st-color').value, level_db: num('st-level')};
-    case 'url': return {type, url: $('st-url').value.trim(), decoder: $('st-decoder').value};
     case 'capture': {
       const v = $('st-capture').value, i = v.indexOf(':');
       return {type, backend: v.slice(0, i) || 'pipewire', target: v.slice(i + 1),
@@ -107,6 +123,7 @@ function startStream(source, sink, listen, extra, ctxGiven) {
   }).catch(e => {
     if (ctx) ctx.close();
     setText($('st-msg'), e.message);
+    if (source.type === 'url') toast(e.message);  // played from a station or a server, far from st-msg
     throw e;
   });
 }
@@ -132,7 +149,7 @@ function streamCard(s) {
   el.className = 'card dev stream';
   el.dataset.id = s.id;
   el.innerHTML = `<div class="head"><span><b class="st-label"></b> <span class="pill st-state"></span></span>
-      <span class="acts"><button class="small-btn st-listen">Listen</button><button class="small-btn danger st-stop">Stop</button></span></div>
+      <span class="acts">${s.source.type === 'url' ? `<button class="small-btn st-prev" hidden>Previous</button><button class="small-btn st-pause">Pause</button><button class="small-btn st-next" hidden>Next</button>` : ''}<button class="small-btn st-listen">Listen</button><button class="small-btn danger st-stop">Stop</button></span></div>
     <div class="small st-meta"></div>
     <div class="st-meters"></div>
     <div class="row wrap small">
@@ -150,10 +167,13 @@ function streamCard(s) {
 }
 
 function upsertStream(s) {
+  const at = au.streams.findIndex(x => x.id === s.id);
+  if (at >= 0) au.streams[at] = s;  // a PUT's answer: Pause must know it paused
   let el = au.cards[s.id];
   if (!el) {
     el = au.cards[s.id] = streamCard(s);
     $('st-list').prepend(el);
+    $('st-empty').hidden = true;
   }
   const q = c => el.querySelector(c);
   setText(q('.st-label'), s.label);
@@ -176,8 +196,17 @@ function upsertStream(s) {
   if (lv && idle(lv)) lv.value = s.source.level_db;
   const live = s.state === 'running' || s.state === 'starting';
   q('.st-listen').hidden = !live;
+  if (q('.st-pause')) {
+    const n = (s.source.playlist || []).length;
+    q('.st-pause').hidden = !live;
+    setText(q('.st-pause'), s.paused ? 'Resume' : 'Pause');
+    q('.st-prev').hidden = q('.st-next').hidden = !live || n < 2;
+    q('.st-prev').disabled = s.track <= 0;
+    q('.st-next').disabled = s.track >= n - 1;
+    if (n > 1) meta.unshift(`track ${s.track + 1} of ${n}`), setText(q('.st-meta'), meta.join(' · '));
+  }
   setText(q('.st-listen'), au.listeners[s.id] ? 'Mute here' : 'Listen');
-  setText(q('.st-stop'), live ? 'stop' : 'remove');
+  setText(q('.st-stop'), live ? 'Stop' : 'Remove');
   if (!live && au.listeners[s.id]) stopListening(s.id);
 }
 
@@ -193,6 +222,7 @@ function renderStreams(list) {
   }
   // Oldest first into prepend(): newest ends on top.
   list.streams.slice().reverse().forEach(upsertStream);
+  $('st-empty').hidden = list.streams.length > 0;
 }
 
 const refreshStreams = () => api('/audio/streams').then(renderStreams).catch(fail);
@@ -398,6 +428,7 @@ const CD_KINDS = [['a2dp', 'Send (A2DP)'], ['a2dp-duplex', 'Both ways (A2DP dupl
 
 function renderCodecs(r) {
   au.devices = r;
+  if ($('st-sink')) renderOutCodec();
   if (!r.devices.length) {
     setHTML($('cd-list'), `<div class="small muted">${esc(r.error || 'No Bluetooth audio device connected.')}</div>`);
     return;
@@ -407,16 +438,21 @@ function renderCodecs(r) {
   if (ae && $('cd-list').contains(ae) && ae.tagName === 'SELECT') return;
   setHTML($('cd-list'), r.devices.map(d => {
     const a = d.active;
-    const groups = CD_KINDS.map(([k, label]) => {
-      const ps = d.profiles.filter(p => p.kind === k);
-      if (!ps.length) return '';
-      return `<optgroup label="${esc(label)}">${ps.map(p => `<option value="${p.index}"${a && a.index === p.index ? ' selected' : ''}${p.available ? '' : ' disabled'}>
-        ${p.codec ? esc(p.codec) + ' (' + esc(p.name) + ')' : esc(p.name)}</option>`).join('')}</optgroup>`;
-    }).join('');
     return `<div class="row wrap codec-row"><b>${esc(d.label)}</b> <span class="mono small muted">${esc(d.address)}</span>
       ${a ? pill(a.codec || a.name, a.kind === 'off' ? '' : 'good') : ''}
-      <select class="cd-pick grow" data-id="${d.id}">${groups}</select></div>`;
+      ${codecSelect(d)}</div>`;
   }).join(''));
+}
+
+function codecSelect(d) {
+  const a = d.active;
+  const groups = CD_KINDS.map(([k, label]) => {
+    const ps = d.profiles.filter(p => p.kind === k);
+    if (!ps.length) return '';
+    return `<optgroup label="${esc(label)}">${ps.map(p => `<option value="${p.index}"${a && a.index === p.index ? ' selected' : ''}${p.available ? '' : ' disabled'}>
+      ${p.codec ? esc(p.codec) + ' (' + esc(p.name) + ')' : esc(p.name)}</option>`).join('')}</optgroup>`;
+  }).join('');
+  return `<select class="cd-pick grow" data-id="${d.id}" aria-label="Codec">${groups}</select>`;
 }
 
 const refreshCodecs = () => api('/audio/devices').then(renderCodecs).catch(e => setHTML($('cd-list'), `<span class="bad-text">${esc(e.message)}</span>`));
@@ -753,7 +789,7 @@ function renderRadio(r) {
 }
 
 function playUrl(url, title, listen) {
-  return startStream({type: 'url', url, title}, chosenSink(), listen).catch(() => {});
+  return startStream({type: 'url', url, title, decoder: $('st-decoder').value}, chosenSink(), listen).catch(() => {});
 }
 
 // ---------------------------------------------------------------- UPnP
@@ -795,15 +831,14 @@ function showSourceFields() {
 }
 
 function setupAudio() {
-  $('au-buttons').onclick = e => {
-    const b = e.target.closest('button[data-mode]');
-    if (!b) return;
-    const mode = b.dataset.mode;
+  $('au-restart').onclick = () => {
     const restart = $('au-restart-bt').checked;
-    if (!confirm(`Switch the audio stack to ${mode}? Audio connections are dropped${restart ? ' and bluetoothd restarts' : ''}.`)) return;
-    setText($('au-msg'), `switching to ${mode}…`);
-    put('/audio', {mode, restart_bt: restart}).then(s => { renderAudio(s); setText($('au-msg'), `now ${s.mode}`); refreshEndpoints(true); })
-      .catch(e2 => { setText($('au-msg'), e2.message); refreshAudio(); });
+    if (!confirm(`Restart PipeWire and WirePlumber${restart ? ' and bluetoothd' : ''}? Audio connections are dropped.`)) return;
+    $('au-restart').disabled = true;
+    setText($('au-msg'), 'restarting…');
+    post('/audio/restart', {restart_bt: restart}).then(s => { renderAudio(s); setText($('au-msg'), 'restarted'); refreshEndpoints(true); })
+      .catch(e2 => { setText($('au-msg'), e2.message); refreshAudio(); })
+      .finally(() => { $('au-restart').disabled = false; });
   };
   // Sent as the slider settles, not on every pixel of a drag.
   const volume = e => {
@@ -888,7 +923,7 @@ function setupAudio() {
 
   // The codec picker.
   $('cd-refresh').onclick = refreshCodecs;
-  $('cd-list').onchange = e => {
+  $('cd-list').onchange = $('st-codec').onchange = e => {
     const sel = e.target.closest('select.cd-pick');
     if (!sel) return;
     sel.disabled = true;
@@ -901,7 +936,7 @@ function setupAudio() {
   // The stream form.
   $('st-src').onchange = showSourceFields;
   showSourceFields();
-  $('st-sink').onchange = () => lsSet('btbench.au.sink', $('st-sink').value);
+  $('st-sink').onchange = () => { lsSet('btbench.au.sink', $('st-sink').value); renderOutCodec(); };
   $('st-refresh').onclick = () => refreshEndpoints(true);
   $('st-start').onclick = () => {
     const src = sourceFromForm();
@@ -910,6 +945,14 @@ function setupAudio() {
     if (!sink && !listen) { setText($('st-msg'), 'Choose an output in "Play to", or turn on "Also listen in this browser".'); return; }
     startStream(src, sink, listen).catch(() => {});
   };
+  const playTyped = () => {
+    const url = $('st-url').value.trim();
+    if (!url) return $('st-url').focus();
+    if (!chosenSink() && !$('st-listen').checked) { toast('Choose an output in "Play to" above, or turn on "Also listen in this browser".'); return; }
+    playUrl(url, '', $('st-listen').checked);
+  };
+  $('st-url-play').onclick = playTyped;
+  $('st-url').onkeydown = e => { if (e.key === 'Enter') playTyped(); };
 
   // The stream cards.
   const list = $('st-list');
@@ -924,6 +967,11 @@ function setupAudio() {
         if (live !== 'running' && live !== 'starting') { au.cards[id] && au.cards[id].remove(); delete au.cards[id]; }
         refreshStreams();
       }).catch(fail);
+    } else if (e.target.closest('.st-pause, .st-prev, .st-next')) {
+      const b = e.target.closest('button');
+      const s = au.streams.find(x => x.id === id) || {};
+      const body = b.classList.contains('st-pause') ? {paused: !s.paused} : b.classList.contains('st-next') ? {next: true} : {previous: true};
+      put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
     } else if (e.target.closest('.st-listen')) {
       if (au.listeners[id]) stopListening(id); else startListening(id);
     }

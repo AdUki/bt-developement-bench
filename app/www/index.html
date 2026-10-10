@@ -259,62 +259,73 @@
     </div>
 
     <div class="pane" data-pane="play">
-      <div class="card" id="st-new">
+      <div class="card" id="st-out">
         <div class="card-head">
-          <h3>New stream</h3>
-          <span id="st-backend" class="small muted"></span>
+          <h3>Output</h3>
+          <button id="st-refresh" class="small-btn" title="Read PipeWire's nodes again">Refresh</button>
         </div>
         <div class="grid">
-          <label>Source
-            <select id="st-src">
-              <option value="tone">Tone (sine)</option>
+          <label>Play to <select id="st-sink"></select></label>
+          <label id="st-codec-l" hidden>Codec <span id="st-codec"></span></label>
+        </div>
+        <div class="form-acts">
+          <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
+          <span id="st-backend" class="small muted"></span>
+        </div>
+        <p class="hint">Everything on this page plays here. A connected speaker or car shows what plays on it on its display, and its buttons pause and skip it.</p>
+      </div>
+
+      <h2>Playing now</h2>
+      <div id="st-list" class="rows-cards"></div>
+      <div id="st-empty" class="small muted">Nothing is playing. Pick a test signal, a station or a track below.</div>
+
+      <div class="cols">
+        <div class="card" id="st-new">
+          <div class="card-head">
+            <h3>Test signal</h3>
+            <select id="st-src" aria-label="Signal">
+              <option value="tone">Tone</option>
               <option value="sweep">Sweep</option>
               <option value="noise">Noise</option>
               <option value="silence">Silence</option>
-              <option value="url">Internet radio / URL</option>
-              <option value="capture">A device's audio (capture)</option>
-              <option value="monitor">What a sink plays (monitor)</option>
+              <option value="capture">A device's audio</option>
+              <option value="monitor">What an output plays</option>
             </select>
-          </label>
-          <label>Play to <select id="st-sink"></select></label>
-          <label data-for="tone">Frequency (Hz) <input type="number" id="st-freq" value="1000" min="1" max="48000"></label>
-          <label data-for="tone">Right channel (Hz) <input type="number" id="st-freq-r" min="1" max="48000" placeholder="same as left"></label>
-          <label data-for="sweep">From (Hz) <input type="number" id="st-from" value="20" min="1"></label>
-          <label data-for="sweep">To (Hz) <input type="number" id="st-to" value="20000" min="1"></label>
-          <label data-for="sweep">Seconds <input type="number" id="st-secs" value="10" min="0.5" max="600" step="0.5"></label>
-          <label data-for="noise">Colour
-            <select id="st-color"><option>pink</option><option>white</option><option>brown</option></select>
-          </label>
-          <label data-for="tone sweep noise"><span id="st-level-kind">Level (dBFS, peak)</span> <input type="number" id="st-level" value="-12" min="-96" max="0"></label>
-          <label data-for="url" class="wide">URL (stream, .pls/.m3u, or a UPnP item) <input type="url" id="st-url" placeholder="https://ice1.somafm.com/groovesalad-128-mp3"></label>
-          <label data-for="capture">Capture from <select id="st-capture"></select></label>
-          <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
-        </div>
-        <details class="more-fields">
-          <summary>Format and gain</summary>
-          <div class="grid">
-            <label>Rate
-              <select id="st-rate"><option>48000</option><option>44100</option><option>32000</option><option>16000</option><option>8000</option></select>
-            </label>
-            <label>Channels <select id="st-ch"><option value="2">stereo</option><option value="1">mono</option></select></label>
-            <label>Gain (dB) <input type="number" id="st-gain" value="0" min="-60" max="20" step="0.5"></label>
-            <label data-for="url">Decoder
-              <select id="st-decoder"><option value="auto">auto</option><option>mpg123</option><option>ffmpeg</option></select>
-            </label>
-            <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-log" checked><i></i> Logarithmic</label>
-            <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-repeat" checked><i></i> Repeat</label>
           </div>
-        </details>
-        <div class="form-acts">
-          <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
-          <span id="st-msg" class="small"></span>
-          <button id="st-refresh" class="ghost" title="Read PipeWire's nodes again">Refresh outputs</button>
-          <button class="primary" id="st-start">Start</button>
+          <div class="grid">
+            <label data-for="tone">Frequency (Hz) <input type="number" id="st-freq" value="1000" min="1" max="48000"></label>
+            <label data-for="tone">Right channel (Hz) <input type="number" id="st-freq-r" min="1" max="48000" placeholder="same as left"></label>
+            <label data-for="sweep">From (Hz) <input type="number" id="st-from" value="20" min="1"></label>
+            <label data-for="sweep">To (Hz) <input type="number" id="st-to" value="20000" min="1"></label>
+            <label data-for="sweep">Seconds <input type="number" id="st-secs" value="10" min="0.5" max="600" step="0.5"></label>
+            <label data-for="noise">Colour
+              <select id="st-color"><option>pink</option><option>white</option><option>brown</option></select>
+            </label>
+            <label data-for="tone sweep noise"><span id="st-level-kind">Level (dBFS, peak)</span> <input type="number" id="st-level" value="-12" min="-96" max="0"></label>
+            <label data-for="capture">Capture from <select id="st-capture"></select></label>
+            <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
+          </div>
+          <details class="more-fields">
+            <summary>Format and gain</summary>
+            <div class="grid">
+              <label>Rate
+                <select id="st-rate"><option>48000</option><option>44100</option><option>32000</option><option>16000</option><option>8000</option></select>
+              </label>
+              <label>Channels <select id="st-ch"><option value="2">stereo</option><option value="1">mono</option></select></label>
+              <label>Gain (dB) <input type="number" id="st-gain" value="0" min="-60" max="20" step="0.5"></label>
+              <label>Decoder (radio, URLs)
+                <select id="st-decoder"><option value="auto">auto</option><option>mpg123</option><option>ffmpeg</option></select>
+              </label>
+              <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-log" checked><i></i> Logarithmic</label>
+              <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-repeat" checked><i></i> Repeat</label>
+            </div>
+          </details>
+          <div class="form-acts">
+            <span id="st-msg" class="small"></span>
+            <button class="primary" id="st-start">Play</button>
+          </div>
         </div>
-      </div>
-      <div id="st-list" class="rows-cards"></div>
 
-      <div class="cols">
         <div class="card">
           <div class="card-head"><h3>Internet radio</h3><button class="small-btn" id="rd-edit">Edit</button></div>
           <div id="rd-list" class="small"></div>
@@ -323,25 +334,29 @@
             <div class="form-acts"><span class="small muted">One station a line: <span class="mono">name | url</span></span>
               <button id="rd-cancel">Cancel</button><button id="rd-save" class="primary">Save</button></div>
           </div>
-          <p class="hint">Plays to the output chosen above.</p>
+          <div class="row url-row">
+            <input type="url" id="st-url" class="grow" aria-label="Stream URL" placeholder="A stream, .pls or .m3u URL">
+            <button class="small-btn" id="st-url-play">Play</button>
+          </div>
         </div>
-        <div class="card">
-          <div class="card-head"><h3>UPnP media servers</h3><button class="small-btn" id="up-search">Search the LAN</button></div>
-          <div id="up-servers" class="small"></div>
-          <div id="up-path" class="small crumbs"></div>
-          <div id="up-items" class="small"></div>
-        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Media servers</h3><button class="small-btn" id="up-search">Search the LAN</button></div>
+        <div id="up-servers" class="small"></div>
+        <div id="up-path" class="small crumbs"></div>
+        <div id="up-items" class="small"></div>
       </div>
     </div>
 
     <div class="pane" data-pane="stack">
       <div class="card">
         <div class="card-head">
-          <h3>Audio stack <span id="au-mode" class="pill">…</span></h3>
-          <div class="acts"><span id="au-buttons" class="seg-buttons"></span></div>
+          <h3>PipeWire <span id="au-services"></span></h3>
+          <div class="acts"><button id="au-restart">Restart</button></div>
         </div>
-        <label class="switch inline small"><input type="checkbox" id="au-restart-bt"><i></i> Restart bluetoothd with the switch</label>
-        <div id="au-services" class="small muted"></div>
+        <p class="hint">Restarting PipeWire and WirePlumber drops the audio links first, so devices reconnect to the new endpoints. It cures a WirePlumber that stopped answering after links vanished at once.</p>
+        <label class="switch inline small"><input type="checkbox" id="au-restart-bt"><i></i> Restart bluetoothd too</label>
         <div id="au-msg" class="small muted"></div>
       </div>
       <div class="card">

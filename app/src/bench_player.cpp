@@ -30,6 +30,8 @@ constexpr const char* kSearchPath = "/org/btbench/player/Search";
 constexpr int kRoot = -1;
 constexpr int kNowPlaying = -2;
 constexpr int kSearch = -3;
+// append_metadata's id for the track of another stream (BenchPlayer::mirror_).
+constexpr int kMirrorTrack = -10;
 
 json tone(double freq, double level_db = -12, double right = 0) {
   json s{{"type", "tone"}, {"freq", freq}, {"level_db", level_db}};
@@ -159,6 +161,57 @@ json lib_item_metadata(const BenchLibrary& lib, const LibItem& it) {
   }
   if (it.duration_ms) md["Duration"] = it.duration_ms;
   return md;
+}
+
+json stream_track(const json& s) {
+  static const json none = json::object();
+  const json& src = s.contains("source") && s["source"].is_object() ? s["source"] : none;
+  const std::string type = src.value("type", std::string{});
+  const json meta = s.contains("meta") && s["meta"].is_object() ? s["meta"] : json::object();
+  json md{{"Artist", "btbench"}};
+  if (type == "url") {
+    const json pl = src.contains("playlist") && src["playlist"].is_array() ? src["playlist"] : json::array();
+    const int n = static_cast<int>(pl.size()), t = s.value("track", 0);
+    const std::string icy = meta.value("title", std::string{});
+    std::string item = t >= 0 && t < n ? pl[t].value("title", std::string{}) : "";
+    const std::string station = src.value("title", std::string{});
+    if (n > 1) {
+      // A playlist (a media server's folder): its item, numbered.
+      md["Title"] = !item.empty() ? item : !icy.empty() ? icy : station;
+      md["Album"] = station;
+      md["Number"] = static_cast<uint32_t>(t + 1);
+      md["NumberOfTracks"] = static_cast<uint32_t>(n);
+      md["Genre"] = "Media server";
+    } else {
+      // A radio: the song it says it plays, the station as the album.
+      md["Title"] = !icy.empty() ? icy : !station.empty() ? station : meta.value("name", src.value("url", std::string{}));
+      md["Album"] = !station.empty() ? station : meta.value("name", std::string{});
+      md["Genre"] = "Radio";
+    }
+  } else if (type == "capture") {
+    md["Title"] = src.value("title", std::string("What a device plays"));
+    md["Album"] = "Relayed";
+    md["Genre"] = "Relay";
+  } else {
+    // A test signal: its label without where it goes ("tone 1 kHz → bluez_output...").
+    std::string label = s.value("label", type);
+    const size_t arrow = label.rfind(" → ");  // a sweep's own "20 Hz → 20 kHz" comes first
+    if (arrow != std::string::npos) label = label.substr(0, arrow);
+    if (!label.empty()) label[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(label[0])));
+    md["Title"] = label;
+    md["Album"] = "Test signals";
+    md["Genre"] = "Test signal";
+  }
+  return md;
+}
+
+bool stream_to_bluetooth(const json& s, const std::string& default_bt) {
+  if (!s.contains("sink") || !s["sink"].is_object()) return false;
+  const json& sink = s["sink"];
+  if (sink.value("type", std::string{}) != "pipewire") return false;
+  const std::string t = sink.value("target", std::string{});
+  if (t.empty()) return !default_bt.empty();
+  return t.compare(0, 13, "bluez_output.") == 0;
 }
 
 // ---- D-Bus trampolines ------------------------------------------------------------------------
@@ -478,6 +531,24 @@ void BenchPlayer::append_item_props(sd_bus_message* m, const LibItem& it) const 
 // The track's metadata: MediaItem1's keys, or MPRIS's (xesam:*, mpris:length in µs) for the player.
 void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
   int r = sd_bus_message_open_container(m, 'a', "{sv}");
+  if (id == kMirrorTrack && r >= 0) {
+    // Another stream's track: no library item behind it, so no trackid for a remote to look up.
+    const json& md = mirror_md_;
+    const std::string title = md.value("Title", std::string{}), album = md.value("Album", std::string{});
+    const std::string artist = md.value("Artist", std::string{}), genre = md.value("Genre", std::string{});
+    if (mpris) {
+      r = dict_str(m, "xesam:title", title);
+      if (r >= 0) r = dict_strv(m, "xesam:artist", artist);
+      if (r >= 0) r = dict_str(m, "xesam:album", album);
+      if (r >= 0) r = dict_strv(m, "xesam:genre", genre);
+      if (r >= 0 && md.contains("Number")) r = dict_entry(m, "xesam:trackNumber", 'i', md["Number"].get<int32_t>());
+    } else {
+      r = dict_str(m, "Title", title);
+      if (r >= 0) r = dict_str(m, "Album", album);
+    }
+    if (r >= 0) sd_bus_message_close_container(m);
+    return;
+  }
   const LibItem* it = lib_.find(id);
   if (it && r >= 0) {
     const json md = lib_item_metadata(lib_, *it);
@@ -535,7 +606,9 @@ int BenchPlayer::get_prop(sd_bus_message* reply, const std::string& iface, const
   } else {
     if (prop == "PlaybackStatus") return sd_bus_message_append(reply, "s", status_name(static_cast<int>(status_)));
     if (prop == "Metadata") {
-      append_metadata(reply, pos_ >= 0 && pos_ < static_cast<int>(queue_.size()) ? queue_[pos_] : -1, true);
+      append_metadata(reply, mirroring_locked() ? kMirrorTrack
+                             : pos_ >= 0 && pos_ < static_cast<int>(queue_.size()) ? queue_[pos_] : -1,
+                      true);
       return 1;
     }
     if (prop == "Playlist") return sd_bus_message_append(reply, "o", kNowPlayingPath);
@@ -629,11 +702,11 @@ void BenchPlayer::register_on(sd_bus* bus, const std::string& adapter) {
       if (r >= 0) r = dict_entry(m, f, 'b', 1);
     if (r >= 0) r = dict_entry(m, "CanSeek", 'b', 0);
     if (r >= 0) r = dict_entry(m, "Playlist", 'o', kNowPlayingPath);
-    if (r >= 0 && pos_ >= 0) {
+    if (r >= 0 && (pos_ >= 0 || mirroring_locked())) {
       r = sd_bus_message_open_container(m, 'e', "sv");
       if (r >= 0) r = sd_bus_message_append(m, "s", "Metadata");
       if (r >= 0) r = sd_bus_message_open_container(m, 'v', "a{sv}");
-      if (r >= 0) append_metadata(m, queue_[pos_], true);
+      if (r >= 0) append_metadata(m, mirroring_locked() ? kMirrorTrack : queue_[pos_], true);
       if (r >= 0) r = sd_bus_message_close_container(m);
       if (r >= 0) r = sd_bus_message_close_container(m);
     }
@@ -726,6 +799,17 @@ void BenchPlayer::emit_changes(sd_bus* bus) {
 
 bool BenchPlayer::action(const std::string& what, std::string* err) {
   std::unique_lock<std::mutex> lk(m_);
+  // Telling another stream's track: the remote's buttons are for that stream.
+  if (mirroring_locked() && (what == "play" || what == "pause" || what == "stop" || what == "next" ||
+                             what == "previous")) {
+    lk.unlock();
+    {
+      std::lock_guard<std::mutex> wl(wm_);
+      cmds_.push_back(Cmd{Cmd::mirror, json{{"op", what}}});
+    }
+    wcv_.notify_one();
+    return true;
+  }
   if (what == "play") {
     if (queue_.empty()) {
       // Nothing chosen yet: the test signals, from the first.
@@ -799,15 +883,15 @@ bool BenchPlayer::play_item(int id, bool enqueue, std::string* err) {
 void BenchPlayer::queue_cmd(Cmd::Kind k) {
   {
     std::lock_guard<std::mutex> lk(wm_);
-    cmds_.push_back(Cmd{k});
+    cmds_.push_back(Cmd{k, {}});
   }
   wcv_.notify_one();
 }
 
 // The Bluetooth sink to play into: PipeWire's default sink when it is a Bluetooth one, else the
-// first Bluetooth sink, else the default sink (a speaker over the loopback card, say). Without
-// PipeWire (audio mode "none") there is no Bluetooth sink to reach: the loopback card, so the
-// player still plays and changes tracks for whoever tests AVRCP alone.
+// first Bluetooth sink, else the default sink (a speaker over the loopback card, say). With
+// PipeWire stopped (for someone's own endpoint code) there is no Bluetooth sink to reach: the
+// loopback card, so the player still plays and changes tracks for whoever tests AVRCP alone.
 json BenchPlayer::pick_sink() {
   const json ep = audio_.endpoints(false);
   if (ep.value("backend", std::string{}) != "pipewire") {
@@ -856,6 +940,8 @@ void BenchPlayer::start_stream() {
     std::lock_guard<std::mutex> lk(m_);
     if (ok) {
       stream_ = out.value("id", 0);
+      mirror_ = 0;
+      mirror_md_ = nullptr;
       sink_ = sink.value("target", std::string{});
       status_ = Status::playing;
       error_.clear();
@@ -868,9 +954,96 @@ void BenchPlayer::start_stream() {
   changed(false, true, false);
 }
 
+// Once a second while the player plays nothing itself: the newest stream that plays to a Bluetooth
+// sink becomes the track the remote is told about, its state the play state. The streams are a
+// lock and a copy away (AudioEngine::list); whether PipeWire's default sink is a Bluetooth one (for
+// a stream with no target) is asked only when such a stream is there.
+void BenchPlayer::mirror_poll() {
+  {
+    // Nobody to tell while the player is not on the bus.
+    std::lock_guard<std::mutex> lk(m_);
+    if (!enabled_ || (!mirror_ && registered_json_.size() <= 2)) return;  // "[]"
+  }
+  const json all = audio_.list();
+  std::vector<json> live;
+  int newest_default = 0;  // the newest stream with no target, if any
+  for (const json& st : all.value("streams", json::array())) {
+    const std::string state = st.value("state", std::string{});
+    if (state != "running" && state != "starting") continue;
+    if (st.value("label", std::string{}).compare(0, 8, "player: ") == 0) continue;  // its own
+    const json& sink = st.contains("sink") && st["sink"].is_object() ? st["sink"] : json::object();
+    if (sink.value("type", std::string{}) != "pipewire") continue;
+    if (sink.value("target", std::string{}).empty() && !newest_default) newest_default = st.value("id", 0);
+    live.push_back(st);
+  }
+  // pw-dump is the costly part on a Zero W: asked when a new stream plays to the default sink, then
+  // every 30 s while one does (in case the default moves).
+  if (newest_default && (newest_default != mirror_default_for_ || ++mirror_polls_ % 30 == 0)) {
+    mirror_default_for_ = newest_default;
+    std::string def_bt;
+    const json ep = audio_.endpoints(false);
+    for (const json& k : ep.value("sinks", json::array()))
+      if (k.value("default", false) && k.value("kind", std::string{}) == "bluetooth") def_bt = k.value("id", std::string{});
+    std::lock_guard<std::mutex> lk(m_);
+    mirror_default_bt_ = def_bt;
+  }
+  bool track = false, status = false;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    if (stream_) return;  // its own play started meanwhile
+    json pick = nullptr;  // the list is newest first
+    for (const json& st : live)
+      if (stream_to_bluetooth(st, mirror_default_bt_)) {
+        pick = st;
+        break;
+      }
+    const int id = pick.is_null() ? 0 : pick.value("id", 0);
+    const json md = pick.is_null() ? json(nullptr) : stream_track(pick);
+    const bool paused = !pick.is_null() && pick.value("paused", false);
+    if (id != mirror_ || md != mirror_md_) {
+      track = true;
+      if (id && id != mirror_) LOG_INFO("player: telling remotes about stream {}", id);
+    }
+    const Status st = !id ? (mirror_ ? Status::stopped : status_) : paused ? Status::paused : Status::playing;
+    if (st != status_) status = true;
+    mirror_ = id;
+    mirror_md_ = md;
+    mirror_paused_ = paused;
+    status_ = st;
+  }
+  if (track || status) changed(track, status, false);
+}
+
+// A remote's button on another stream: a radio or a playlist pauses and moves on in place; a test
+// signal has no pause, so pause and stop end it.
+void BenchPlayer::mirror_cmd(const json& body) {
+  int id;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    id = mirror_;
+  }
+  if (!id) return;
+  const std::string op = body.value("op", std::string{});
+  const json s = audio_.get(id);
+  if (s.is_null()) return;
+  const bool url = s.contains("source") && s["source"].is_object() && s["source"].value("type", std::string{}) == "url";
+  json out;
+  std::string err;
+  int status = 0;
+  if (op == "stop" || (op == "pause" && !url)) {
+    audio_.remove(id);
+  } else if (op == "pause" || op == "play") {
+    if (url) audio_.update(id, json{{"paused", op == "pause"}}, &out, &err, &status);
+  } else if ((op == "next" || op == "previous") && url) {
+    audio_.update(id, json{{op, true}}, &out, &err, &status);
+  }
+  if (!err.empty()) LOG_WARN("player: {} on stream {}: {}", op, id, err);
+  mirror_poll();
+}
+
 void BenchPlayer::run_worker() {
   for (;;) {
-    Cmd c{Cmd::poll};
+    Cmd c{Cmd::poll, {}};
     {
       std::unique_lock<std::mutex> lk(wm_);
       // Polled once a second while something plays: the stream ending, a radio's title.
@@ -897,13 +1070,19 @@ void BenchPlayer::run_worker() {
         changed(false, true, false);
         break;
       }
+      case Cmd::mirror:
+        mirror_cmd(c.body);
+        break;
       case Cmd::poll: {
         int id;
         {
           std::lock_guard<std::mutex> lk(m_);
           id = stream_;
         }
-        if (!id) break;
+        if (!id) {
+          mirror_poll();
+          break;
+        }
         const json s = audio_.get(id);
         const std::string st = s.is_null() ? "gone" : s.value("state", std::string{});
         if (st == "running" || st == "starting") {
@@ -990,6 +1169,8 @@ json BenchPlayer::state() const {
     track = lib_item_metadata(lib_, lib_.items()[queue_[pos_]]);
     track["id"] = queue_[pos_];
     if (!icy_title_.empty()) track["Title"] = icy_title_;
+  } else if (mirroring_locked()) {
+    track = mirror_md_;
   }
   json reg = registered_json_.empty() ? json::array() : json::parse(registered_json_);
   return json{{"enabled", enabled_},
@@ -1001,6 +1182,7 @@ json BenchPlayer::state() const {
               {"position", pos_ < 0 ? json(nullptr) : json{{"index", pos_}, {"count", queue_.size()}}},
               {"queue", queue},
               {"stream", stream_ ? json(stream_) : json(nullptr)},
+              {"mirror", mirror_ ? json(mirror_) : json(nullptr)},
               {"sink", sink_},
               {"library", lib}};
 }

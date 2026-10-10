@@ -108,8 +108,8 @@ PW_MODULE_SUBDIR = "pipewire-0.3"
 
 do_install:append() {
     # The pipewire-alsa plugin's PCM definition, where alsa-lib looks for add-on config. Only
-    # that one: 99-pipewire-default.conf would make PipeWire the default ALSA device, and in the
-    # "none" audio mode there is no PipeWire to answer. Use `aplay -D pipewire`.
+    # that one: 99-pipewire-default.conf would make PipeWire the default ALSA device, and while it
+    # is stopped (for someone's own endpoint code) there is no PipeWire to answer. Use `aplay -D pipewire`.
     if ${@bb.utils.contains('PACKAGECONFIG', 'alsa', 'true', 'false', d)}; then
         install -d ${D}${sysconfdir}/alsa/conf.d
         ln -sf ${datadir}/alsa/alsa.conf.d/50-pipewire.conf ${D}${sysconfdir}/alsa/conf.d/50-pipewire.conf
@@ -182,8 +182,8 @@ PACKAGES =+ "\
 
 PACKAGES_DYNAMIC = "^${PN}-spa-plugins.* ^${PN}-modules.*"
 
-# The system units are installed but not enabled: btbench-audio-pipewire.target starts them when
-# the audio mode is pipewire (see the btbench-audio recipe), so they stay off in the other modes.
+# The system units are installed but not enabled: btbench-audio-pipewire.target starts them at
+# boot and restarts them together (see the btbench-audio recipe).
 SYSTEMD_SERVICE:${PN} = "${@bb.utils.contains('PACKAGECONFIG', 'systemd-system-service', 'pipewire.service pipewire.socket pipewire-manager.socket', '', d)}"
 SYSTEMD_AUTO_ENABLE:${PN} = "disable"
 

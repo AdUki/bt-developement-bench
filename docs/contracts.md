@@ -29,7 +29,7 @@ libubootenv-bin), `btbench-base` (system), `btbenchd` (btbenchd).
 
 Device: `BTBENCH_HOSTNAME`, `BTBENCH_ROOT_PASSWORD`, `BTBENCH_SSH_PUBKEY` (path on the build
 host), `BTBENCH_WIFI_{SSID,PSK,COUNTRY}`, `BTBENCH_AP_PSK`, `BTBENCH_GADGET` (ecm|ncm|off),
-`BTBENCH_AUDIO_MODE` (pipewire|none), `BTBENCH_EXTRA_CODECS` (0|1), `BTBENCH_AAC` (0|1),
+`BTBENCH_EXTRA_CODECS` (0|1), `BTBENCH_AAC` (0|1),
 `BTBENCH_HTTP_PORT`, `BTBENCH_FFMPEG` (0|1: ffmpeg on the image, for streams that are not MP3).
 
 Recipes that ship files from the repo (tools/target, tools/dev, boards/dts) reach them with
@@ -39,9 +39,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
 ## On the board
 
 - `/etc/btbench/board.env` — shell `KEY=VALUE`: `BOARD KERNEL KARCH KIMAGE DTBS TRY_METHOD GADGET_UDC BT_HCI`.
-- `/etc/btbench/device.env` — `HOSTNAME AP_PSK WIFI_COUNTRY GADGET AUDIO_MODE HTTP_PORT`.
+- `/etc/btbench/device.env` — `HOSTNAME AP_PSK WIFI_COUNTRY GADGET HTTP_PORT`.
 - `/data` — ext4 partition (label `data`), mounted at boot, grown to fill the card at first boot.
-  - `/data/btbench/audio-mode` — one word.
   - `/data/btbench/bluetoothd.env` — `BLUETOOTHD_ARGS="-d ..."` (no `-n`: under systemd it only duplicates
     journal lines; the System page's) and `BLUETOOTHD_NOPLUGIN` — Setup's: `--noplugin=<plugins off>`
     (`hfp` by default: BlueZ's own HFP plugin would fight PipeWire for the HF role) and, once a
@@ -86,10 +85,10 @@ All print JSON on stdout for `status`/`scan`, exit non-zero with a one-line reas
 failure. btbenchd and `bench` call them; they must not need a terminal.
 
 ### btbench-audio
-- `btbench-audio get` → `pipewire` | `none`
-- `btbench-audio status` → `{"mode":"pipewire","modes":["pipewire","none"],"services":{"pipewire":"active","wireplumber":"active"}}`
-- `btbench-audio set <mode> [--restart-bt]`
-- `btbench-audio boot` — start the stored mode (btbench-audio-select.service)
+- `btbench-audio status` → `{"stack":"pipewire","services":{"pipewire":"active","wireplumber":"active"}}`
+- `btbench-audio restart [--restart-bt]` — drop the audio links, restart btbench-audio-pipewire.target (and bluetoothd)
+- `btbench-audio boot` — start the stack (btbench-audio-select.service)
+- `btbench-audio get` → `pipewire` (kept for older callers)
 
 ### btbench-wifi
 - `btbench-wifi status` → `{"state":"sta|ap|connecting|off","policy":"auto|sta|ap|off","ssid":"x"|null,"ip":"a.b.c.d"|null,"ap":{"ssid":"btbench-1a2b","ip":"10.42.0.1"},"networks":["x","y"],"last_error":null|"..."}`

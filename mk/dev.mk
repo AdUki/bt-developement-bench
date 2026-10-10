@@ -201,10 +201,8 @@ deploy_stage = set -e; \
 
 # Run on the board after a deploy: unit files may have changed, libraries may have new names.
 remote_reload = systemctl daemon-reload; command -v ldconfig >/dev/null && ldconfig; true
-# PipeWire and WirePlumber only run in the pipewire audio mode; restarting them in "none" would
-# start them behind the mode's back, racing whatever test drives bluetoothd's endpoints there.
-remote_if_pipewire = if [ "$$(btbench-audio get 2>/dev/null)" = pipewire ]; then $(1); \
-	else echo "audio mode is not pipewire: $(2) not restarted"; fi
+# PipeWire is the audio stack, always: a deploy restarts what it replaced.
+remote_if_pipewire = $(1)
 
 .PHONY: deploy-bluez deploy-pipewire deploy-wireplumber deploy-audio-scripts deploy
 deploy-bluez: ## Push the BlueZ stage to the board, restart bluetooth (RESTART=0: don't)
@@ -212,12 +210,12 @@ deploy-bluez: ## Push the BlueZ stage to the board, restart bluetooth (RESTART=0
 	$(SSH) $(TARGET) '$(remote_reload); \
 	  $(if $(filter 0,$(RESTART)),true,systemctl restart bluetooth && echo "bluetooth restarted")'
 
-deploy-pipewire: ## Push the PipeWire stage, restart pipewire + wireplumber if the audio mode is pipewire
+deploy-pipewire: ## Push the PipeWire stage, restart pipewire + wireplumber
 	@$(call deploy_stage,pipewire); \
 	$(SSH) $(TARGET) '$(remote_reload); \
 	  $(if $(filter 0,$(RESTART)),true,$(call remote_if_pipewire,systemctl restart pipewire.service wireplumber.service && echo "pipewire + wireplumber restarted",pipewire))'
 
-deploy-wireplumber: ## Push the WirePlumber stage, restart wireplumber if the audio mode is pipewire
+deploy-wireplumber: ## Push the WirePlumber stage, restart wireplumber
 	@$(call deploy_stage,wireplumber); \
 	$(SSH) $(TARGET) '$(remote_reload); \
 	  $(if $(filter 0,$(RESTART)),true,$(call remote_if_pipewire,systemctl restart wireplumber.service && echo "wireplumber restarted",wireplumber))'

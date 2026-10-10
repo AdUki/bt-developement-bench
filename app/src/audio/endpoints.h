@@ -1,7 +1,7 @@
 #pragma once
 
 // Where a stream can play to and capture from (GET /api/audio/endpoints), from whichever stack
-// owns the audio: PipeWire's nodes (pw-dump), or, without PipeWire (audio mode "none"), the plain
+// owns the audio: PipeWire's nodes (pw-dump), or, with PipeWire stopped or not answering, the plain
 // ALSA devices — just the snd-aloop loopback card, since no other ALSA device on the bench speaks
 // Bluetooth. Pure functions of their inputs, unit-tested; audio/engine.cpp runs the tools.
 

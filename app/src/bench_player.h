@@ -82,6 +82,14 @@ class BenchLibrary {
 // MediaItem1's Metadata of a track: Title, Artist, Album, Genre, Number, NumberOfTracks, Duration.
 nlohmann::json lib_item_metadata(const BenchLibrary& lib, const LibItem& it);
 
+// The track an audio stream plays (one of GET /api/audio/streams), as the player tells a remote,
+// in lib_item_metadata's keys: a radio's ICY title (its station the album), a playlist's current
+// item (its number of all), a test signal by name. For streams the player did not start itself.
+nlohmann::json stream_track(const nlohmann::json& stream);
+// Whether a stream plays to a Bluetooth sink: its target is one, or it plays to PipeWire's default
+// sink (target "") and `default_bt` is that default's id ("" when the default is not Bluetooth).
+bool stream_to_bluetooth(const nlohmann::json& stream, const std::string& default_bt);
+
 class BenchPlayer : public BusUser {
  public:
   static constexpr const char* kPath = "/org/btbench/player";
@@ -122,7 +130,8 @@ class BenchPlayer : public BusUser {
  private:
   enum class Status { stopped, playing, paused };
   struct Cmd {
-    enum Kind { play, stop, pause, poll } kind;
+    enum Kind { play, stop, pause, poll, mirror } kind;
+    nlohmann::json body;  // mirror: {op: pause|play|stop|next|previous}
   };
 
   void load_state();
@@ -140,6 +149,9 @@ class BenchPlayer : public BusUser {
   void queue_cmd(Cmd::Kind k);
   void run_worker();
   void start_stream();
+  void mirror_poll();
+  void mirror_cmd(const nlohmann::json& body);
+  bool mirroring_locked() const { return stream_ == 0 && mirror_ != 0; }
   void stop_stream();
   nlohmann::json pick_sink();
 
@@ -154,6 +166,14 @@ class BenchPlayer : public BusUser {
   int pos_ = -1;            // in queue_
   Status status_ = Status::stopped;
   int stream_ = 0;          // the stream that plays it (0: none)
+  // Not playing itself, the player tells what another stream plays to a Bluetooth sink (one
+  // started from the console's Play and listen, a radio, a media server): its id, its track.
+  int mirror_ = 0;
+  nlohmann::json mirror_md_;
+  bool mirror_paused_ = false;
+  unsigned mirror_polls_ = 0;
+  std::string mirror_default_bt_;  // PipeWire's default sink when it is a Bluetooth one
+  int mirror_default_for_ = 0;     // the stream it was asked for
   std::string sink_;        // where it plays
   unsigned sink_polls_ = 0;  // polls since it last looked for a Bluetooth sink
   std::string icy_title_;   // a radio's current title

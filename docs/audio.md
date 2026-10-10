@@ -1,58 +1,45 @@
 # Audio and BlueZ on the board
 
-The board runs bluetoothd from BlueZ master and either PipeWire or nothing on top of it. You pick
-the setup at runtime; nothing needs a rebuild. An always-on btmon ring records every HCI packet
-to `/tmp/btsnoop`, in RAM.
-
-| mode | what runs | use it for |
-|---|---|---|
-| `pipewire` (default) | PipeWire system-wide, WirePlumber | A2DP both ways, HFP both ends, LE Audio (BAP), the codecs PipeWire has |
-| `none` | bluetoothd alone | `bluetoothctl endpoint/transport`, BlueZ's `test/` scripts, your own endpoint code |
+The board runs bluetoothd from BlueZ master with PipeWire and WirePlumber on top of it: A2DP both
+ways, HFP both ends, LE Audio (BAP) where the controller has ISO channels, and the codecs PipeWire
+has. The streams, the codec picker and the board's own AVRCP player are all built on PipeWire, so
+it is always there. An always-on btmon ring records every HCI packet to `/tmp/btsnoop`, in RAM.
 
 ```
-btbench-audio get                      # pipewire
-btbench-audio status                   # {"mode":"pipewire","modes":[...],"services":{...}}
-btbench-audio set none                 # switch; remembered across reboots
-btbench-audio set pipewire --restart-bt  # switch and restart bluetoothd too
+btbench-audio status                 # {"stack":"pipewire","services":{"pipewire":"active",...}}
+btbench-audio restart                # restart PipeWire and WirePlumber
+btbench-audio restart --restart-bt   # and bluetoothd
 ```
 
-`bench audio <mode>` and the console's Audio → Stack view call the same script.
+`bench audio restart` and the console's Audio → PipeWire view call the same script.
 
-## How the modes switch
+## The stack's units
 
-PipeWire registers A2DP endpoints and HFP profiles with bluetoothd. In mode `none` your own
-endpoint code or BlueZ's test scripts register theirs instead, and with PipeWire still there
-devices would connect to whichever registered first, so the modes exclude each other through
-systemd:
-
-- **One target per mode.** `btbench-audio-pipewire.target` wants `pipewire.socket`,
+- **One target.** `btbench-audio-pipewire.target` wants `pipewire.socket`,
   `pipewire-manager.socket`, `pipewire.service` and `wireplumber.service`.
-  `btbench-audio-none.target` wants nothing.
-- **The targets conflict with each other.** Starting one stops the other.
-- **PipeWire's units are `PartOf=` its target** (drop-ins in
-  `/usr/lib/systemd/system/<unit>.d/50-btbench-audio-pipewire.conf`). Stopping the target stops
-  PipeWire. The sockets are included, so a PipeWire client cannot socket-activate PipeWire in
-  mode `none`.
+- **PipeWire's units are `PartOf=` it** (drop-ins in
+  `/usr/lib/systemd/system/<unit>.d/50-btbench-audio-pipewire.conf`), so restarting the target
+  restarts all of them.
 - **Nothing is enabled on its own.** pipewire and wireplumber have
   `SYSTEMD_AUTO_ENABLE = "disable"`. At boot, `btbench-audio-select.service` runs
-  `btbench-audio boot`, which starts the stored mode's target.
+  `btbench-audio boot`, which starts the target.
 
-`btbench-audio set <mode>`:
+`btbench-audio restart` is the cure for a WirePlumber that stopped answering (it has been seen
+spinning after Bluetooth links vanished all at once):
 
-1. Writes the mode to `/data/btbench/audio-mode`.
-2. Disconnects the connected devices that use an audio profile (A2DP, HFP/HSP, ASCS/PACS/BASS),
-   so they reconnect to the new stack's endpoints. It does not leave a transport whose owner is
+1. Disconnects the connected devices that use an audio profile (A2DP, HFP/HSP, ASCS/PACS/BASS),
+   so they reconnect to the new PipeWire's endpoints instead of keeping a transport whose owner is
    about to disappear.
-3. Runs `systemctl start btbench-audio-<mode>.target`.
-4. With `--restart-bt`, it also restarts bluetoothd. bluetoothd drops a stack's endpoints by
-   itself when the stack leaves D-Bus. A restart also clears whatever state that stack left on
-   the adapter and the devices.
+2. Runs `systemctl restart btbench-audio-pipewire.target`.
+3. With `--restart-bt`, it also restarts bluetoothd, which clears whatever state the old stack
+   left on the adapter and the devices.
 
-**Where the mode comes from at boot:**
+A device that is not connectable itself (a speaker kit that only pages) has to reconnect from its
+side; give PipeWire a few seconds to register its endpoints first, or the first try is refused.
 
-1. `/data/btbench/audio-mode`
-2. `AUDIO_MODE` in `/etc/btbench/device.env`
-3. The image's default, `BTBENCH_AUDIO_MODE` in `btbench-device.conf`
+To work with your own endpoint code or BlueZ's `test/` scripts, `systemctl stop
+btbench-audio-pipewire.target` for the time: devices would otherwise connect to whichever
+registered first. A restart of the target, or a reboot, brings PipeWire back.
 
 ## Codecs and licensing
 
@@ -103,7 +90,8 @@ upstream's system units (`-Dsystemd-system-service=enabled`):
 - **What is not built.** pipewire-pulse (packaged apart, not installed), JACK, video,
   GStreamer, network audio and any desktop integration.
 - **ALSA plugin.** The pipewire-alsa plugin is installed, but PipeWire is *not* made the default
-  ALSA device: in mode `none` there would be no PipeWire to answer. Use
+  ALSA device: while it is stopped (for your own endpoint code) there would be no PipeWire to
+  answer. Use
   `aplay -D pipewire file.wav`.
 - **Sample rates.** `/etc/pipewire/pipewire.conf.d/50-btbench.conf` allows the graph to run at
   44.1 kHz as well as 48 kHz. Most A2DP links run at 44.1 kHz. Resampling them to 48 kHz on the
@@ -219,8 +207,8 @@ Run `systemctl restart bluetooth` after editing (`bench bt-args "-d"` does both)
 - **BlueZ's own `hfp` plugin is not loaded.** It is an experimental HFP Hands-Free with its own
   SDP record and RFCOMM server, so `Experimental = true` would load it. It would then compete
   with PipeWire's native HFP for the same role. To work on it, set
-  `BLUETOOTHD_NOPLUGIN=` (empty) and use audio mode `none`, or remove `hfp_hf` from
-  WirePlumber's roles.
+  `BLUETOOTHD_NOPLUGIN=` (empty) and stop `btbench-audio-pipewire.target`, or remove `hfp_hf`
+  from WirePlumber's roles.
 
 **LE Audio on the Zero W.** The BCM43430A1 is a Bluetooth 4.1 controller without ISO channels.
 To exercise BAP, use a USB dongle that has them (with the gadget off, `BTBENCH_GADGET = "off"`)

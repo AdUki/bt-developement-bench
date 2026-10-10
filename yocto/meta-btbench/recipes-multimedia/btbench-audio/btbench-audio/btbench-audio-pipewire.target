@@ -1,10 +1,6 @@
-# Audio mode "pipewire": PipeWire system-wide with WirePlumber (btbench-audio set pipewire).
-#
-# The two btbench-audio-*.target conflict with each other, and PipeWire's units are PartOf= this
-# target (drop-ins next to the units), so starting the "none" target stops PipeWire. The After=
-# between the targets only orders that stop before the other start.
+# The board's audio stack: PipeWire system-wide with WirePlumber, started at boot by
+# btbench-audio-select.service. PipeWire's units are PartOf= this target (drop-ins next to the
+# units), so `btbench-audio restart` (systemctl restart of this target) restarts them all.
 [Unit]
-Description=Audio mode: PipeWire with WirePlumber
-Conflicts=btbench-audio-none.target
-After=btbench-audio-none.target
+Description=Audio stack: PipeWire with WirePlumber
 Wants=pipewire.socket pipewire-manager.socket pipewire.service wireplumber.service

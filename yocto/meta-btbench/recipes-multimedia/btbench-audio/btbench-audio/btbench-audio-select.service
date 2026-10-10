@@ -1,7 +1,7 @@
-# Starts the audio mode stored on the board (/data/btbench/audio-mode, else the image's default).
-# PipeWire's own units are not enabled: this is the only thing that starts them at boot.
+# Starts the audio stack (btbench-audio-pipewire.target) at boot. PipeWire's own units are not
+# enabled: this is the only thing that starts them, so the target owns them.
 [Unit]
-Description=Start the stored audio mode (btbench-audio)
+Description=Start the audio stack (btbench-audio)
 After=local-fs.target
 
 [Service]

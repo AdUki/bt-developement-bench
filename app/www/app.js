@@ -144,7 +144,7 @@ const NAV = [
   {id: 'audio', label: 'Audio', icon: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z', views: [
     {tab: 'audio', pane: 'players', label: 'Players'},
     {tab: 'audio', pane: 'play', label: 'Play and listen'},
-    {tab: 'audio', pane: 'stack', label: 'Stack'}]},
+    {tab: 'audio', pane: 'stack', label: 'PipeWire'}]},
   {id: 'le', label: 'LE', icon: 'M12 13a1 1 0 100-2 1 1 0 000 2zM8.5 8.5a5 5 0 000 7M15.5 8.5a5 5 0 010 7M5.6 5.6a9 9 0 000 12.8M18.4 5.6a9 9 0 010 12.8', views: [
     {tab: 'le', pane: 'explore', label: 'GATT explorer'},
     {tab: 'le', pane: 'adv', label: 'Advertise'},
@@ -245,7 +245,7 @@ function showTab(name, pane) {
     updateTopics();
     window.scrollTo(0, 0);
   }
-  // A pane can want topics of its own (Audio → Stack: pipewire), so a pane switch asks too.
+  // A pane can want topics of its own (Audio → PipeWire: pipewire), so a pane switch asks too.
   updateTopics();
   renderNav();
 }

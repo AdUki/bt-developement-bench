@@ -102,9 +102,44 @@ void test_search() {
   CHECK(lib.search("nothing like it").empty());
 }
 
+// The track of a stream the player did not start: what the remote's display shows.
+void test_stream_track() {
+  using nlohmann::json;
+  const json radio{{"source", {{"type", "url"}, {"title", "Radio FM"}, {"playlist", json::array({{{"url", "u"}, {"title", ""}}})}}},
+                   {"meta", {{"name", "FM"}, {"title", "Artist - Song"}}}, {"track", 0}};
+  json md = stream_track(radio);
+  CHECK_EQ(md.value("Title", ""), std::string("Artist - Song"));
+  CHECK_EQ(md.value("Album", ""), std::string("Radio FM"));
+  CHECK(!md.contains("Number"));
+  const json folder{{"source", {{"type", "url"}, {"title", "Album"}, {"playlist", json::array({{{"title", "One"}}, {{"title", "Two"}}})}}},
+                    {"track", 1}};
+  md = stream_track(folder);
+  CHECK_EQ(md.value("Title", ""), std::string("Two"));
+  CHECK_EQ(md.value("Number", 0u), 2u);
+  CHECK_EQ(md.value("NumberOfTracks", 0u), 2u);
+  // A sweep's label keeps its own arrow; only where it goes is cut.
+  md = stream_track(json{{"source", {{"type", "sweep"}}}, {"label", "sweep 20 Hz → 20 kHz → bluez_output.x"}});
+  CHECK_EQ(md.value("Title", ""), std::string("Sweep 20 Hz → 20 kHz"));
+  CHECK_EQ(stream_track(json{{"sink", nullptr}}).value("Artist", ""), std::string("btbench"));
+}
+
+void test_stream_to_bluetooth() {
+  using nlohmann::json;
+  const json bt{{"sink", {{"type", "pipewire"}, {"target", "bluez_output.50_1E.1"}}}};
+  const json def{{"sink", {{"type", "pipewire"}, {"target", ""}}}};
+  CHECK(stream_to_bluetooth(bt, ""));
+  CHECK(!stream_to_bluetooth(def, ""));
+  CHECK(stream_to_bluetooth(def, "bluez_output.50_1E.1"));
+  CHECK(!stream_to_bluetooth(json{{"sink", {{"type", "pipewire"}, {"target", "alsa_output.x"}}}}, "y"));
+  CHECK(!stream_to_bluetooth(json{{"sink", nullptr}}, "y"));
+  CHECK(!stream_to_bluetooth(json{{"sink", {{"type", "alsa"}, {"target", ""}}}}, "y"));
+}
+
 }  // namespace
 
 int main() {
+  test_stream_track();
+  test_stream_to_bluetooth();
   test_tree();
   test_sources();
   test_metadata();

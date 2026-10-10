@@ -17,7 +17,6 @@ bool parse_script_json(const std::string& out, nlohmann::json* j, std::string* e
 
 // Checks on what the API passes to the scripts as arguments: they reach a shell script, so they
 // are refused here rather than quoted there.
-bool audio_mode_ok(const std::string& m);
 // btbench-btdebug's areas (hci, mgmt, l2cap, smp, iso, sco, rfcomm, bnep, hidp, driver, all).
 bool bt_debug_area_ok(const std::string& a);
 bool wifi_mode_ok(const std::string& m);

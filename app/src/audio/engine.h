@@ -13,8 +13,8 @@
 //                   arecord: child processes)
 //
 // The tools do the stack-specific work — PipeWire's graph, ALSA devices, HTTP and codecs — so the
-// daemon links none of them, and a stream is the same whichever audio mode the board runs (in mode
-// "none" only the plain ALSA devices, i.e. the loopback card, are there to play into).
+// daemon links none of them, and a stream is the same whether PipeWire runs or not (stopped, only
+// the plain ALSA devices, i.e. the loopback card, are there to play into).
 // What paces a stream is whatever is real-time in it: the sink consuming, a capture producing,
 // or, for a generator or a decoder heard only by listeners, the pump's own clock.
 //

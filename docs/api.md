@@ -285,8 +285,8 @@ while someone subscribes to `hid.input`, or with `media_keys` on.
 
 ## Media
 
-`GET /api/media` — the remote stream endpoints, the transports and the AVRCP players, in every
-audio mode (they are BlueZ's objects, whoever registered the local endpoints):
+`GET /api/media` — the remote stream endpoints, the transports and the AVRCP players (they are
+BlueZ's objects, whoever registered the local endpoints):
 
 ```json
 {"endpoints": [{"path": ".../sep1", "device": "...", "address": "A0:B1:C2:D3:E4:F5", "uuid": "110b",
@@ -357,7 +357,7 @@ board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPl
  "status": "playing", "track": {"id": 2, "Title": "Sine 440 Hz", "Artist": "btbench",
  "Album": "Test signals", "Genre": "Test signal", "Number": 2, "NumberOfTracks": 9},
  "position": {"index": 1, "count": 9}, "queue": [{"id": 1, "name": "Sine 1 kHz"}, ...],
- "stream": 3, "sink": "bluez_output.0C_32_3A_D6_C3_44.1",
+ "stream": 3, "mirror": null, "sink": "bluez_output.0C_32_3A_D6_C3_44.1",
  "library": [{"id": 0, "parent": null, "name": "Test signals", "type": "folder", "playable": true},
              {"id": 1, "parent": 0, "name": "Sine 1 kHz", "type": "audio"}, ...]}
 ```
@@ -369,6 +369,13 @@ board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPl
 default sink if that is one, else the first), or PipeWire's default sink when there is none.
 `registered` lists the adapters BlueZ took it on; `error` says why the last play or registration
 failed. `library` is the whole tree, ids are stable while btbenchd runs.
+
+While the player plays nothing itself, it tells remotes what another stream plays to a Bluetooth
+sink (to one, or to PipeWire's default sink when that is a Bluetooth one; the newest if several):
+`mirror` is that stream's id, `track` its title — a radio's ICY title with the station as `Album`,
+a playlist's item with `Number`/`NumberOfTracks`, a test signal by name — and `status` playing or
+paused. A remote's buttons then act on that stream: pause and play pause a URL stream (they end a
+test signal, which has no pause), stop ends it, next and previous move through its playlist.
 
 | route | body | what |
 |---|---|---|
@@ -403,7 +410,7 @@ A stream plays a **source** into a **sink** and/or to listeners: a test signal, 
 or UPnP URL, or one device's audio, into a Bluetooth speaker (or the loopback card), heard in a
 browser, or both. Each stream is one pump thread in btbenchd and the stack's own tools as child
 processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` for plain ALSA devices such as the
-loopback card, `mpg123` or `ffmpeg` for URLs). In audio mode `none` only the ALSA devices are
+loopback card, `mpg123` or `ffmpeg` for URLs). With PipeWire stopped only the ALSA devices are
 there to play into or capture from. At most 4 run at once.
 
 `POST /api/audio/streams` (201):
@@ -472,7 +479,7 @@ from:
 ```
 
 With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`), Bluetooth
-first. Without it (`alsa`, audio mode `none`) they are the loopback card's two sides when
+first. Without it (`alsa`: PipeWire stopped or not answering) they are the loopback card's two sides when
 snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to capture), and nothing
 (`none`) otherwise. `kind`: `bluetooth`, `loopback`, `hardware`, `virtual`.
 
@@ -493,8 +500,8 @@ has opened its stream to the board, the send ones once the board's A2DP source i
 
 `PUT /api/audio/devices/{id}/profile` `{"profile": "a2dp-sink-sbc_xq"}` (or the index) switches
 it (`wpctl set-profile`) and answers with the device once the link has renegotiated (a few
-seconds; it waits up to about ten); `switch_error` says so when it has not by then. Without PipeWire (mode `none`)
-the list is empty and says why.
+seconds; it waits up to about ten); `switch_error` says so when it has not by then. With PipeWire stopped the list is
+empty and says why.
 
 ### UPnP media servers
 
@@ -588,7 +595,7 @@ HCI=replay:FILE`).
 
 `GET /api/audio/pipewire`: the last table of `pw-top -b` (PipeWire's profiler), while someone
 follows the `pipewire` topic; `{"running": false, "error": ...}` otherwise. pw-top is a process of
-its own, so it runs only while watched (the Graphs tab, Audio → Stack).
+its own, so it runs only while watched (the Graphs tab, Audio → PipeWire).
 
 ```json
 {"running": true, "ts": 1791620110152, "xruns": 0,
@@ -606,14 +613,14 @@ pw-top started; `xruns` is how many came since the table before, and the top-lev
 their sum. States: `R` running, `I` idle, `S` suspended, `C` creating, `E` error, `T`/`t`
 transport running/starting. Times are `null` when pw-top did not measure them.
 
-## Audio mode
+## Audio stack
 
 `GET /api/audio` — `btbench-audio status`:
-`{"mode": "pipewire", "modes": ["pipewire", "none"], "services": {"pipewire": "active", "wireplumber": "active"}}`.
+`{"stack": "pipewire", "services": {"pipewire": "active", "wireplumber": "active"}}`.
 
-`PUT /api/audio` `{"mode": "none", "restart_bt": false}` — `pipewire` or `none`: starts or stops
-PipeWire and WirePlumber (with `restart_bt` bluetoothd is restarted too, so no endpoint PipeWire
-registered lingers) and answers with the new status.
+`POST /api/audio/restart` `{"restart_bt": false}` (the body is optional) — restarts PipeWire and
+WirePlumber, first dropping the links that carry audio so devices reconnect to the new endpoints
+(with `restart_bt` bluetoothd is restarted too), and answers with the status.
 
 The audio, Wi-Fi and kernel routes run the board's target scripts. On a PC, where they are not
 installed, they answer 503 saying so.

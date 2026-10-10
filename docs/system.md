@@ -21,7 +21,7 @@ power cut (the usual way a bench is switched off) cannot corrupt the root or `/b
   boot, and `/var/log` is a link into `/var/volatile`. opkg's database is in `/usr/lib/opkg`, on
   the root, so what `make pkg` installs stays known to opkg.
 - **`/data` holds settings only, written when one changes:**
-  - `btbench/`: Setup's files, `audio-mode`, `bluetoothd.env`, `btsnoop.env`, the HID and radio
+  - `btbench/`: Setup's files, `bluetoothd.env`, `btsnoop.env`, the HID and radio
     settings, `wifi/` (networks), `ssh/` (sshd's host keys), `wireplumber-profiles.conf`;
   - `btbench/timesync/`: timesyncd's clock, one small write per NTP sync, so a board without a
     network does not start at the image's build date;

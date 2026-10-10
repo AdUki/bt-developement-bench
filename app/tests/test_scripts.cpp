@@ -31,8 +31,6 @@ void test_script_json() {
 
 void test_inputs() {
   std::string err;
-  CHECK(audio_mode_ok("pipewire") && audio_mode_ok("none"));
-  CHECK(!audio_mode_ok("pulse"));
   CHECK(wifi_mode_ok("auto") && wifi_mode_ok("off"));
   CHECK(!wifi_mode_ok("mesh"));
   CHECK(wifi_ssid_ok("home-ap", &err));

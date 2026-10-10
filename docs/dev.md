@@ -139,7 +139,7 @@ says which unit to restart; then `btbench-rw reset`, or reboot.
   | target | restarts |
   |---|---|
   | `deploy-bluez` | `bluetooth` |
-  | `deploy-pipewire` | `pipewire` + `wireplumber`, only when `btbench-audio get` says `pipewire` (in the other audio modes they are meant to be off) |
+  | `deploy-pipewire` | `pipewire` + `wireplumber`, restarting them |
   | `deploy-wireplumber` | `wireplumber`, under the same condition |
   | `deploy-audio-scripts` | pushes `tools/target/btbench-audio` and `btbench-btsnoop` |
 

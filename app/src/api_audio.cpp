@@ -1,7 +1,7 @@
 // /api/audio/*: the audio streams (play a test signal, a radio or UPnP URL, or a device's audio
 // into a speaker; listen to any of them in the browser), the endpoints they play to and capture
-// from, UPnP media servers, and the radio station list. The audio mode itself (/api/audio) is a
-// target script and lives with the others in api_system.cpp.
+// from, UPnP media servers, and the radio station list. The stack's status and restart
+// (/api/audio) are a target script and live with the others in api_system.cpp.
 #include "audio/engine.h"
 #include "http_util.h"
 #include "util/log.h"
