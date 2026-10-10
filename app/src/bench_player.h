@@ -155,6 +155,7 @@ class BenchPlayer : public BusUser {
   Status status_ = Status::stopped;
   int stream_ = 0;          // the stream that plays it (0: none)
   std::string sink_;        // where it plays
+  unsigned sink_polls_ = 0;  // polls since it last looked for a Bluetooth sink
   std::string icy_title_;   // a radio's current title
   std::string error_;
   std::vector<int> search_;

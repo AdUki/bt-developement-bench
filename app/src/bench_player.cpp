@@ -595,6 +595,9 @@ int registered_cb(sd_bus_message* m, void* data, sd_bus_error*) {
   auto* op = static_cast<RegOp*>(data);
   op->registering->erase(op->adapter);
   const sd_bus_error* e = sd_bus_message_get_error(m);
+  // BlueZ has it already: a second registration that raced the first (BlueZ coming back while one
+  // was out). Registered either way.
+  if (e && is_error(e, "org.bluez.Error.AlreadyExists")) e = nullptr;
   if (e) {
     LOG_WARN("player: {} refused it: {}", op->adapter, friendly(e));
     std::lock_guard<std::mutex> lk(*op->m);
@@ -914,6 +917,18 @@ void BenchPlayer::run_worker() {
             }
           }
           if (track) changed(true, false, false);
+          // Playing to something other than a Bluetooth sink (the one it had went away, or none
+          // was there at play): every 5 s, look again, and move to one that has come (back), as a
+          // source does when its speaker reconnects. Not more often: the look runs pw-dump.
+          bool look;
+          {
+            std::lock_guard<std::mutex> lk(m_);
+            look = sink_.compare(0, 13, "bluez_output.") != 0 && ++sink_polls_ % 5 == 0;
+          }
+          if (look && pick_sink().value("target", std::string{}).compare(0, 13, "bluez_output.") == 0) {
+            LOG_INFO("player: a Bluetooth sink is back, moving to it");
+            start_stream();
+          }
           break;
         }
         // It ended by itself (a sweep's end, a radio gone): the next track, as a player at the
