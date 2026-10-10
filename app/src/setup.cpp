@@ -71,7 +71,7 @@ const std::vector<Setting>& settings_table() {
        "enum", {{"off", "Off"}, {"device", "Device"}, {"limited-device", "Limited device"}, {"network", "Network"}, {"limited-network", "Limited network"}}},
       {"General.JustWorksRepairing", "Re-pairing without confirmation", "What happens when a bonded device pairs again with Just Works.",
        "enum", {{"never", "Refuse"}, {"confirm", "Ask the agent"}, {"always", "Accept"}}},
-      {"General.FastConnectable", "Fast connectable", "Faster page scanning (classic): devices connect sooner, the radio uses more power.", "bool", {}},
+      {"General.FastConnectable", "Fast connectable", "Faster page scanning (classic): devices connect sooner, the radio uses more power. BlueZ only ever switches it on: back to Default or Off, it stays on until the adapter is powered off and on (or the board reboots).", "bool", {}},
       {"General.AlwaysPairable", "Always pairable", "Pairable without a timeout, even with no agent asked.", "bool", {}},
       {"General.NameResolving", "Resolve names", "Ask discovered classic devices for their names.", "bool", {}},
       {"General.Experimental", "Experimental D-Bus interfaces", "BlueZ's experimental interfaces (some LE Audio, Bearer).", "bool", {}},
