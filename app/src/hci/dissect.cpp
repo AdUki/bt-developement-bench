@@ -2636,6 +2636,67 @@ std::string avctp(Out& o, const uint8_t* d, size_t n, bool browsing) {
 // ---------------------------------------------------------------------------------------------
 // ACL → L2CAP → the channel's protocol
 
+// L2CAP's FCS: CRC-16 (x^16 + x^15 + x^2 + 1), bits in reverse, starting at 0 (Core Vol 3 Part A
+// 3.3.5), over the basic header, the control field and the payload.
+uint16_t l2cap_fcs(const uint8_t* d, size_t n) {
+  uint16_t crc = 0;
+  for (size_t i = 0; i < n; ++i) {
+    crc ^= d[i];
+    for (int b = 0; b < 8; ++b) crc = (crc & 1) ? (crc >> 1) ^ 0xa001 : crc >> 1;
+  }
+  return crc;
+}
+
+// An Enhanced Retransmission Mode frame: the AVRCP browsing channel always is one (AVRCP 1.6
+// 6.1.2). frame/len: from the basic header to the end. Puts the control field (and the SDU length
+// and FCS) in the tree; an unsegmented I-frame's SDU is returned in *sdu for the channel's
+// protocol, anything else (S-frames, segments) gets its summary in *summary and returns false.
+bool ertm(Out& o, const uint8_t* frame, size_t len, const uint8_t** sdu, size_t* sdu_len, std::string* summary) {
+  const uint8_t* q = frame + 4;
+  size_t m = len - 4;
+  if (m < 2) {
+    *summary = "ERTM (truncated)";
+    return false;
+  }
+  // The FCS is there unless the channel switched it off (the CRC tells): checked, not assumed.
+  bool fcs = m >= 4 && l2cap_fcs(frame, len - 2) == le16(frame + len - 2);
+  if (fcs) m -= 2;
+  const uint16_t c = le16(q);
+  const unsigned reqseq = (c >> 8) & 0x3f, f = (c >> 7) & 1;
+  std::string what;
+  if (c & 1) {
+    static const char* sv_short[] = {"RR", "REJ", "RNR", "SREJ"};
+    static const char* sv_long[] = {"receiver ready", "reject", "receiver not ready", "selective reject"};
+    const unsigned sv = (c >> 2) & 3;
+    OPEN("ERTM", "S-frame", q, m);
+    F("Control", sf("0x%04x: S-frame %s (%s), ReqSeq %u%s%s", c, sv_short[sv], sv_long[sv], reqseq, f ? ", F" : "",
+                    (c >> 4) & 1 ? ", P" : ""), q, 2);
+    if (fcs) F("FCS", sf("0x%04x (good)", le16(frame + len - 2)), frame + len - 2, 2);
+    CLOSE();
+    *summary = sf("ERTM %s ReqSeq %u", sv_short[sv], reqseq);
+    return false;
+  }
+  static const char* sars[] = {"unsegmented", "start", "end", "continuation"};
+  const unsigned txseq = (c >> 1) & 0x3f, sar = (c >> 14) & 3;
+  OPEN("ERTM", sf("I-frame TxSeq %u", txseq), q, m);
+  F("Control", sf("0x%04x: I-frame %s, TxSeq %u, ReqSeq %u%s", c, sars[sar], txseq, reqseq, f ? ", F" : ""), q, 2);
+  size_t at = 2;
+  if (sar == 1 && m >= 4) {
+    F("SDU length", std::to_string(le16(q + 2)), q + 2, 2);
+    at = 4;
+  }
+  if (fcs) F("FCS", sf("0x%04x (good)", le16(frame + len - 2)), frame + len - 2, 2);
+  CLOSE();
+  if (sar != 0) {
+    F("Segment", hexbytes(q + at, m - at, 64), q + at, m - at);
+    *summary = sf("ERTM I-frame %s, TxSeq %u, %zu bytes", sars[sar], txseq, m - at);
+    return false;
+  }
+  *sdu = q + at;
+  *sdu_len = m - at;
+  return true;
+}
+
 void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
   if (len < 4) {
     o.summary = "ACL (truncated)";
@@ -2696,7 +2757,15 @@ void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
     case kProtoRfcomm: s = rfcomm(o, q, m); break;
     case kProtoAvdtp: s = avdtp(o, q, m); break;
     case kProtoRtp: s = rtp(o, q, m); break;
-    case kProtoAvctp: s = avctp(o, q, m, e.psm == kPsmAvctpBrowsing); break;
+    case kProtoAvctp:
+      if (e.psm == kPsmAvctpBrowsing && m == l2len) {
+        const uint8_t* sdu = nullptr;
+        size_t sdu_len = 0;
+        if (ertm(o, p, 4 + m, &sdu, &sdu_len, &s)) s = avctp(o, sdu, sdu_len, true);
+      } else {
+        s = avctp(o, q, m, e.psm == kPsmAvctpBrowsing);
+      }
+      break;
     case kProtoBnep:
       F("BNEP", m ? sf("type 0x%02x", q[0] & 0x7f) : "", q, m);
       s = m ? sf("BNEP type 0x%02x, %zu bytes", q[0] & 0x7f, m) : "BNEP";
