@@ -184,8 +184,8 @@ Because `bench_try` is already 0 by then, the next boot runs the good kernel.
 
 **After a failed trial,** on the board:
 
-- `journalctl -b -1` (the journal is persistent, if the test kernel got that far);
-- `ls /sys/fs/pstore` (dmesg of the crashed or hung boot, `console-ramoops-0`).
+- `ls /sys/fs/pstore` (dmesg of the crashed or hung boot, `console-ramoops-0`). The journal is
+  in RAM, so the failed boot's is gone: pstore is what is left of it.
 
 **The commands:**
 

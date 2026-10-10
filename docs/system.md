@@ -32,7 +32,8 @@ A reflash rewrites `/data` too. Deploys and kernel swaps leave it alone.
    given, and tries it; otherwise it opens the setup AP.
 
 Root logs in with the device conf's password, or with its ssh key (`BTBENCH_SSH_PUBKEY`). The
-journal is persistent (64 MB cap): `journalctl -b -1` reads the boot before this one.
+journal is in RAM, uncompressed (32 MB cap): reading it costs the Zero W a fraction of a second
+instead of seconds, and the SD card no writes, but it starts empty at every boot.
 
 ## The USB link
 

@@ -6,8 +6,8 @@ LICENSE = "MIT"
 
 inherit core-image
 
-# Writable on purpose: `make deploy-*` rsyncs stage trees into /usr, `make pkg` installs packages
-# with opkg, and `journalctl -b -1` after a failed kernel trial needs the journal on disk.
+# Writable on purpose: `make deploy-*` rsyncs stage trees into /usr, and `make pkg` installs
+# packages with opkg.
 IMAGE_FEATURES += "ssh-server-openssh package-management"
 
 IMAGE_INSTALL = " \
