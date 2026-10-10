@@ -103,10 +103,18 @@
         <span id="sc-state" class="small muted"></span>
         <details class="more right">
           <summary title="Scan options">Options</summary>
-          <div class="pop grid">
-            <label>Transport <select id="sc-transport"><option value="auto">LE and classic</option><option value="le">LE only</option><option value="bredr">Classic only</option></select></label>
-            <label>Weakest signal (dBm) <input type="number" id="sc-rssi" placeholder="any" min="-127" max="20"></label>
+          <div class="pop grid" id="sc-opts">
+            <label>Transport <select id="sc-transport"><option value="auto">Dual: LE and BR/EDR</option><option value="le">LE only</option><option value="bredr">BR/EDR only</option></select></label>
             <label>Stop after (s, 0 = never) <input type="number" id="sc-secs" value="30" min="0" max="3600"></label>
+            <label>Signal filter
+              <select id="sc-sig" data-filter="RSSI Pathloss"><option value="">none</option><option value="rssi">RSSI at least</option><option value="pathloss">path loss at most</option></select></label>
+            <label><span id="sc-sig-label">dBm</span> <input type="number" id="sc-sig-val" placeholder="-70" disabled></label>
+            <label class="wide">Services (UUIDs, comma-separated) <input type="text" id="sc-uuids" class="mono" data-filter="UUIDs" placeholder="180d, 110b, 0000fe2c-…"></label>
+            <label class="wide">Name or address starts with <input type="text" id="sc-pattern" data-filter="Pattern" placeholder="any" maxlength="248"></label>
+            <label class="check"><input type="checkbox" id="sc-dup" data-filter="DuplicateData" checked> Report every advertisement (no duplicate filtering)</label>
+            <label class="check"><input type="checkbox" id="sc-disc" data-filter="Discoverable"> Make the board visible while scanning</label>
+            <label class="check"><input type="checkbox" id="sc-auto" data-filter="AutoConnect" disabled> Connect to what the pattern matches</label>
+            <div class="small muted wide" id="sc-note"></div>
           </div>
         </details>
         <button id="sc-toggle" class="primary">Scan</button>

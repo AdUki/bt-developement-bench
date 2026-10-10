@@ -48,11 +48,19 @@ own volume when the link has one, else the stream's level, or this browser's.
 **Devices** — the adapter bar: powered, visible, pairable, and under *Settings* the name others
 see, how long it stays visible, how pairing questions are answered (automatically, or asked here)
 and the IO capability (which decides the pairing method a peer gets). *Scan* finds devices; its
-*Options* are the transport (LE and classic / LE / classic), the weakest signal shown and when to
-stop. A device is one row: a light (green connected, pale paired, amber busy), its name, address,
-kind and signal, and the one action its state calls for — pair, connect, disconnect, or cancel a
-pairing. A click on the row opens the rest: class, appearance, TX power, services by name,
-manufacturer and service data, advertising flags; trust and remove (click twice); connect or
+*Options* are every filter BlueZ has: the transport (dual: LE and BR/EDR, LE only, BR/EDR only),
+when to stop, a signal filter (RSSI at least, or path loss at most), services by UUID, a name or
+address prefix, every advertisement or only changed ones, the board visible while it scans, and
+connecting to what the prefix matches; a filter the adapter's BlueZ does not take is greyed out,
+and the options are remembered in the browser. While a scan runs its filter is spelled out beside
+the button. A device is one row: a light (green connected, pale paired, amber busy), its name,
+address, kind, signal (bars and dBm, from the scan) and its transports (BR/EDR, LE; lit where
+connected), and the one action its state calls for — pair, connect, disconnect, or cancel a
+pairing. A click on the row opens the rest: each transport with its own state (connected, bonded
+or paired, connectable) and its own connect or disconnect, which transport a dual-mode device
+connects on first, why it last disconnected; for a connected device its live link (RSSI and TX
+power per transport, read from the controller every two seconds); class, appearance, advertised TX
+power, services by name, manufacturer and service data, advertising flags; trust and remove (click twice); connect or
 disconnect one profile by UUID, and pair with a PIN for legacy devices; and shortcuts that open
 the GATT explorer, a file session or the AVDTP probe on that device. *Input devices*: the
 Bluetooth keyboards, remotes, mice and game pads connected to the board (BlueZ makes each a kernel

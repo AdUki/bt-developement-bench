@@ -112,6 +112,40 @@ void test_devices() {
   CHECK_EQ(b["class_major"].get<std::string>(), std::string("audio/video"));
   CHECK(b["rssi"].is_null());
   CHECK(b["advertising_flags"].is_null());
+  // No bearer objects in this tree: both null, and no preferred bearer.
+  CHECK(h["bearers"]["le"].is_null() && h["bearers"]["bredr"].is_null());
+  CHECK(h["preferred_bearer"].is_null());
+}
+
+void test_bearers() {
+  // A dual-mode device, connected on LE only, paired on both; BR/EDR without Connectable.
+  json obj{{"org.bluez.Device1", {{"Address", "aa:bb:cc:dd:ee:ff"}, {"PreferredBearer", "le"}, {"Connected", true}}},
+           {"org.bluez.Bearer.LE1", {{"Connected", true}, {"Paired", true}, {"Bonded", true}, {"Connectable", true}}},
+           {"org.bluez.Bearer.BREDR1", {{"Connected", false}, {"Paired", true}, {"Bonded", false}}}};
+  const json d = model_device("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF", obj["org.bluez.Device1"], &obj);
+  CHECK_EQ(d["preferred_bearer"].get<std::string>(), std::string("le"));
+  CHECK(d["bearers"]["le"]["connected"].get<bool>());
+  CHECK(d["bearers"]["le"]["bonded"].get<bool>());
+  CHECK(d["bearers"]["le"]["connectable"].get<bool>());
+  CHECK(!d["bearers"]["bredr"]["connected"].get<bool>());
+  CHECK(d["bearers"]["bredr"]["paired"].get<bool>());
+  CHECK(d["bearers"]["bredr"]["connectable"].is_null());
+  // Without the whole object (a caller that has only Device1): no bearers to tell.
+  const json bare = model_device("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF", obj["org.bluez.Device1"]);
+  CHECK(bare["bearers"]["le"].is_null());
+}
+
+void test_conn_info() {
+  const json j = parse_conn_info(
+      "Connection Information for C0:FF:EE:00:00:01 (BR/EDR)\n\tRSSI -52\tTX power 4\tmaximum TX power 10\n");
+  CHECK_EQ(j["rssi"].get<int>(), -52);
+  CHECK_EQ(j["tx_power"].get<int>(), 4);
+  CHECK_EQ(j["max_tx_power"].get<int>(), 10);
+  // 127: the controller does not know.
+  const json u = parse_conn_info("\tRSSI 127\tTX power 127\tmaximum TX power 127");
+  CHECK(u["rssi"].is_null() && u["tx_power"].is_null() && u["max_tx_power"].is_null());
+  CHECK(parse_conn_info("Get Connection Information for C0:FF:EE:00:00:01 (BR/EDR) failed: Not Connected (0x02)").is_null());
+  CHECK(parse_conn_info("").is_null());
 }
 
 void test_gatt() {
@@ -235,6 +269,8 @@ int main() {
   test_adapter_choice();
   test_adapters();
   test_devices();
+  test_bearers();
+  test_conn_info();
   test_gatt();
   test_media();
   test_players();

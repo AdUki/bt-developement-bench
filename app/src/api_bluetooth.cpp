@@ -4,6 +4,7 @@
 // device in the next GET. GATT reads and writes are the exception: they wait for the air, because
 // the answer is the point.
 #include <systemd/sd-bus.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <functional>
@@ -13,6 +14,7 @@
 #include "avdtp/probe.h"
 #include "bluez_model.h"
 #include "http_util.h"
+#include "util/exec.h"
 #include "util/strings.h"
 #include "uuids.h"
 #include "webserver.h"
@@ -114,6 +116,24 @@ BtCallResult browse_call(BtManager& bt, const std::string& path, const std::stri
 
 }  // namespace
 
+namespace {
+
+// btmgmt colours its errors whether or not it writes to a terminal.
+std::string strip_ansi(const std::string& s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+      i += 2;
+      while (i < s.size() && !(s[i] >= '@' && s[i] <= '~')) ++i;
+      continue;
+    }
+    out += s[i];
+  }
+  return out;
+}
+
+}  // namespace
+
 void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   // ---- The adapter and the agent ----------------------------------------------------------------
 
@@ -189,8 +209,17 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
       } else if (act == "cancel-pairing") {
         a = BtManager::Action::CancelPairing;
       } else if (act == "connect" || act == "disconnect") {
-        a = act == "connect" ? BtManager::Action::Connect : BtManager::Action::Disconnect;
-        arg = body.value("uuid", std::string{});
+        // {"bearer": "le"|"bredr"}: that transport only (org.bluez.Bearer.*1), else the device,
+        // or {"uuid"} one profile.
+        if (body.contains("bearer")) {
+          if (body.contains("uuid")) return send_error(res, 400, "either a bearer or a profile uuid, not both");
+          a = act == "connect" ? BtManager::Action::ConnectBearer : BtManager::Action::DisconnectBearer;
+          arg = body.value("bearer", std::string{});
+          if (arg != "le" && arg != "bredr") return send_error(res, 400, "bearer is le or bredr");
+        } else {
+          a = act == "connect" ? BtManager::Action::Connect : BtManager::Action::Disconnect;
+          arg = body.value("uuid", std::string{});
+        }
       } else {
         return send_error(res, 404, "no such action: " + act);
       }
@@ -200,7 +229,51 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     send_ok(res);
   });
 
-  // Body: any of alias, trusted, blocked, wake_allowed.
+  // A connected device's link as the controller measures it, per bearer that is connected:
+  // {bredr: {rssi, tx_power, max_tx_power}|null, le: ...|null}. Through btmgmt conn-info (mgmt Get
+  // Connection Information), the one place that has a live link's RSSI; asked when called (the
+  // console asks every two seconds while a device is open), never in the background.
+  svr.Get("/api/bluetooth/devices/:addr/link", [&d](const httplib::Request& req, httplib::Response& res) {
+    const json dev = d.bt.device(path_param(req, "addr"));
+    if (dev.is_null()) return send_error(res, 404, "no such device");
+    static const std::string btmgmt = [] {
+      for (const char* p : {"/usr/bin/btmgmt", "/usr/local/bin/btmgmt"})
+        if (access(p, X_OK) == 0) return std::string(p);
+      return std::string{};
+    }();
+    if (btmgmt.empty()) return send_error(res, 503, "btmgmt is not installed");
+    const std::string hci = dev.value("adapter", std::string{});
+    if (hci.compare(0, 3, "hci") != 0) return send_error(res, 500, "the device's adapter is not an hciN");
+    const std::string index = hci.substr(3);
+    const std::string addr = dev.value("address", std::string{});
+    auto ask = [&](int type) -> json {
+      ExecResult r;
+      json j;
+      // The controller refuses one link's query right after another's now and then ("Invalid
+      // Parameters"): once more, a moment later.
+      for (int attempt = 0; attempt < 2 && j.is_null(); ++attempt) {
+        if (attempt) std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        r = run_cmd({btmgmt, "--index", index, "conn-info", "-t", std::to_string(type), addr}, 3000);
+        j = parse_conn_info(r.out);
+      }
+      if (j.is_null()) return json{{"error", trim(strip_ansi(r.out.empty() ? r.reason() : r.out))}};
+      // BR/EDR's Read RSSI is not a level but the distance from the controller's golden receive
+      // power range: 0 is inside it, +/-n dB above or below. LE's is the level in dBm.
+      j["rssi_relative"] = type == 0;
+      return j;
+    };
+    const json& b = dev["bearers"];
+    // Without bearer objects (an older BlueZ): the device's one connection, by its address type.
+    const bool bredr = b["bredr"].is_object() ? b["bredr"].value("connected", false)
+                                               : dev.value("connected", false) && dev.value("address_type", "") == "public" &&
+                                                     !b["le"].is_object();
+    const bool le = b["le"].is_object() && b["le"].value("connected", false);
+    send_json(res, json{{"bredr", bredr ? ask(0) : json(nullptr)},
+                        {"le", le ? ask(dev.value("address_type", "") == "random" ? 2 : 1) : json(nullptr)}});
+  });
+
+  // Body: any of alias, trusted, blocked, wake_allowed, preferred_bearer (last-used | bredr | le |
+  // last-seen: which transport a dual-mode device connects on first).
   svr.Put("/api/bluetooth/devices/:addr", json_route([&d](const json& j, const httplib::Request& req,
                                                           httplib::Response& res) {
     std::string err;

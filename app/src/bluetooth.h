@@ -39,15 +39,24 @@ BtVerdict bt_agent_policy(const std::string& policy, BtAsk ask);
 // The IO capabilities BlueZ accepts for an agent; the pairing method follows from it.
 bool bt_agent_capability_ok(const std::string& cap);
 
-// A discovery filter as the API takes it, checked: transport auto|le|bredr, an RSSI floor
-// (-127..20), duplicate data, UUIDs (any form uuid_full() takes), a name pattern.
+// A discovery filter as the API takes it, checked, with every key of BlueZ's SetDiscoveryFilter:
+// transport auto (LE and BR/EDR, interleaved: dual mode) | le | bredr, an RSSI floor (-127..20) or
+// a pathloss ceiling (0..137, from the TX power the device advertises; never both, BlueZ refuses
+// that), duplicate data, UUIDs (any form uuid_full() takes), a name or address prefix pattern,
+// discoverable (the adapter is visible while it scans) and auto-connect (to what the pattern
+// matches; only with a pattern).
 struct BtScanFilter {
   std::string transport = "auto";
   bool has_rssi = false;
   int rssi = 0;
+  bool has_pathloss = false;
+  int pathloss = 0;
   bool duplicate_data = true;
   std::vector<std::string> uuids;
+  bool has_pattern = false;  // "" is a pattern too: it matches every device
   std::string pattern;
+  bool discoverable = false;
+  bool auto_connect = false;
 };
 bool bt_scan_filter_from_json(const nlohmann::json& j, BtScanFilter* f, std::string* err);
 nlohmann::json bt_scan_filter_json(const BtScanFilter& f);
@@ -151,7 +160,9 @@ class BtManager {
   // Discovery with a filter for `seconds` (0: until stopped).
   bool scan(bool on, const BtScanFilter& f, unsigned seconds, std::string* err);
 
-  enum class Action { Pair, CancelPairing, Connect, Disconnect, Remove };
+  // ConnectBearer / DisconnectBearer: arg is the bearer, "le" or "bredr" (BlueZ's experimental
+  // org.bluez.Bearer.LE1 / .BREDR1: one transport of a dual-mode device, its profiles and link).
+  enum class Action { Pair, CancelPairing, Connect, Disconnect, Remove, ConnectBearer, DisconnectBearer };
   // `uuid` with Connect/Disconnect: ConnectProfile/DisconnectProfile. `pin` with Pair: what to
   // answer a RequestPinCode with (legacy devices). False when there is no such device (a 404) or
   // the manager is not running.
@@ -181,6 +192,8 @@ class BtManager {
   struct DevState {
     std::string busy;
     std::string error;
+    // The last Disconnected signal of one of its bearers: {bearer, reason, message, at_ms}.
+    nlohmann::json last_disconnect;
   };
 
   void run();
@@ -196,8 +209,9 @@ class BtManager {
   void set_error(std::string e);
   void changed(bool request);
 
+  // iface: nullptr for Device1; a bearer's (Bearer.LE1, .BREDR1) for its Connect and Disconnect.
   void call_device(const std::string& path, const char* method, const std::string& uuid,
-                   const char* busy, unsigned timeout_s);
+                   const char* busy, unsigned timeout_s, const char* iface = nullptr);
   void on_reply(const std::string& path, const std::string& method, sd_bus_message* reply);
   void set_device_state(const std::string& path, std::string busy, std::string error);
 
@@ -226,6 +240,7 @@ class BtManager {
   std::string agent_policy_ = "auto";
   std::string agent_capability_ = "KeyboardDisplay";
   bool agent_registered_shared_ = false;
+  std::vector<std::string> discovery_filters_;  // the adapter's GetDiscoveryFilters
   bool scanning_ = false;
   BtScanFilter filter_;
   uint64_t scan_until_ns_ = 0;

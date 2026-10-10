@@ -193,6 +193,16 @@ main { padding: 0.4rem 24px 4rem; max-width: 1240px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0.6rem 1rem; }
 .grid label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.82rem; color: var(--muted); min-width: 0; }
 .grid label.wide { grid-column: 1 / -1; }
+.grid label.check { flex-direction: row; align-items: center; gap: 0.45rem; grid-column: 1 / -1; color: var(--fg); }
+.grid label.check:has(input:disabled), .grid label:has(> :disabled) { opacity: 0.55; }
+/* Signal strength: four bars, as many lit as the RSSI is worth; the dBm is beside them. */
+.sig { display: inline-flex; align-items: flex-end; gap: 1px; height: 0.8rem; vertical-align: -1px; }
+.sig i { width: 3px; background: var(--line); border-radius: 1px; }
+.sig i:nth-child(1) { height: 25%; } .sig i:nth-child(2) { height: 50%; } .sig i:nth-child(3) { height: 75%; } .sig i:nth-child(4) { height: 100%; }
+.sig.s1 i:nth-child(-n+1), .sig.s2 i:nth-child(-n+2), .sig.s3 i:nth-child(-n+3), .sig.s4 i:nth-child(-n+4) { background: var(--good); }
+.sig.s1 i:nth-child(-n+1) { background: var(--warn); }
+.bearers { display: grid; grid-template-columns: auto 1fr auto; gap: 0.35rem 0.75rem; align-items: center; margin: 0.25rem 0 0.5rem; }
+.bearers .b-name { font-weight: 600; }
 .grid > label select, .grid > label input:not([type=checkbox]) { width: 100%; min-width: 0; }
 .grow { flex: 1 1 200px; min-width: 0; }
 .narrow { width: 5.5rem; }

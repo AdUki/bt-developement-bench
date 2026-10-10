@@ -32,7 +32,7 @@ messages.
 |---|---|---|---|
 | Galaxy Buds | A0:B1:C2:D3:E4:F5 | paired and trusted at start | A2DP sink: SBC + AAC endpoints, SBC 48 kHz transport |
 | JBL Flip 5 | F8:DF:15:0A:11:3C | just works: no question | A2DP sink, 48 kHz |
-| Pixel 7 | 5C:E9:1E:22:40:01 | `RequestConfirmation` | A2DP source: transport active 2 s later, an AVRCP player |
+| Pixel 7 | 5C:E9:1E:22:40:01 | `RequestConfirmation` | A2DP source: transport active 2 s later, an AVRCP player; dual-mode (both bearers, a `PreferredBearer`) |
 | Old Speaker | 00:1A:7D:DA:71:13 | `RequestPinCode`, wants `1234` | A2DP sink, 44.1 kHz |
 | MX Keys | C7:3B:52:10:9A:1E | `DisplayPasskey` | none; `Connect` is profile-unavailable |
 | Bench HRM | C0:FF:EE:00:00:01 (random) | just works | GATT: Heart Rate, Battery, Device Information, an echo service |
@@ -42,6 +42,13 @@ All but the Buds appear during a scan, staggered over 4 s, with an RSSI that jit
 The two LE-only devices appear only with an `le` or `auto` filter, the others only without `le`.
 RSSI is invalidated when the scan stops, and a device found by a scan is forgotten 30 s later
 unless it was paired or connected.
+
+**Bearers**: every device has BlueZ's experimental `org.bluez.Bearer.BREDR1` or `.LE1` (LE for a
+random address), the Pixel 7 both. A bearer's `Connected` follows the link on its transport, and
+its `Paired`/`Bonded` the device's; its `Connect`/`Disconnect` bring the device up or down on that
+transport, and it signals `Disconnected` with a reason (`Local` after a `Disconnect`, `Timeout`
+when the device goes out of range). `SetDiscoveryFilter` takes every key BlueZ's does
+(`AutoConnect` too) and refuses RSSI with Pathloss, as BlueZ does.
 
 **GATT** (the Bench HRM, resolved 0.5 s after it connects, removed when it disconnects; object
 names carry the handles as BlueZ's do):

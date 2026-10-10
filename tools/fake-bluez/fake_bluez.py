@@ -36,6 +36,8 @@ OBJMGR = 'org.freedesktop.DBus.ObjectManager'
 INTROSPECT = 'org.freedesktop.DBus.Introspectable'
 ADAPTER = 'org.bluez.Adapter1'
 DEVICE = 'org.bluez.Device1'
+BEARER_LE = 'org.bluez.Bearer.LE1'
+BEARER_BREDR = 'org.bluez.Bearer.BREDR1'
 AGENT_MGR = 'org.bluez.AgentManager1'
 AGENT = 'org.bluez.Agent1'
 ADV_MGR = 'org.bluez.LEAdvertisingManager1'
@@ -151,7 +153,7 @@ WORLD = [
     dict(address='F8:DF:15:0A:11:3C', name='JBL Flip 5', icon='audio-card', cls=0x240414,
          uuids=[UUID_AUDIO_SINK, UUID_AVRCP_TARGET, UUID_AVRCP, UUID_HFP, UUID_PNP],
          pairing='justworks', audio='playback', rate=48000, rssi=-58, appears=1.0),
-    dict(address='5C:E9:1E:22:40:01', name='Pixel 7', icon='phone', cls=0x5a020c,
+    dict(address='5C:E9:1E:22:40:01', name='Pixel 7', icon='phone', cls=0x5a020c, bearers=['bredr', 'le'],
          uuids=[UUID_AUDIO_SOURCE, UUID_AVRCP_TARGET, UUID_AVRCP, UUID_PNP],
          pairing='confirm', audio='capture', rate=44100, rssi=-45, appears=2.0),
     dict(address='C7:3B:52:10:9A:1E', name='MX Keys', icon='input-keyboard', cls=0x002540,
@@ -566,8 +568,10 @@ class Adapter(PropObject):
             raise err('InvalidArguments', 'Invalid arguments in method call')
         for k in f.keys():
             if k not in ('UUIDs', 'RSSI', 'Pathloss', 'Transport', 'DuplicateData',
-                         'Discoverable', 'Pattern'):
+                         'Discoverable', 'Pattern', 'AutoConnect'):
                 raise err('InvalidArguments', 'Invalid arguments in method call')
+        if 'RSSI' in f and 'Pathloss' in f:   # BlueZ takes one of them, never both
+            raise err('InvalidArguments', 'Invalid arguments in method call')
         if f:
             self.filters[sender] = t
         else:
@@ -577,7 +581,7 @@ class Adapter(PropObject):
     @dbus.service.method(ADAPTER, in_signature='', out_signature='as')
     def GetDiscoveryFilters(self):
         return strv(['UUIDs', 'RSSI', 'Pathloss', 'Transport', 'DuplicateData', 'Discoverable',
-                     'Pattern'])
+                     'Pattern', 'AutoConnect'])
 
     @dbus.service.method(ADAPTER, in_signature='o', out_signature='')
     def RemoveDevice(self, path):
@@ -593,7 +597,62 @@ class Adapter(PropObject):
             self.sync_discovering()
 
 
-class Device(PropObject):
+class _LEBearer(dbus.service.Object):
+    """BlueZ's experimental org.bluez.Bearer.LE1 on a device: dbus-python finds a method by its
+    Python name along the class hierarchy, so each bearer interface is a class of its own."""
+
+    @dbus.service.method(BEARER_LE, in_signature='', out_signature='', async_callbacks=('ok', 'fail'))
+    def Connect(self, ok=None, fail=None):
+        self.bearer_connect(BEARER_LE, ok, fail)
+
+    @dbus.service.method(BEARER_LE, in_signature='', out_signature='', async_callbacks=('ok', 'fail'))
+    def Disconnect(self, ok=None, fail=None):
+        self.bearer_disconnect(BEARER_LE, ok, fail)
+
+    @dbus.service.signal(BEARER_LE, signature='ss')
+    def Disconnected(self, reason, message):
+        pass
+
+
+class _BredrBearer(dbus.service.Object):
+    """org.bluez.Bearer.BREDR1, as _LEBearer."""
+
+    @dbus.service.method(BEARER_BREDR, in_signature='', out_signature='', async_callbacks=('ok', 'fail'))
+    def Connect(self, ok=None, fail=None):
+        self.bearer_connect(BEARER_BREDR, ok, fail)
+
+    @dbus.service.method(BEARER_BREDR, in_signature='', out_signature='', async_callbacks=('ok', 'fail'))
+    def Disconnect(self, ok=None, fail=None):
+        self.bearer_disconnect(BEARER_BREDR, ok, fail)
+
+    @dbus.service.signal(BEARER_BREDR, signature='ss')
+    def Disconnected(self, reason, message):
+        pass
+
+
+class Device(PropObject, _LEBearer, _BredrBearer):
+    # BlueZ's experimental bearers (org.bluez.Bearer.LE1, .BREDR1): one per transport the device
+    # was seen on. A dual-mode device (bearers=['bredr', 'le']) has both and a PreferredBearer.
+
+    def bearer_connect(self, iface, ok, fail):
+        if iface not in self.ifaces:
+            return fail(err('NotAvailable', 'no such bearer'))
+        log('%s Connect %s' % (iface.split('.')[-1], self.address))
+        self.link_bearer = iface
+        Device.Connect(self, ok=ok, fail=fail)
+
+    def bearer_disconnect(self, iface, ok, fail):
+        log('%s Disconnect %s' % (iface.split('.')[-1], self.address))
+        if self.link_bearer != iface or not self.p['Connected']:
+            return ok()
+        Device.Disconnect(self, ok=ok, fail=fail)
+
+    def bearer_disconnected(self, reason, message):
+        # The signal of the bearer the link was on, emitted from its own class.
+        cls = _LEBearer if self.link_bearer == BEARER_LE else _BredrBearer
+        if self.link_bearer in self.ifaces:
+            cls.Disconnected(self, reason, message)
+
     def __init__(self, svc, w):
         self.w = w
         self.address = w['address']
@@ -636,7 +695,22 @@ class Device(PropObject):
             DEVICE + '.Blocked': self.set_blocked,
             DEVICE + '.WakeAllowed': lambda v: self.update(DEVICE, WakeAllowed=dbus.Boolean(v)),
         }
-        super().__init__(svc, dev_path(w['address']), {DEVICE: p}, writable=wr,
+        ifaces = {DEVICE: p}
+        bearers = w.get('bearers') or (['le'] if w.get('address_type') == 'random' else ['bredr'])
+        for b in bearers:
+            ifaces[BEARER_LE if b == 'le' else BEARER_BREDR] = {
+                'Adapter': dbus.ObjectPath(ADAPTER_PATH),
+                'Paired': dbus.Boolean(bool(w.get('known'))),
+                'Bonded': dbus.Boolean(bool(w.get('known'))),
+                'Connected': dbus.Boolean(False),
+                'Connectable': dbus.Boolean(True),
+            }
+        if len(bearers) > 1:
+            p['PreferredBearer'] = dbus.String('last-used')
+            wr[DEVICE + '.PreferredBearer'] = self.set_preferred_bearer
+        # The transport the link is on: the one asked for, else the preferred one, else the first.
+        self.link_bearer = BEARER_LE if bearers[0] == 'le' else BEARER_BREDR
+        super().__init__(svc, dev_path(w['address']), ifaces, writable=wr,
                          extra_ifaces=(INTROSPECT, PROPS))
         self.in_range = True
         self.range_timer = None
@@ -649,6 +723,27 @@ class Device(PropObject):
     @property
     def p(self):
         return self.ifaces[DEVICE]
+
+    def set_preferred_bearer(self, v):
+        if str(v) not in ('last-used', 'bredr', 'le', 'last-seen'):
+            raise err('InvalidArguments', 'Invalid arguments in method call')
+        self.update(DEVICE, PreferredBearer=dbus.String(str(v)))
+        if str(v) in ('le', 'bredr'):
+            self.link_bearer = BEARER_LE if str(v) == 'le' else BEARER_BREDR
+
+    def update(self, iface, **changes):
+        # The bearers follow the device: pairing on all of them, the link on the one it is on.
+        super().update(iface, **changes)
+        if iface != DEVICE:
+            return
+        for b in (BEARER_LE, BEARER_BREDR):
+            if b not in self.ifaces:
+                continue
+            c = {k: changes[k] for k in ('Paired', 'Bonded') if k in changes}
+            if 'Connected' in changes:
+                c['Connected'] = dbus.Boolean(bool(changes['Connected']) and b == self.link_bearer)
+            if c:
+                super().update(b, **c)
 
     def set_alias(self, v):
         self.update(DEVICE, Alias=dbus.String(str(v) or str(self.p['Name'])))
@@ -708,6 +803,9 @@ class Device(PropObject):
     def link_lost(self, why):
         if self.p['Connected']:
             log('%s disconnected (%s)' % (self.address, why))
+            # The bearer says why, as BlueZ does: the local host, or the device going away.
+            reason = 'org.bluez.Reason.Local' if why in ('Disconnect()', 'blocked') else 'org.bluez.Reason.Timeout'
+            self.bearer_disconnected(reason, why)
         self.svc.media.remove_for(self)
         self.svc.gatt.remove_for(self)
         self.update(DEVICE, Connected=dbus.Boolean(False), ServicesResolved=dbus.Boolean(False))

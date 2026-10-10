@@ -55,8 +55,12 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
  "devices": [ ...see below... ],
  "request": null,
  "agent": {"policy": "auto", "capability": "KeyboardDisplay", "registered": true},
- "discovery": {"on": false, "ours": false, "filter": {"transport": "auto", "rssi": null, "duplicate_data": true,
-               "uuids": [], "pattern": ""}, "until_s": null}}
+ "discovery": {"on": false, "ours": false,
+               "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": true,
+                          "uuids": [], "pattern": null, "discoverable": false, "auto_connect": false},
+               "filters": ["UUIDs", "RSSI", "Pathloss", "Transport", "DuplicateData", "Discoverable",
+                           "Pattern", "AutoConnect"],
+               "until_s": null}}
 ```
 
 `adapter` is the primary adapter: hci0, or the one btbenchd was started with (`--bt-adapter`). A
@@ -70,11 +74,22 @@ device is:
  "class": null, "class_major": "", "appearance": "0x0341", "appearance_name": "Heart Rate Sensor",
  "uuids": [{"uuid": "180d", "name": "Heart Rate"}],
  "manufacturer_data": {"0x0059": "0102"}, "service_data": {"180d": "48"}, "advertising_flags": "06",
- "busy": "", "error": ""}
+ "preferred_bearer": null,
+ "bearers": {"bredr": null,
+             "le": {"connected": true, "paired": false, "bonded": false, "connectable": true}},
+ "busy": "", "error": "",
+ "last_disconnect": {"bearer": "le", "reason": "remote", "message": "Connection terminated by remote host",
+                     "at_ms": 1791661005562}}
 ```
 
 `rssi` (and the advertising data) are only there while BlueZ has them, i.e. during and shortly after
-a scan. `busy` is `pairing`, `connecting` or `disconnecting` while one of those runs; `error` is the
+a scan; a connected device's live link RSSI is `GET .../link` (below). `bearers` are BlueZ's
+experimental `org.bluez.Bearer.BREDR1` and `.LE1`, one per transport the device was seen on (null
+for the other): a dual-mode device has both, each with its own connection and pairing state.
+`preferred_bearer` is the transport a dual-mode device connects on first (`last-used`, `bredr`,
+`le`, `last-seen`; null for a single-mode one). `last_disconnect` is the last time one of its
+bearers went down and why (BlueZ's `Disconnected` signal: `unknown`, `timeout`, `local`, `remote`,
+`authentication`, `suspend`), kept until btbenchd restarts. `busy` is `pairing`, `connecting` or `disconnecting` while one of those runs; `error` is the
 last operation's failure in BlueZ's words, kept until the next one. Sorted: connected, paired, then
 by alias.
 
@@ -95,7 +110,22 @@ negotiates (a new capability re-registers the agent).
 
 `{"on": true, "transport": "auto|le|bredr", "rssi": -70, "duplicate_data": true, "uuids": ["180d"],
 "pattern": "", "seconds": 30}` — discovery with that filter (`SetDiscoveryFilter`) for `seconds`
-(0: until stopped). `{"on": false}` stops it and clears the filter.
+(0: until stopped). `{"on": false}` stops it and clears the filter. Every key of BlueZ's filter:
+
+| key | what |
+|---|---|
+| `transport` | `auto` (dual: LE scan and BR/EDR inquiry interleaved, as the adapter allows), `le`, `bredr` |
+| `rssi` | only devices at least this strong (-127..20 dBm) |
+| `pathloss` | only devices whose path loss (advertised TX power minus RSSI) is at most this (0..137 dB); either this or `rssi`, never both |
+| `uuids` | only devices offering one of these services (any UUID form) |
+| `pattern` | only devices whose name or address starts with this; `""` matches every device (and lists non-discoverable ones) |
+| `duplicate_data` | report every advertisement, not only changed ones (default true) |
+| `discoverable` | make the adapter visible while it scans |
+| `auto_connect` | connect to what `pattern` matches, as it is found (needs `pattern`) |
+
+`discovery.filters` lists the keys the adapter's BlueZ takes (`GetDiscoveryFilters`). A filter BlueZ
+refuses fails the scan with its reason (400 for one btbenchd refuses itself: rssi with pathloss,
+auto_connect without a pattern, values out of range).
 
 ### Devices
 
@@ -105,10 +135,11 @@ negotiates (a new capability re-registers the agent).
 | `GET /api/bluetooth/devices/{addr}` | | one device, plus `gatt_services`, `media_endpoints`, `media_transports` |
 | `POST /api/bluetooth/devices/{addr}/pair` | `{"pin": "1234"}` (optional) | `Pair()`; the PIN answers a legacy device's `RequestPinCode` |
 | `POST .../cancel-pairing` | | `CancelPairing()` |
-| `POST .../connect` | `{"uuid": "110b"}` (optional) | `Connect()`, or `ConnectProfile(uuid)` |
-| `POST .../disconnect` | `{"uuid": "110b"}` (optional) | `Disconnect()`, or `DisconnectProfile(uuid)` |
+| `POST .../connect` | `{"uuid": "110b"}` or `{"bearer": "le\|bredr"}` (optional) | `Connect()`, `ConnectProfile(uuid)`, or that bearer's `Connect()`: one transport of a dual-mode device |
+| `POST .../disconnect` | `{"uuid": "110b"}` or `{"bearer": "le\|bredr"}` (optional) | `Disconnect()`, `DisconnectProfile(uuid)`, or that bearer's `Disconnect()` (which also cancels its `Connect()` in progress) |
+| `GET .../link` | | a connected device's link as the controller measures it, per connected bearer: `{"bredr": {rssi, rssi_relative, tx_power, max_tx_power} \| {error} \| null, "le": ...}`, through `btmgmt conn-info` (mgmt Get Connection Information), asked when called. BR/EDR's `rssi` is relative (`rssi_relative`: dB from the controller's golden receive power range, 0 inside it), LE's in dBm; a null value is one the controller does not know |
 | `POST .../trust`, `.../untrust`, `.../block`, `.../unblock` | | the `Trusted` / `Blocked` property |
-| `PUT /api/bluetooth/devices/{addr}` | any of `alias`, `trusted`, `blocked`, `wake_allowed` | properties; answers with the device |
+| `PUT /api/bluetooth/devices/{addr}` | any of `alias`, `trusted`, `blocked`, `wake_allowed`, `preferred_bearer` (`last-used`, `bredr`, `le`, `last-seen`; effective once disconnected) | properties; answers with the device |
 | `DELETE /api/bluetooth/devices/{addr}` | | `RemoveDevice()`: forget it, bond and all |
 
 404 for an address BlueZ does not know (scan first), 503 when Bluetooth is not running.

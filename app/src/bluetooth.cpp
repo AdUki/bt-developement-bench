@@ -36,6 +36,8 @@ constexpr const char* kBluez = "org.bluez";
 constexpr const char* kAgentPath = "/org/btbench/agent";
 constexpr const char* kAdapterIface = "org.bluez.Adapter1";
 constexpr const char* kDeviceIface = "org.bluez.Device1";
+constexpr const char* kBearerLeIface = "org.bluez.Bearer.LE1";
+constexpr const char* kBearerBredrIface = "org.bluez.Bearer.BREDR1";
 constexpr const char* kCharIface = "org.bluez.GattCharacteristic1";
 
 // Calls that should be quick get this long: BlueZ answers a property write in milliseconds, and a
@@ -103,7 +105,22 @@ bool bt_scan_filter_from_json(const json& j, BtScanFilter* f, std::string* err) 
       out.has_rssi = true;
       out.rssi = r;
     }
+    if (j.contains("pathloss") && !j["pathloss"].is_null()) {
+      const int p = j["pathloss"].get<int>();
+      if (p < 0 || p > 137) {
+        *err = "pathloss must be 0..137";
+        return false;
+      }
+      out.has_pathloss = true;
+      out.pathloss = p;
+    }
+    if (out.has_rssi && out.has_pathloss) {
+      *err = "rssi and pathloss are either-or: BlueZ filters on one of them";
+      return false;
+    }
     if (j.contains("duplicate_data")) out.duplicate_data = j["duplicate_data"].get<bool>();
+    if (j.contains("discoverable")) out.discoverable = j["discoverable"].get<bool>();
+    if (j.contains("auto_connect")) out.auto_connect = j["auto_connect"].get<bool>();
     if (j.contains("uuids")) {
       for (const json& u : j["uuids"]) {
         const std::string full = uuid_full(u.get<std::string>());
@@ -114,7 +131,18 @@ bool bt_scan_filter_from_json(const json& j, BtScanFilter* f, std::string* err) 
         out.uuids.push_back(full);
       }
     }
-    if (j.contains("pattern")) out.pattern = j["pattern"].get<std::string>();
+    if (j.contains("pattern") && !j["pattern"].is_null()) {
+      out.has_pattern = true;
+      out.pattern = j["pattern"].get<std::string>();
+      if (out.pattern.size() > 248) {
+        *err = "pattern is a name or address prefix, at most 248 bytes";
+        return false;
+      }
+    }
+    if (out.auto_connect && !out.has_pattern) {
+      *err = "auto_connect needs a pattern: it connects to the devices the pattern matches";
+      return false;
+    }
   } catch (const std::exception& e) {
     *err = e.what();
     return false;
@@ -128,9 +156,12 @@ json bt_scan_filter_json(const BtScanFilter& f) {
   for (const std::string& x : f.uuids) u.push_back(uuid_short(x));
   return json{{"transport", f.transport},
               {"rssi", f.has_rssi ? json(f.rssi) : json(nullptr)},
+              {"pathloss", f.has_pathloss ? json(f.pathloss) : json(nullptr)},
               {"duplicate_data", f.duplicate_data},
               {"uuids", u},
-              {"pattern", f.pattern}};
+              {"pattern", f.has_pattern ? json(f.pattern) : json(nullptr)},
+              {"discoverable", f.discoverable},
+              {"auto_connect", f.auto_connect}};
 }
 
 json bt_request_json(const BtRequest& r) {
@@ -392,6 +423,29 @@ void BtManager::changed(bool request) {
 // slow pace. Anything else BlueZ says (a connection, ServicesResolved, a pairing) is re-read soon.
 void BtManager::on_signal(sd_bus_message* m) {
   const char* member = sd_bus_message_get_member(m);
+  const char* siface = sd_bus_message_get_interface(m);
+  // A bearer telling why it went down (org.bluez.Bearer.LE1 / .BREDR1): kept on the device, since
+  // the reason is in the signal only and the next re-read shows just "not connected".
+  if (member && siface && strcmp(member, "Disconnected") == 0 &&
+      (strcmp(siface, kBearerLeIface) == 0 || strcmp(siface, kBearerBredrIface) == 0)) {
+    const char *reason = nullptr, *message = nullptr;
+    const char* path = sd_bus_message_get_path(m);
+    if (path && sd_bus_message_read(m, "ss", &reason, &message) >= 0) {
+      std::string r = reason ? reason : "";
+      const std::string pre = "org.bluez.Reason.";
+      if (r.compare(0, pre.size(), pre) == 0) r = lower(r.substr(pre.size()));
+      const auto at = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+      LOG_INFO("bluetooth: {} {} disconnected: {} ({})", address_from_path(path),
+               strcmp(siface, kBearerLeIface) == 0 ? "LE" : "BR/EDR", r, message ? message : "");
+      std::lock_guard<std::mutex> lk(m_);
+      dev_state_[path].last_disconnect = json{{"bearer", strcmp(siface, kBearerLeIface) == 0 ? "le" : "bredr"},
+                                              {"reason", r},
+                                              {"message", message ? message : ""},
+                                              {"at_ms", at}};
+    }
+    sd_bus_message_rewind(m, 1);
+  }
   if (member && strcmp(member, "PropertiesChanged") == 0) {
     const char* iface = nullptr;
     json changed;
@@ -526,6 +580,25 @@ void BtManager::refresh() {
   }
 
   if (apath != ready_adapter_) {
+    // The filter keys this adapter's BlueZ takes, for the console to offer only those.
+    std::vector<std::string> filters;
+    if (!apath.empty()) {
+      sd_bus_message* reply = nullptr;
+      sd_bus_error fe = SD_BUS_ERROR_NULL;
+      if (sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "GetDiscoveryFilters", &fe, &reply,
+                             "") >= 0) {
+        json v;
+        if (read_json(reply, &v) > 0 && v.is_array())
+          for (const json& x : v)
+            if (x.is_string()) filters.push_back(x.get<std::string>());
+      }
+      sd_bus_message_unref(reply);
+      sd_bus_error_free(&fe);
+    }
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      discovery_filters_ = std::move(filters);
+    }
     if (!ready_adapter_.empty())
       for (BusUser* u : users_) u->bluez_gone();
     ready_adapter_ = apath;
@@ -595,14 +668,29 @@ void BtManager::start_scan() {
   sd_bus_error e = SD_BUS_ERROR_NULL;
   DDict d{{"Transport", DVar::str(f.transport)}, {"DuplicateData", DVar::boolean(f.duplicate_data)}};
   if (f.has_rssi) d.push_back({"RSSI", DVar::i16(static_cast<int16_t>(f.rssi))});
+  if (f.has_pathloss) d.push_back({"Pathloss", DVar::u16(static_cast<uint16_t>(f.pathloss))});
   if (!f.uuids.empty()) d.push_back({"UUIDs", DVar::strv(f.uuids)});
-  if (!f.pattern.empty()) d.push_back({"Pattern", DVar::str(f.pattern)});
+  if (f.has_pattern) d.push_back({"Pattern", DVar::str(f.pattern)});
+  // Sent only when asked for: a BlueZ that does not know a key refuses the whole filter.
+  if (f.discoverable) d.push_back({"Discoverable", DVar::boolean(true)});
+  if (f.auto_connect) d.push_back({"AutoConnect", DVar::boolean(true)});
   int r = sd_bus_message_new_method_call(bus_, &m, kBluez, apath.c_str(), kAdapterIface,
                                          "SetDiscoveryFilter");
   if (r >= 0) r = append_dict(m, d);
   if (r >= 0) r = sd_bus_call(bus_, m, 0, &e, nullptr);
   sd_bus_message_unref(m);
-  if (r < 0) LOG_WARN("bluetooth: discovery filter refused: {}", friendly(&e));
+  if (r < 0) {
+    // Not a scan without the filter: what it found would look filtered and not be.
+    const std::string why = "discovery filter refused: " + friendly(&e);
+    LOG_WARN("bluetooth: {}", why);
+    sd_bus_error_free(&e);
+    std::lock_guard<std::mutex> lk(m_);
+    error_ = why;
+    scanning_ = false;
+    scan_until_ns_ = 0;
+    dirty_ = true;
+    return;
+  }
   sd_bus_error_free(&e);
 
   r = sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "StartDiscovery", &e, nullptr, "");
@@ -657,10 +745,10 @@ void BtManager::set_device_state(const std::string& path, std::string busy, std:
 }
 
 void BtManager::call_device(const std::string& path, const char* method, const std::string& uuid,
-                            const char* busy, unsigned timeout_s) {
+                            const char* busy, unsigned timeout_s, const char* iface) {
   if (!bus_) return;
   sd_bus_message* m = nullptr;
-  int r = sd_bus_message_new_method_call(bus_, &m, kBluez, path.c_str(), kDeviceIface, method);
+  int r = sd_bus_message_new_method_call(bus_, &m, kBluez, path.c_str(), iface ? iface : kDeviceIface, method);
   if (r >= 0 && !uuid.empty()) r = sd_bus_message_append(m, "s", uuid.c_str());
   auto* op = new BtBus::AsyncOp{this, path, method};
   sd_bus_slot* slot = nullptr;
@@ -683,6 +771,9 @@ void BtManager::call_device(const std::string& path, const char* method, const s
 
 void BtManager::on_reply(const std::string& path, const std::string& method, sd_bus_message* reply) {
   const sd_bus_error* e = sd_bus_message_get_error(reply);
+  // Nothing to disconnect is done, not failed: it is also how a bearer's Disconnect answers when
+  // it only cancelled a Connect still in progress.
+  if (e && method == "Disconnect" && is_error(e, "org.bluez.Error.NotConnected")) e = nullptr;
   const std::string addr = address_from_path(path);
   if (method == "Pair") {
     started_here_.erase(path);
@@ -897,6 +988,7 @@ json BtManager::state() const {
   std::map<std::string, DevState> ds;
   std::string policy, cap;
   BtScanFilter filter;
+  std::vector<std::string> filters;
   {
     std::lock_guard<std::mutex> lk(m_);
     objs = objs_;
@@ -912,6 +1004,7 @@ json BtManager::state() const {
     scanning = scanning_;
     scan_until = scan_until_ns_;
     filter = filter_;
+    filters = discovery_filters_;
     agent_reg = agent_registered_shared_;
     if (!running_.load()) {
       available = false;
@@ -928,6 +1021,8 @@ json BtManager::state() const {
     const auto it = ds.find(d["path"].get<std::string>());
     d["busy"] = it == ds.end() ? "" : it->second.busy;
     d["error"] = it == ds.end() ? "" : it->second.error;
+    d["last_disconnect"] = it == ds.end() || it->second.last_disconnect.is_null() ? json(nullptr)
+                                                                                 : it->second.last_disconnect;
   }
   if (has_req) req.expires_s = deadline > now ? static_cast<unsigned>((deadline - now) / 1000000000ull) : 0;
   const bool discovering = adapter.is_object() && adapter.value("discovering", false);
@@ -942,6 +1037,8 @@ json BtManager::state() const {
                {{"on", discovering},
                 {"ours", scanning},
                 {"filter", bt_scan_filter_json(filter)},
+                // The keys the adapter's BlueZ takes (GetDiscoveryFilters): UUIDs, RSSI, Pathloss, ...
+                {"filters", filters},
                 {"until_s", scan_until > now ? json((scan_until - now) / 1000000000ull) : json(nullptr)}}}};
 }
 
@@ -978,9 +1075,10 @@ json BtManager::device(const std::string& address) const {
     const auto it = dev_state_.find(path);
     if (it != dev_state_.end()) st = it->second;
   }
-  json d = model_device(path, (*objs)[path][kDeviceIface]);
+  json d = model_device(path, (*objs)[path][kDeviceIface], &(*objs)[path]);
   d["busy"] = st.busy;
   d["error"] = st.error;
+  d["last_disconnect"] = st.last_disconnect.is_null() ? json(nullptr) : st.last_disconnect;
   // How much of it there is beyond the device itself: a resolved GATT database, A2DP endpoints.
   size_t services = 0, endpoints = 0, transports = 0;
   const std::string prefix = path + "/";
@@ -1114,10 +1212,18 @@ bool BtManager::device_action(const std::string& address, Action action, const s
     s.error.clear();
     if (action == Action::Pair) s.busy = "pairing";
     if (action == Action::Connect) s.busy = "connecting";
-    if (action == Action::Disconnect) s.busy = "disconnecting";
+    if (action == Action::Disconnect || action == Action::DisconnectBearer) s.busy = "disconnecting";
+    if (action == Action::ConnectBearer) s.busy = "connecting";
   }
-  const std::string uuid = arg.empty() || action == Action::Pair ? std::string{} : uuid_full(arg);
-  if (!arg.empty() && action != Action::Pair && uuid.empty()) {
+  const bool bearer = action == Action::ConnectBearer || action == Action::DisconnectBearer;
+  if (bearer && arg != "le" && arg != "bredr") {
+    std::lock_guard<std::mutex> lk(m_);
+    dev_state_[path].busy.clear();
+    *err = "bearer is le or bredr";
+    return false;
+  }
+  const std::string uuid = arg.empty() || action == Action::Pair || bearer ? std::string{} : uuid_full(arg);
+  if (!arg.empty() && action != Action::Pair && !bearer && uuid.empty()) {
     *err = "not a UUID: " + arg;
     return false;
   }
@@ -1137,6 +1243,14 @@ bool BtManager::device_action(const std::string& address, Action action, const s
       case Action::Disconnect:
         call_device(path, uuid.empty() ? "Disconnect" : "DisconnectProfile", uuid, "disconnecting",
                     kConnectTimeoutS);
+        break;
+      case Action::ConnectBearer:
+      case Action::DisconnectBearer:
+        // A device seen on one transport only has no bearer object for the other: BlueZ answers
+        // UnknownObject, shown on the device like any refusal.
+        call_device(path, action == Action::ConnectBearer ? "Connect" : "Disconnect", "",
+                    action == Action::ConnectBearer ? "connecting" : "disconnecting", kConnectTimeoutS,
+                    arg == "le" ? kBearerLeIface : kBearerBredrIface);
         break;
       case Action::Remove: {
         const std::string apath = path.substr(0, path.rfind('/'));
@@ -1175,6 +1289,14 @@ bool BtManager::set_device_props(const std::string& address, const json& j, std:
     if (j.contains("blocked")) props.push_back({"Blocked", DVar::boolean(j["blocked"].get<bool>())});
     if (j.contains("wake_allowed"))
       props.push_back({"WakeAllowed", DVar::boolean(j["wake_allowed"].get<bool>())});
+    if (j.contains("preferred_bearer")) {
+      const std::string b = j["preferred_bearer"].get<std::string>();
+      if (b != "last-used" && b != "bredr" && b != "le" && b != "last-seen") {
+        *err = "preferred_bearer is last-used, bredr, le or last-seen";
+        return false;
+      }
+      props.push_back({"PreferredBearer", DVar::str(b)});
+    }
   } catch (const std::exception& e) {
     *err = e.what();
     return false;

@@ -143,7 +143,20 @@ json model_adapters(const json& objs) {
   return out;
 }
 
-json model_device(const std::string& path, const json& d) {
+namespace {
+
+json model_bearer(const json* obj, const char* iface) {
+  if (!obj || !obj->contains(iface)) return nullptr;
+  const json& b = (*obj)[iface];
+  return json{{"connected", bool_of(b, "Connected")},
+              {"paired", bool_of(b, "Paired")},
+              {"bonded", bool_of(b, "Bonded")},
+              {"connectable", b.contains("Connectable") ? json(bool_of(b, "Connectable")) : json(nullptr)}};
+}
+
+}  // namespace
+
+json model_device(const std::string& path, const json& d, const json* obj) {
   json j{{"path", path},
          {"address", upper(str_of(d, "Address"))},
          {"address_type", str_of(d, "AddressType")},
@@ -160,6 +173,11 @@ json model_device(const std::string& path, const json& d) {
          {"legacy_pairing", bool_of(d, "LegacyPairing")},
          {"rssi", d.contains("RSSI") ? json(num_of(d, "RSSI")) : json(nullptr)},
          {"tx_power", d.contains("TxPower") ? json(num_of(d, "TxPower")) : json(nullptr)},
+         // A dual-mode device's choice of transport to connect on first (last-used, bredr, le,
+         // last-seen); null where BlueZ has none (single-mode devices, or BlueZ without it).
+         {"preferred_bearer", d.contains("PreferredBearer") ? json(str_of(d, "PreferredBearer")) : json(nullptr)},
+         {"bearers", json{{"bredr", model_bearer(obj, "org.bluez.Bearer.BREDR1")},
+                          {"le", model_bearer(obj, "org.bluez.Bearer.LE1")}}},
          {"uuids", uuid_list(strv_of(d, "UUIDs"))}};
   if (d.contains("Class")) {
     const uint32_t cod = static_cast<uint32_t>(num_of(d, "Class"));
@@ -203,7 +221,7 @@ json model_devices(const json& objs, const std::string& adapter_path) {
   for (auto it = objs.begin(); it != objs.end(); ++it) {
     if (!it->contains(kDevice)) continue;
     if (!prefix.empty() && !starts_with(it.key(), prefix)) continue;
-    out.push_back(model_device(it.key(), (*it)[kDevice]));
+    out.push_back(model_device(it.key(), (*it)[kDevice], &*it));
   }
   std::stable_sort(out.begin(), out.end(), [](const json& x, const json& y) {
     if (x["connected"] != y["connected"]) return x["connected"].get<bool>();
@@ -514,6 +532,17 @@ std::string appearance_name(uint16_t ap) {
   for (const Cat& c : kCats)
     if (c.cat == cat) return c.name;
   return "";
+}
+
+json parse_conn_info(const std::string& out) {
+  // "\tRSSI -52\tTX power 4\tmaximum TX power 10"
+  const size_t at = out.find("RSSI ");
+  if (at == std::string::npos) return nullptr;
+  int rssi = 0, tx = 0, max_tx = 0;
+  if (std::sscanf(out.c_str() + at, "RSSI %d TX power %d maximum TX power %d", &rssi, &tx, &max_tx) != 3)
+    return nullptr;
+  auto known = [](int v) { return v == 127 ? json(nullptr) : json(v); };
+  return json{{"rssi", known(rssi)}, {"tx_power", known(tx)}, {"max_tx_power", known(max_tx)}};
 }
 
 }  // namespace btb

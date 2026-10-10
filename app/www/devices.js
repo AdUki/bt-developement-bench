@@ -12,6 +12,30 @@ function btApply(b) {
   if (typeof leOnBt === 'function') leOnBt(b);
 }
 
+// Whether the adapter's BlueZ takes a discovery filter key (GetDiscoveryFilters); unknown (an
+// empty list) counts as yes, and BlueZ says no itself if it is not.
+function scSupports(key) {
+  const f = btState && btState.discovery && btState.discovery.filters;
+  return !f || !f.length || f.includes(key);
+}
+
+function renderScanOptions(b) {
+  const f = (b.discovery && b.discovery.filters) || [];
+  document.querySelectorAll('#sc-opts [data-filter]').forEach(el => {
+    const keys = el.dataset.filter.split(' ');
+    const ok = !f.length || keys.some(k => f.includes(k));
+    if (el.disabled !== !ok && el.id !== 'sc-auto') el.disabled = !ok;
+  });
+  setText($('sc-note'), f.length ? 'This adapter takes: ' + f.join(', ') + '.' : '');
+  $('sc-sig-val').disabled = !$('sc-sig').value || $('sc-sig').disabled;
+  if (!scSupports('AutoConnect') || !$('sc-pattern').value.trim()) $('sc-auto').disabled = true;
+  const cur = b.discovery && b.discovery.on && b.discovery.ours ? b.discovery.filter : null;
+  const parts = cur ? [cur.transport === 'auto' ? 'dual' : cur.transport === 'le' ? 'LE' : 'BR/EDR',
+    cur.rssi != null ? 'RSSI ≥ ' + cur.rssi : '', cur.pathloss != null ? 'path loss ≤ ' + cur.pathloss : '',
+    cur.uuids.length ? cur.uuids.join(', ') : '', cur.pattern != null ? '“' + cur.pattern + '…”' : ''].filter(Boolean) : [];
+  return parts.join(' · ');
+}
+
 function renderAdapter(b) {
   const a = b.adapter;
   setText($('ad-msg'), b.error || '');
@@ -32,13 +56,79 @@ function renderAdapter(b) {
   }
   const d = b.discovery || {};
   setText($('sc-toggle'), d.on ? 'Stop' : 'Scan');
+  const how = renderScanOptions(b);
   setText($('sc-state'), d.on
-    ? `Scanning${d.until_s != null ? ', ' + d.until_s + ' s left' : ''}${d.ours ? '' : ' (started elsewhere)'}`
+    ? `Scanning${how ? ' (' + how + ')' : ''}${d.until_s != null ? ', ' + d.until_s + ' s left' : ''}${d.ours ? '' : ' (started elsewhere)'}`
     : '');
   setClass($('sc-toggle'), d.on ? '' : 'primary');
 }
 
 const short = u => u.length > 8 ? u.slice(0, 8) + '…' : u;
+
+// RSSI as bars: -55 dBm and better is four, below -85 one.
+function sigBars(rssi) {
+  const n = rssi >= -55 ? 4 : rssi >= -67 ? 3 : rssi >= -78 ? 2 : 1;
+  return `<span class="sig s${n}" aria-hidden="true"><i></i><i></i><i></i><i></i></span>`;
+}
+
+// The transports the device was seen on (BlueZ's bearers), lit where it is connected.
+const BEARER_NAME = {le: 'LE', bredr: 'BR/EDR'};
+function bearerChips(d) {
+  const b = d.bearers || {};
+  return ['bredr', 'le'].filter(k => b[k]).map(k =>
+    `<span class="tag${b[k].connected ? ' good' : ''}" title="${BEARER_NAME[k]}: ${b[k].connected ? 'connected' : 'not connected'}${b[k].bonded ? ', bonded' : b[k].paired ? ', paired' : ''}">${BEARER_NAME[k]}</span>`).join('');
+}
+
+// Each bearer of a device: its state and a connect or disconnect for that transport alone, then
+// which one a dual-mode device connects on first, and why it last went down.
+function bearersHTML(d) {
+  const a = d.address;
+  const b = d.bearers || {};
+  const rows = ['bredr', 'le'].filter(k => b[k]).map(k => {
+    const x = b[k];
+    const st = [x.connected ? '<span class="good-text">connected</span>' : 'not connected',
+      x.bonded ? 'bonded' : x.paired ? 'paired' : 'not paired',
+      x.connectable === true ? 'connectable' : x.connectable === false ? 'not connectable' : ''].filter(Boolean).join(' · ');
+    const act = x.connected ? 'disconnect' : 'connect';
+    return `<span class="b-name">${BEARER_NAME[k]}</span><span class="small">${st}</span>
+      <button class="small-btn" data-act="bearer-${act}" data-bearer="${k}" data-addr="${a}"${d.busy ? ' disabled' : ''}>${x.connected ? 'Disconnect' : 'Connect'} ${BEARER_NAME[k]}</button>`;
+  }).join('');
+  const pref = d.preferred_bearer != null ? `<label class="row small">Connect first on
+      <select class="dev-pref" data-addr="${a}">${[['last-used', 'the last used'], ['last-seen', 'the last seen'], ['bredr', 'BR/EDR'], ['le', 'LE']]
+        .map(([v, t]) => `<option value="${v}"${v === d.preferred_bearer ? ' selected' : ''}>${t}</option>`).join('')}</select>
+      <span class="muted">(takes effect once disconnected)</span></label>` : '';
+  const ld = d.last_disconnect;
+  const last = ld ? `<div class="small muted">Last disconnect: ${BEARER_NAME[ld.bearer] || ld.bearer}, ${esc(ld.reason)}${ld.message ? ' (' + esc(ld.message) + ')' : ''}, ${new Date(ld.at_ms).toLocaleTimeString()}</div>` : '';
+  if (!rows && !pref && !last) return '';
+  return `<div class="bearers">${rows}</div>${pref}${last}`;
+}
+
+// The live link of a connected device (btmgmt conn-info): asked every two seconds while its
+// details are open, since BlueZ's RSSI comes from scanning only.
+const devLink = {};  // address → {bredr, le} or {error}
+let devLinkTimer = null;
+function linkHTML(d) {
+  const l = devLink[d.address];
+  if (!d.connected) return '';
+  if (!l) return '<span class="muted">reading…</span>';
+  if (l.error) return `<span class="muted">${esc(l.error)}</span>`;
+  return ['bredr', 'le'].filter(k => l[k]).map(k => {
+    const x = l[k];
+    if (x.error) return `<div>${BEARER_NAME[k]}: <span class="muted">${esc(x.error)}</span></div>`;
+    // BR/EDR's RSSI is relative to the controller's golden receive range (0: inside it).
+    const rssi = x.rssi == null ? 'RSSI unknown'
+      : x.rssi_relative ? (x.rssi === 0 ? 'RSSI in the golden range' : `RSSI ${x.rssi > 0 ? '+' : ''}${x.rssi} dB ${x.rssi > 0 ? 'above' : 'below'} the golden range`)
+      : sigBars(x.rssi) + ' RSSI ' + x.rssi + ' dBm';
+    return `<div>${BEARER_NAME[k]}: ${rssi}${x.tx_power != null ? ', TX power ' + x.tx_power + ' dBm' : ''}${x.max_tx_power != null ? ' (max ' + x.max_tx_power + ')' : ''}</div>`;
+  }).join('') || '<span class="muted">no connected bearer</span>';
+}
+function pollLinks() {
+  const open = btState ? btState.devices.filter(d => devOpen.has(d.address) && d.connected) : [];
+  if (!open.length || currentTab !== 'devices' || document.hidden) return;
+  Promise.all(open.map(d => api(`/bluetooth/devices/${d.address}/link`)
+    .then(r => { devLink[d.address] = r; }, e => { devLink[d.address] = {error: e.message || String(e)}; })))
+    .then(() => renderDevices());
+}
 const tag = (text, cls) => `<span class="tag ${cls || ''}">${esc(text)}</span>`;
 
 // One row a device: a state LED, its name with what it is, and the one action its state calls for
@@ -61,7 +151,8 @@ function deviceRow(d) {
     `<span class="mono">${a}</span>`,
     kind ? `<span>${esc(kind)}</span>` : '',
     d.connected ? '<span class="good-text">connected</span>' : d.paired ? `<span>${d.bonded ? 'bonded' : 'paired'}</span>` : '',
-    d.rssi != null ? `<span>${d.rssi} dBm</span>` : '',
+    d.rssi != null ? `<span title="RSSI when last seen in a scan">${sigBars(d.rssi)} ${d.rssi} dBm</span>` : '',
+    bearerChips(d),
   ].join('');
   let body = '';
   if (open) {
@@ -73,7 +164,8 @@ function deviceRow(d) {
       ['Name', d.name && d.name !== d.alias ? esc(d.name) : ''],
       ['Class', d.class ? esc(d.class_major || '') + ` <span class="mono muted">${esc(d.class)}</span>` : ''],
       ['Appearance', d.appearance ? esc(d.appearance_name || '') + ` <span class="mono muted">${esc(d.appearance)}</span>` : ''],
-      ['TX power', d.tx_power != null ? d.tx_power + ' dBm' : ''],
+      ['Link', linkHTML(d)],
+      ['TX power', d.tx_power != null ? d.tx_power + ' dBm (advertised)' : ''],
       ['Advertising flags', d.advertising_flags ? `<span class="mono">${esc(d.advertising_flags)}</span>` : ''],
       ['Services', uuids],
       ['Manufacturer data', md],
@@ -90,6 +182,7 @@ function deviceRow(d) {
     const dl = 'dev-uuids-' + a.replace(/:/g, '');
     body = `<div class="rw-body">
       ${tags ? `<div class="row wrap" style="margin-bottom:.5rem">${tags}</div>` : ''}
+      ${bearersHTML(d)}
       <div class="kv">${kv}</div>
       <div class="acts">
         ${d.trusted ? btn('untrust', 'Untrust') : btn('trust', 'Trust')}
@@ -144,7 +237,7 @@ function renderDevices() {
   renderAdapter(b);
   // Never under the user's typing: a rebuild would take the text and the focus with it.
   const ae = document.activeElement;
-  if (ae && (ae.classList.contains('prof-uuid') || ae.classList.contains('pair-pin'))) return;
+  if (ae && (ae.classList.contains('prof-uuid') || ae.classList.contains('pair-pin') || ae.classList.contains('dev-pref'))) return;
   const f = $('dev-filter').value.trim().toLowerCase();
   const list = b.devices.filter(d => !f || (d.alias + ' ' + d.address).toLowerCase().includes(f));
   setHTML($('dev-list'), list.length ? list.map(deviceRow).join('')
@@ -154,7 +247,7 @@ function renderDevices() {
 
 function refreshBt() { return api('/bluetooth').then(btApply).catch(fail); }
 
-function deviceAction(addr, act) {
+function deviceAction(addr, act, el) {
   const path = `/bluetooth/devices/${addr}`;
   const uuidOf = () => {
     const i = document.querySelector(`input.prof-uuid[data-addr="${addr}"]`);
@@ -174,6 +267,8 @@ function deviceAction(addr, act) {
   } else if (act === 'pair') {
     const pin = document.querySelector(`input.pair-pin[data-addr="${addr}"]`);
     req = post(`${path}/pair`, pin && pin.value.trim() ? {pin: pin.value.trim()} : undefined);
+  } else if (act === 'bearer-connect' || act === 'bearer-disconnect') {
+    req = post(`${path}/${act.split('-')[1]}`, {bearer: el.dataset.bearer});
   } else if (act === 'connect-profile' || act === 'disconnect-profile') {
     const u = uuidOf();
     if (!u) return toast('Type a profile UUID first (e.g. 110b for A2DP sink)');
@@ -193,17 +288,54 @@ function setupDevices() {
   $('ad-alias').onchange = e => send({alias: e.target.value});
   $('ag-policy').onchange = e => send({agent: e.target.value});
   $('ag-cap').onchange = e => send({agent_capability: e.target.value});
+  // The scan's options, kept in this browser between visits.
+  const SC_IDS = ['sc-transport', 'sc-secs', 'sc-sig', 'sc-sig-val', 'sc-uuids', 'sc-pattern', 'sc-dup', 'sc-disc', 'sc-auto'];
+  try {
+    const saved = JSON.parse(localStorage.getItem('btbench.scan') || '{}');
+    for (const id of SC_IDS) if (id in saved) { const el = $(id); if (el.type === 'checkbox') el.checked = saved[id]; else el.value = saved[id]; }
+  } catch (e) { /* no storage: the defaults */ }
+  const scSync = () => {
+    const sig = $('sc-sig').value;
+    $('sc-sig-val').disabled = !sig || $('sc-sig').disabled;
+    setText($('sc-sig-label'), sig === 'pathloss' ? 'Path loss (dB, 0..137)' : sig === 'rssi' ? 'RSSI (dBm, -127..20)' : 'Threshold');
+    $('sc-sig-val').placeholder = sig === 'pathloss' ? '70' : '-70';
+    // Auto-connect works on what the pattern matches, so it needs one.
+    const noAuto = !scSupports('AutoConnect');
+    $('sc-auto').disabled = noAuto || $('sc-pattern').value.trim() === '';
+    if ($('sc-auto').disabled) $('sc-auto').checked = false;
+    try {
+      const o = {};
+      for (const id of SC_IDS) { const el = $(id); o[id] = el.type === 'checkbox' ? el.checked : el.value; }
+      localStorage.setItem('btbench.scan', JSON.stringify(o));
+    } catch (e) { /* not kept */ }
+  };
+  $('sc-opts').addEventListener('input', scSync);
+  $('sc-opts').addEventListener('change', scSync);
+  scSync();
   $('sc-toggle').onclick = () => {
     const on = !(btState && btState.discovery && btState.discovery.on);
-    const body = {on, transport: $('sc-transport').value, seconds: parseInt($('sc-secs').value, 10) || 0};
-    const r = $('sc-rssi').value.trim();
-    if (r) body.rssi = parseInt(r, 10);
+    const body = {on, transport: $('sc-transport').value, seconds: parseInt($('sc-secs').value, 10) || 0,
+      duplicate_data: $('sc-dup').checked};
+    const sig = $('sc-sig').value, v = $('sc-sig-val').value.trim();
+    if (sig && v !== '') body[sig] = parseInt(v, 10);
+    const uuids = $('sc-uuids').value.split(/[\s,]+/).filter(Boolean);
+    if (uuids.length) body.uuids = uuids;
+    const pat = $('sc-pattern').value.trim();
+    if (pat) body.pattern = pat;
+    if ($('sc-disc').checked && scSupports('Discoverable')) body.discoverable = true;
+    if ($('sc-auto').checked && !$('sc-auto').disabled) body.auto_connect = true;
     post('/bluetooth/scan', body).then(() => setTimeout(refreshBt, 300)).catch(fail);
   };
+  $('dev-list').addEventListener('change', e => {
+    if (e.target.classList.contains('dev-pref'))
+      put(`/bluetooth/devices/${e.target.dataset.addr}`, {preferred_bearer: e.target.value})
+        .then(() => setTimeout(refreshBt, 200)).catch(e2 => { fail(e2); refreshBt(); });
+  });
+  setInterval(pollLinks, 2000);
   $('dev-filter').oninput = renderDevices;
   $('dev-list').onclick = e => {
     const b = e.target.closest('[data-act]');
-    if (b && !b.disabled) deviceAction(b.dataset.addr, b.dataset.act);
+    if (b && !b.disabled && b.tagName !== 'SELECT') deviceAction(b.dataset.addr, b.dataset.act, b);
   };
 }
 

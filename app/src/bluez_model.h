@@ -35,7 +35,11 @@ nlohmann::json model_adapters(const nlohmann::json& objs);
 // tx_power|null, class|null ("0x240404") and class_major, appearance|null and appearance_name,
 // uuids:[{uuid:"110b", name:"Audio Sink"}], manufacturer_data:{"0x004c":"hex"},
 // service_data:{"fe2c":"hex"}, advertising_flags:"hex"|null.
-nlohmann::json model_device(const std::string& path, const nlohmann::json& dev);
+// `obj`, the device's whole object (all its interfaces), adds its bearers: BlueZ's
+// org.bluez.Bearer.BREDR1 and .LE1 (experimental), one per transport the device was seen on, each
+// {connected, paired, bonded, connectable|null}; null for a transport it has no bearer on.
+nlohmann::json model_device(const std::string& path, const nlohmann::json& dev,
+                            const nlohmann::json* obj = nullptr);
 // All devices, optionally only those of one adapter path. Sorted: connected, paired, then by
 // name, so the list does not reshuffle as a scan adds devices.
 nlohmann::json model_devices(const nlohmann::json& objs, const std::string& adapter_path = "");
@@ -72,5 +76,11 @@ nlohmann::json browse_items(const nlohmann::json& reply);
 // Class of Device's major class ("audio/video", "phone", ...), and an appearance in words.
 std::string class_major_name(uint32_t cod);
 std::string appearance_name(uint16_t appearance);
+
+// btmgmt conn-info's answer (mgmt Get Connection Information): the link's RSSI and TX power as the
+// controller measures them, for a connected device (BlueZ's RSSI property is from discovery
+// only). {rssi, tx_power, max_tx_power}, each null where the controller does not know (127);
+// null when the output has no such line (not connected, a refusal).
+nlohmann::json parse_conn_info(const std::string& out);
 
 }  // namespace btb

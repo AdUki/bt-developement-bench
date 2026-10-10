@@ -51,6 +51,31 @@ void test_scan_filter() {
   CHECK(!bt_scan_filter_from_json(json{{"uuids", {"nope"}}}, &f, &err));
   CHECK(!bt_scan_filter_from_json(json{{"rssi", "loud"}}, &f, &err));
   CHECK_EQ(f.transport, keep.transport);  // a rejected filter changes nothing
+
+  // Every key BlueZ takes: pathloss instead of RSSI (never both), discoverable, a pattern, and
+  // auto-connect, which needs the pattern.
+  CHECK(bt_scan_filter_from_json(json{{"transport", "bredr"}, {"pathloss", 80}, {"discoverable", true},
+                                      {"pattern", "C0:FF"}, {"auto_connect", true}},
+                                 &f, &err));
+  CHECK(f.has_pathloss && f.pathloss == 80 && !f.has_rssi);
+  CHECK(f.discoverable && f.auto_connect && f.has_pattern);
+  CHECK_EQ(f.pattern, std::string("C0:FF"));
+  const json all = bt_scan_filter_json(f);
+  CHECK_EQ(all["pathloss"].get<int>(), 80);
+  CHECK(all["rssi"].is_null());
+  CHECK_EQ(all["pattern"].get<std::string>(), std::string("C0:FF"));
+  CHECK(all["discoverable"].get<bool>() && all["auto_connect"].get<bool>());
+  // "" is a pattern too (it matches everything): it is kept, not dropped as unset.
+  CHECK(bt_scan_filter_from_json(json{{"pattern", ""}}, &f, &err));
+  CHECK(f.has_pattern && f.pattern.empty());
+  CHECK(bt_scan_filter_from_json(json::object(), &f, &err));
+  CHECK(!f.has_pattern && bt_scan_filter_json(f)["pattern"].is_null());
+  CHECK(!bt_scan_filter_from_json(json{{"rssi", -70}, {"pathloss", 80}}, &f, &err));
+  CHECK(err.find("either-or") != std::string::npos);
+  CHECK(!bt_scan_filter_from_json(json{{"pathloss", 138}}, &f, &err));
+  CHECK(!bt_scan_filter_from_json(json{{"pathloss", -1}}, &f, &err));
+  CHECK(!bt_scan_filter_from_json(json{{"auto_connect", true}}, &f, &err));
+  CHECK(!bt_scan_filter_from_json(json{{"pattern", std::string(249, 'x')}}, &f, &err));
 }
 
 void test_request_json() {
