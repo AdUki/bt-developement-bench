@@ -104,6 +104,7 @@ add_library(btbench_core STATIC
   src/api_obex.cpp
   src/api_setup.cpp
   src/api_system.cpp
+  src/bench_player.cpp
   src/bluetooth.cpp
   src/bluez_model.cpp
   src/dbus_util.cpp

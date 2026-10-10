@@ -86,7 +86,10 @@ play–pause / stop / fast forward / next (the seeks run while the button is
 held), the transport's absolute volume, *Listen here* (hear what the phone sends the board, in
 this browser) and, folded under one disclosure, repeat and shuffle when the player offers them and,
 for a browsable player, a browser: the now-playing list, its files (folders open, back),
-search, and *play* or *add* (to now playing) per item. *Play and listen*: a new stream from a tone (its own
+search, and *play* or *add* (to now playing) per item. Under the phones, *This board's player*: what
+a car or speaker the board plays to sees (its track, play state and the adapters it is offered on),
+its controls, *Offer it* (on or off), and folded, its library (open a folder, *play* or *add*) and
+the now playing list. *Play and listen*: a new stream from a tone (its own
 frequency on the right channel if wanted), a sweep, white/pink/brown noise, silence, a URL
 (internet radio, a playlist, a file), a device's audio (capture — with a speaker as the sink,
 that is a tunnel from one device to another) or what a sink plays (its monitor), into any sink

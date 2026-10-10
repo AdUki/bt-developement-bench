@@ -582,6 +582,73 @@ function tickPlayers() {
   }
 }
 
+// ---------------------------------------------------------------- the board's own player
+
+// What a car or speaker the board plays to sees over AVRCP: the board's player (bench_player.h),
+// its track and its library, which such a device can browse. The library is browsed here from the
+// tree the state carries; playing from here is the same as playing from the remote.
+function localPlayerCard(s) {
+  const lib = s.library || [];
+  const byId = id => lib.find(i => i.id === id);
+  const t = s.track || {};
+  const playing = s.status === 'playing';
+  const btn = (a, title, cls) => `<button class="pl-btn lp-a ${cls || ''}" data-a="${a}" title="${title}" aria-label="${title}">
+    <svg viewBox="0 0 24 24"><path d="${PL_ICON[a]}"/></svg></button>`;
+  const folder = au.lpFolder == null ? null : au.lpFolder;
+  const entries = lib.filter(i => (i.parent == null ? null : i.parent) === folder);
+  const cur = s.track ? s.track.id : null;
+  const path = [];
+  for (let f = folder == null ? null : byId(folder); f; f = f.parent == null ? null : byId(f.parent)) path.unshift(f.name);
+  const reg = (s.registered || []).map(a => a.split('/').pop()).join(', ');
+  const num = t.Number ? `track ${t.Number}${t.NumberOfTracks ? ' of ' + t.NumberOfTracks : ''}` : '';
+  return `<div class="card player lp">
+    <div class="pl-art">${NOTE_SVG}</div>
+    <div class="head"><span class="pl-who">This board's player · what a car or speaker sees</span>
+      ${pill(s.enabled ? s.status : 'off', playing ? 'good' : s.status === 'paused' ? 'warn' : '')}</div>
+    <div class="pl-title">${esc(t.Title || 'Nothing playing')}</div>
+    <div class="small">${esc([t.Album, num].filter(Boolean).join(' · '))}</div>
+    <div class="small muted">${s.enabled ? (reg ? 'Offered on ' + esc(reg) : 'Waiting for BlueZ') : 'Not offered to devices'}${s.sink ? ' · plays to ' + esc(s.sink) : ''}</div>
+    ${s.error ? `<div class="small bad">${esc(s.error)}</div>` : ''}
+    <div class="pl-controls">
+      ${btn('previous', 'Previous')}${btn(playing ? 'pause' : 'play', playing ? 'Pause' : 'Play', 'main')}${btn('next', 'Next')}${btn('stop', 'Stop')}
+      <span class="spacer"></span>
+      <label class="row small"><input type="checkbox" id="lp-enabled"${s.enabled ? ' checked' : ''}> Offer it</label>
+    </div>
+    <details class="more-fields pl-more" id="lp-more"${au.lpOpen ? ' open' : ''}>
+      <summary>Library and now playing</summary>
+      <div class="pl-items small">
+        <div class="row wrap small pl-browser-nav">
+          ${folder != null ? '<button class="small-btn lp-up">Up</button>' : ''}
+          <span class="muted mono">/${esc(path.join('/'))}</span></div>
+        ${entries.map(i => `<div class="row between">
+          <span>${i.type === 'folder' ? '📁 ' : ''}${i.id === cur ? '<b>' + esc(i.name) + '</b>' : esc(i.name)}</span>
+          <span>${i.type === 'folder' ? `<button class="small-btn lp-open" data-id="${i.id}">open</button>` : ''}
+            <button class="small-btn lp-play" data-id="${i.id}">play</button>
+            <button class="small-btn lp-add" data-id="${i.id}">add</button></span></div>`).join('')}
+        <div class="muted" style="margin-top:.5rem">Now playing</div>
+        ${(s.queue || []).length ? s.queue.map((q, n) => `<div class="row between"><span>${s.position && n === s.position.index ? '<b>' + esc(q.name) + '</b>' : esc(q.name)}</span></div>`).join('')
+          : '<div class="muted">empty: play something, here or from the remote</div>'}
+      </div>
+    </details>
+  </div>`;
+}
+
+function refreshLocalPlayer() {
+  return api('/media/local-player').then(s => {
+    au.local = s;
+    const ae = document.activeElement;
+    if (ae && $('au-local').contains(ae) && ae.type === 'checkbox') return;
+    setHTML($('au-local'), localPlayerCard(s));
+  }).catch(() => setHTML($('au-local'), ''));
+}
+
+function localPlayerPost(body) {
+  return post('/media/local-player', body).then(s => {
+    au.local = s;
+    setHTML($('au-local'), localPlayerCard(s));
+  }).catch(fail);
+}
+
 function playerAction(path, action) {
   return post('/media/players/control', {path, action}).catch(fail);
 }
@@ -744,6 +811,28 @@ function setupAudio() {
     if (r) put('/media/transport', {path: r.dataset.path, volume: parseInt(r.value, 10)}).catch(fail);
   };
   $('au-transports').onchange = volume;
+
+  // The board's player.
+  const lp = $('au-local');
+  lp.addEventListener('toggle', e => { if (e.target.id === 'lp-more') au.lpOpen = e.target.open; }, true);
+  lp.addEventListener('change', e => {
+    if (e.target.id === 'lp-enabled')
+      put('/media/local-player', {enabled: e.target.checked}).then(s => { au.local = s; setHTML(lp, localPlayerCard(s)); }).catch(fail);
+  });
+  lp.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const id = b.dataset.id != null ? Number(b.dataset.id) : null;
+    if (b.classList.contains('lp-a')) localPlayerPost({action: b.dataset.a});
+    else if (b.classList.contains('lp-play')) localPlayerPost({play: id});
+    else if (b.classList.contains('lp-add')) localPlayerPost({enqueue: id});
+    else if (b.classList.contains('lp-open')) { au.lpFolder = id; setHTML(lp, localPlayerCard(au.local)); }
+    else if (b.classList.contains('lp-up')) {
+      const f = au.local.library.find(i => i.id === au.lpFolder);
+      au.lpFolder = f && f.parent != null ? f.parent : null;
+      setHTML(lp, localPlayerCard(au.local));
+    }
+  });
 
   // Players: buttons, hold-to-seek, settings, browsing.
   const pl = $('au-players');
@@ -952,12 +1041,18 @@ registerTab('audio', {
     api('/audio/upnp/servers').then(renderUpnpServers).catch(() => {});
     clearInterval(au.tick);
     au.tick = setInterval(tickPlayers, 500);
+    // The board's player has no topic: asked every two seconds while the players are shown.
+    refreshLocalPlayer();
+    clearInterval(au.lpTick);
+    au.lpTick = setInterval(() => { if (panes.audio === 'players' && !document.hidden) refreshLocalPlayer(); }, 2000);
     if (Object.keys(au.listeners).length) drawListening();
   },
   hide() {
     // Listening goes on in the background (it is what someone asked for); only the visuals stop.
     clearInterval(au.tick);
     au.tick = null;
+    clearInterval(au.lpTick);
+    au.lpTick = null;
   },
   onMessage(topic, data) {
     if (topic === 'pipewire') return renderPipewire(data);

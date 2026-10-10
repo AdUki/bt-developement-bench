@@ -312,6 +312,40 @@ transport, for its volume. `items` are what browsing listed (see below), in list
 Browsing folders: `POST /api/media/players/browse` with `"folder": "<player>/NowPlaying"`, `"<player>/Filesystem"`,
 or a folder item's path. Its answer also has `folder`, the name the player gives the folder now listed.
 
+### The board's player
+
+The board's own AVRCP player: what a car, speaker or headset the board plays to sees as the
+source's player, with its track and controls, and a library it can browse (docs/audio.md "The
+board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPlayer`, object
+`/org/btbench/player`) on every adapter while it is enabled.
+
+`GET /api/media/local-player`:
+
+```json
+{"enabled": true, "path": "/org/btbench/player", "registered": ["/org/bluez/hci0"], "error": "",
+ "status": "playing", "track": {"id": 2, "Title": "Sine 440 Hz", "Artist": "btbench",
+ "Album": "Test signals", "Genre": "Test signal", "Number": 2, "NumberOfTracks": 9},
+ "position": {"index": 1, "count": 9}, "queue": [{"id": 1, "name": "Sine 1 kHz"}, ...],
+ "stream": 3, "sink": "bluez_output.0C_32_3A_D6_C3_44.1",
+ "library": [{"id": 0, "parent": null, "name": "Test signals", "type": "folder", "playable": true},
+             {"id": 1, "parent": 0, "name": "Sine 1 kHz", "type": "audio"}, ...]}
+```
+
+`status` is `stopped`, `playing` or `paused`; `track` uses MediaItem1's metadata names (a radio's
+`Title` is its ICY title once the station sends one); `queue` is the now playing list, and
+`position` where in it the track is. `stream` is the audio stream that plays it
+(`/api/audio/streams/{id}`), `sink` the endpoint it plays into: the Bluetooth sink (PipeWire's
+default sink if that is one, else the first), or PipeWire's default sink when there is none.
+`registered` lists the adapters BlueZ took it on; `error` says why the last play or registration
+failed. `library` is the whole tree, ids are stable while btbenchd runs.
+
+| route | body | what |
+|---|---|---|
+| `PUT /api/media/local-player` | `{"enabled": bool}` | offer the player to devices or not (kept in `/data/btbench/player.json`, on by default); answered with the state |
+| `POST /api/media/local-player` | `{"action": "play\|pause\|stop\|next\|previous"}` | the controls a remote has; `play` with nothing chosen plays the test signals |
+|  |  | Both answer with the state at once; starting or stopping the stream follows within a second (the next GET shows it) |
+| `POST /api/media/local-player` | `{"play": <id>}` or `{"enqueue": <id>}` | play a library entry (a folder: its tracks; a track: in its folder, so next and previous go through it), or add it to the now playing list |
+
 ### AVDTP browsing
 
 `POST /api/media/avdtp/{addr}?timeout_s=15` asks the device itself for its stream endpoints, over

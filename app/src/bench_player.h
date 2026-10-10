@@ -1,0 +1,183 @@
+#pragma once
+
+// The board's own media player, for what it plays to (a car, a speaker, headphones: the board as
+// A2DP source): registered with org.bluez.Media1 on every adapter, so BlueZ's AVRCP target shows
+// it to the remote controller with its track and play state, takes play/pause/next/previous from
+// it, and lets it browse a media library (docs/audio.md "The board's player"). Browsing needs the
+// BlueZ series in yocto/meta-btbench/recipes-connectivity/bluez5/bluez5/ (upstream BlueZ answers
+// the target's browsing commands with "invalid scope"); without it the player still shows and
+// plays.
+//
+// The library: test signals (tones, a sweep, noise, silence, and a folder of levels) and the radio
+// stations of the Listen page. Playing an item starts an audio stream (audio/engine.h) into the
+// Bluetooth sink; the folder it came from, or what was added to it, is the now playing list that
+// next and previous move through. A radio stream's ICY title becomes the track's title.
+//
+// The D-Bus side follows BlueZ's target role documents: the player object implements
+// org.mpris.MediaPlayer2.Player and org.bluez.MediaFolder1 (the root of the library), each item an
+// org.bluez.MediaItem1 under <player>/item/<n>. Everything that touches the bus runs on the bus
+// thread; starting and stopping streams (which runs pw-dump and spawns processes) runs on a worker
+// of its own, so a slow PipeWire never stalls the pairing agent.
+
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <nlohmann/json.hpp>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "bluetooth.h"
+#include "dbus_export.h"
+
+namespace btb {
+
+namespace audio {
+class AudioEngine;
+}
+
+// One entry of the library: a folder or something to play.
+struct LibItem {
+  int id = 0;          // its index in the library; the object is <player>/item/<id>
+  int parent = -1;     // -1: in the root
+  std::string name;
+  bool folder = false;
+  std::string folder_type = "mixed";  // MediaItem1 FolderType
+  bool playable = false;              // a folder: plays its tracks
+  nlohmann::json source;              // what to play: a POST /api/audio/streams "source"
+  std::string artist, album, genre;
+  uint32_t duration_ms = 0;  // 0: no end (a tone, a radio)
+  std::vector<int> children;
+};
+
+// The library and the now playing list, without any bus: what the D-Bus methods and the API
+// compute from (tested in tests/test_bench_player.cpp).
+class BenchLibrary {
+ public:
+  // The test signals and the radio stations ({"stations": [{name, url}]} as AudioEngine::radio()).
+  void build(const nlohmann::json& radio);
+  const std::vector<LibItem>& items() const { return items_; }
+  const LibItem* find(int id) const;
+  const std::vector<int>& root() const { return root_; }
+  // The folder's entries (root: -1).
+  const std::vector<int>& children(int folder) const;
+  // The tracks a folder plays: its entries that are not folders, in order.
+  std::vector<int> tracks(int folder) const;
+  // Tracks whose name has every word of `q` (case-insensitive), in library order.
+  std::vector<int> search(const std::string& q) const;
+  // "/Filesystem/Test signals/Levels"
+  std::string folder_name(int folder) const;
+
+ private:
+  int add(LibItem it);
+  std::vector<LibItem> items_;
+  std::vector<int> root_;
+};
+
+// MediaItem1's Metadata of a track: Title, Artist, Album, Genre, Number, NumberOfTracks, Duration.
+nlohmann::json lib_item_metadata(const BenchLibrary& lib, const LibItem& it);
+
+class BenchPlayer : public BusUser {
+ public:
+  static constexpr const char* kPath = "/org/btbench/player";
+
+  // `state_file` keeps whether the player is offered at all (on by default).
+  BenchPlayer(BtManager& bt, audio::AudioEngine& audio, std::string state_file = "");
+  ~BenchPlayer() override;
+  BenchPlayer(const BenchPlayer&) = delete;
+  BenchPlayer& operator=(const BenchPlayer&) = delete;
+
+  // GET /api/media/local-player: {enabled, registered:[adapter paths], error, status, track,
+  // position:{index, count}, queue:[{id, name}], stream, sink, library:[...tree...]}
+  nlohmann::json state() const;
+  bool set_enabled(bool on, std::string* err);
+  // The console's controls, the same as the remote's: play, pause, stop, next, previous; and
+  // playing (or queueing) a library entry by its id. False with *err for an unknown one.
+  bool action(const std::string& what, std::string* err);
+  bool play_item(int id, bool enqueue, std::string* err);
+
+  // BusUser
+  void bus_opened(sd_bus* bus) override;
+  void bus_closing() override;
+  void bluez_ready(sd_bus* bus, const std::string& adapter_path) override;
+  void bluez_gone() override;
+  void tick(sd_bus* bus, uint64_t now_ns) override;
+
+  // The D-Bus handlers (static trampolines in the .cpp reach these).
+  int on_mpris(sd_bus_message* m, const std::string& method, sd_bus_error* e);
+  int on_change_folder(sd_bus_message* m, sd_bus_error* e);
+  int on_list_items(sd_bus_message* m, sd_bus_error* e);
+  int on_search(sd_bus_message* m, sd_bus_error* e);
+  int on_item(sd_bus_message* m, const std::string& method, sd_bus_error* e);
+  int get_prop(sd_bus_message* reply, const std::string& iface, const std::string& prop,
+               const std::string& path, sd_bus_error* e);
+  bool item_exists(const std::string& path, int* id) const;
+  size_t item_count() const;
+
+ private:
+  enum class Status { stopped, playing, paused };
+  struct Cmd {
+    enum Kind { play, stop, pause, poll } kind;
+  };
+
+  void load_state();
+  void save_state() const;
+  // Folder object path → folder id (-1 root), or false.
+  bool folder_of(const std::string& path, int* folder) const;
+  std::vector<int> folder_entries_locked(int folder) const;
+  std::string item_path(int id) const;
+  void append_metadata(sd_bus_message* m, int id, bool mpris) const;
+  void append_item_props(sd_bus_message* m, const LibItem& it) const;
+  void register_on(sd_bus* bus, const std::string& adapter);
+  void unregister_all(sd_bus* bus);
+  void changed(bool track, bool status, bool playlist);
+  void emit_changes(sd_bus* bus);
+  void queue_cmd(Cmd::Kind k);
+  void run_worker();
+  void start_stream();
+  void stop_stream();
+  nlohmann::json pick_sink();
+
+  BtManager& bt_;
+  audio::AudioEngine& audio_;
+  const std::string state_file_;
+
+  mutable std::mutex m_;
+  bool enabled_ = true;
+  BenchLibrary lib_;
+  std::vector<int> queue_;  // the now playing list: track ids
+  int pos_ = -1;            // in queue_
+  Status status_ = Status::stopped;
+  int stream_ = 0;          // the stream that plays it (0: none)
+  std::string sink_;        // where it plays
+  std::string icy_title_;   // a radio's current title
+  std::string error_;
+  std::vector<int> search_;
+  int folder_ = -1;  // MediaFolder1's current folder (the root, an item, or kNowPlaying/kSearch)
+  bool pending_track_ = false, pending_status_ = false, pending_playlist_ = false;
+
+  // Bus thread only.
+  sd_bus* bus_ = nullptr;
+  sd_bus_slot* slot_player_ = nullptr;
+  sd_bus_slot* slot_folder_ = nullptr;
+  sd_bus_slot* slot_items_ = nullptr;
+  sd_bus_slot* slot_enum_ = nullptr;
+  std::set<std::string> registered_;   // adapters it is registered with
+  std::set<std::string> registering_;  // asked, no answer yet
+  uint64_t next_check_ns_ = 0;
+  bool bluez_ = false;
+  std::string registered_json_;
+
+  std::thread worker_;
+  std::mutex wm_;
+  std::condition_variable wcv_;
+  std::deque<Cmd> cmds_;
+  bool quit_ = false;
+};
+
+}  // namespace btb

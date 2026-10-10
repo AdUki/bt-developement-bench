@@ -62,6 +62,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
   - `/data/btbench/hid-remote.json` — the HID remote's, `{"enabled": true, "name": "btbench remote"}`.
+  - `/data/btbench/player.json` — whether btbenchd offers its AVRCP player, `{"enabled": true}`.
   - `/tmp/btbench/obex/` — OBEX files and obexd's root, in RAM (btbenchd `--volatile-dir`): `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
   - `/data/btbench/ssh/` — sshd's host keys (btbench-sshkeys); sshd reads them through `/run/btbench/ssh`.
   - `/data/btbench/timesync/` — systemd-timesyncd's clock, bound over `/var/lib/systemd/timesync` (btbench-data).

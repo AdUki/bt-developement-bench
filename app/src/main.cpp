@@ -235,7 +235,13 @@ int main(int argc, char** argv) {
                    [&obex](const std::string& noplugin) { obex.set_noplugin(noplugin); });
   obex.set_noplugin(setup.obex_noplugin());
 
-  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup};
+  // The board's own AVRCP player, for what it plays to (a car, a speaker): its library plays
+  // through the audio streams.
+  btb::BenchPlayer player(bt, audio, data_dir + "/player.json");
+  bt.add_user(&player);
+
+  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,
+                 player};
   btb::WebServer server(deps, wopt);
   bt.on_change([&server, &hid_host](bool request) {
     server.publish_bt(request);

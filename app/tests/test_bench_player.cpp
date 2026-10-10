@@ -1,0 +1,113 @@
+// The board's player: the library a remote browses (its folders, tracks and what they play), the
+// metadata a track carries, and search — what bench_player.cpp answers BlueZ with, without a bus.
+#include "bench_player.h"
+#include "check.h"
+
+using namespace btb;
+using json = nlohmann::json;
+
+namespace {
+
+const json kRadio = json{{"stations", json::array({json{{"name", "Groove Salad"}, {"url", "https://ice1.somafm.com/gs"}},
+                                                  json{{"name", "no url"}},
+                                                  json{{"name", "Drone Zone"}, {"url", "https://ice1.somafm.com/dz"}}})}};
+
+int child_named(const BenchLibrary& lib, int folder, const std::string& name) {
+  for (int id : lib.children(folder))
+    if (lib.items()[id].name == name) return id;
+  return -1;
+}
+
+void test_tree() {
+  BenchLibrary lib;
+  lib.build(kRadio);
+  // The root: the test signals and the radio, both folders that play.
+  CHECK_EQ(lib.root().size(), 2u);
+  const int sig = child_named(lib, -1, "Test signals");
+  const int radio = child_named(lib, -1, "Radio");
+  CHECK(sig >= 0 && radio >= 0);
+  CHECK(lib.find(sig)->folder && lib.find(sig)->playable);
+  CHECK_EQ(lib.find(radio)->folder_type, std::string("playlists"));
+  // A station without a URL is left out.
+  CHECK_EQ(lib.children(radio).size(), 2u);
+  const LibItem* gs = lib.find(lib.children(radio)[0]);
+  CHECK_EQ(gs->source.value("type", ""), std::string("url"));
+  CHECK_EQ(gs->source.value("title", ""), std::string("Groove Salad"));
+  // A folder in a folder, and the tracks of a folder are its entries that are not folders.
+  const int levels = child_named(lib, sig, "Levels");
+  CHECK(levels >= 0);
+  CHECK_EQ(lib.find(levels)->parent, sig);
+  CHECK_EQ(lib.tracks(levels).size(), 6u);
+  CHECK_EQ(lib.tracks(sig).size(), lib.children(sig).size() - 1);
+  CHECK_EQ(lib.folder_name(levels), std::string("/Filesystem/Test signals/Levels"));
+  CHECK_EQ(lib.folder_name(-1), std::string("/Filesystem"));
+  // Ids are indexes, and a track is nobody's folder.
+  for (const LibItem& it : lib.items()) CHECK_EQ(lib.find(it.id), &it);
+  CHECK(lib.children(lib.tracks(sig)[0]).empty());
+  CHECK(lib.find(-1) == nullptr);
+  CHECK(lib.find(static_cast<int>(lib.items().size())) == nullptr);
+  // Rebuilt (the radio list changed): the same tree again, not twice.
+  lib.build(json::object());
+  CHECK_EQ(lib.root().size(), 2u);
+  CHECK(lib.children(child_named(lib, -1, "Radio")).empty());
+}
+
+void test_sources() {
+  BenchLibrary lib;
+  lib.build(kRadio);
+  const int sig = child_named(lib, -1, "Test signals");
+  const LibItem* lr = lib.find(child_named(lib, sig, "Left 1 kHz, right 2 kHz"));
+  CHECK_EQ(lr->source.value("type", ""), std::string("tone"));
+  CHECK_EQ(lr->source.value("freq_right", 0.0), 2000.0);
+  // The sweep ends (a track that ends is what a remote sees go to the next one) and says how long.
+  const LibItem* sweep = lib.find(child_named(lib, sig, "Sweep 20 Hz to 20 kHz"));
+  CHECK_EQ(sweep->source.value("repeat", true), false);
+  CHECK_EQ(sweep->duration_ms, 10000u);
+  const LibItem* zero = lib.find(child_named(lib, child_named(lib, sig, "Levels"), "Sine 1 kHz at 0 dBFS"));
+  CHECK(zero != nullptr);
+  CHECK_EQ(zero->source.value("level_db", -1.0), 0.0);
+}
+
+void test_metadata() {
+  BenchLibrary lib;
+  lib.build(kRadio);
+  const int sig = child_named(lib, -1, "Test signals");
+  const std::vector<int> t = lib.tracks(sig);
+  const json md = lib_item_metadata(lib, *lib.find(t[1]));
+  CHECK_EQ(md.value("Title", ""), lib.find(t[1])->name);
+  CHECK_EQ(md.value("Album", ""), std::string("Test signals"));
+  // Its number among the folder's tracks (the Levels folder is not counted).
+  CHECK_EQ(md.value("Number", 0u), 2u);
+  CHECK_EQ(md.value("NumberOfTracks", 0u), static_cast<unsigned>(t.size()));
+  CHECK(!md.contains("Duration"));  // a tone has no end
+  const json sw = lib_item_metadata(lib, *lib.find(child_named(lib, sig, "Sweep 20 Hz to 20 kHz")));
+  CHECK_EQ(sw.value("Duration", 0u), 10000u);
+}
+
+void test_search() {
+  BenchLibrary lib;
+  lib.build(kRadio);
+  // Every word, any case, anywhere in the name; tracks only.
+  const std::vector<int> r = lib.search("sine 1 KHZ");
+  CHECK(!r.empty());
+  for (int id : r) {
+    const std::string n = lib.find(id)->name;
+    CHECK(n.find("Sine") != std::string::npos && n.find("1") != std::string::npos &&
+          n.find("kHz") != std::string::npos);
+  }
+  CHECK_EQ(lib.search("10 khz").size(), 1u);
+  CHECK_EQ(lib.search("drone").size(), 1u);
+  CHECK(lib.search("levels").empty());  // a folder is not a result
+  CHECK(lib.search("").empty());
+  CHECK(lib.search("nothing like it").empty());
+}
+
+}  // namespace
+
+int main() {
+  test_tree();
+  test_sources();
+  test_metadata();
+  test_search();
+  return report("test_bench_player");
+}

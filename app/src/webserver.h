@@ -9,6 +9,7 @@
 #include "adv.h"
 #include "audio/engine.h"
 #include "audio/pwtop.h"
+#include "bench_player.h"
 #include "obex/obex.h"
 #include "bluetooth.h"
 #include "gatt_server.h"
@@ -55,6 +56,7 @@ struct Deps {
   HidRemote& hid_remote;
   HidHost& hid_host;
   Setup& setup;
+  BenchPlayer& player;
 };
 
 // Route installers, one per file (api_*.cpp).

@@ -186,8 +186,11 @@ as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
 
 ## bluetoothd
 
-- **Version.** BlueZ comes from bluez.git at `BTBENCH_BLUEZ_SRCREV` (`yocto/conf/versions.conf`),
+- **Version.** BlueZ comes from the fork at `BTBENCH_BLUEZ_SRCREV` (`yocto/conf/versions.conf`),
   the revision `src/bluez` starts from (see `docs/dev.md`).
+- **The bench's fork.** The recipe fetches from `github.com/AdUki/bluez`, whose branch `bench`
+  has the bench's commits on top of upstream (docs/dev.md "The forks"): AVRCP browsing in the
+  target role, for the board's player (below).
 - **What the image adds.** The deprecated `hci*` tools, the testers (`mgmt-tester`,
   `l2cap-tester`, `iso-tester`, ...), `btvirt`, `btpclient`, every uninstalled tool
   (`bluez5-noinst-tools`), `btmgmt` (its own package) and the Python scripts in
@@ -222,6 +225,43 @@ Run `systemctl restart bluetooth` after editing (`bench bt-args "-d"` does both)
 **LE Audio on the Zero W.** The BCM43430A1 is a Bluetooth 4.1 controller without ISO channels.
 To exercise BAP, use a USB dongle that has them (with the gadget off, `BTBENCH_GADGET = "off"`)
 or a virtual controller: `btvirt -l2` or a vhci device.
+
+## The board's player
+
+When the board plays to something (a car, a speaker, headphones: the board as A2DP source), that
+device is the AVRCP controller and the board the target: it shows the source's player, its track
+and state, and sends play, pause, next and previous. btbenchd registers a player of its own for
+that, `/org/btbench/player`, with BlueZ on every adapter (`org.bluez.Media1.RegisterPlayer`), in
+place of the stand-in PipeWire can register (`bluez5.dummy-avrcp-player`, off by default), which
+has a play state and nothing else.
+
+- **Its library.** *Test signals*: sines at 100 Hz, 440 Hz, 1 kHz and 10 kHz, 1 kHz left with
+  2 kHz right, a 10 s sweep from 20 Hz to 20 kHz (a track that ends, so the remote sees the next
+  one start), pink and white noise, silence, and a *Levels* folder (1 kHz from 0 to −60 dBFS).
+  *Radio*: the stations of the Listen page (`/data/btbench/radio.json`, read at start).
+- **Playing.** Playing an entry starts an audio stream (above) into the Bluetooth sink: PipeWire's
+  default sink when it is a Bluetooth one, else the first Bluetooth sink, else the default sink.
+  The folder the entry is in (or the folder played) becomes the now playing list; next and
+  previous go round it, and a track that ends (the sweep, a station that drops) is followed by
+  the next. Pause and stop end the stream; play starts the track again. A station's ICY title
+  becomes the track's title, the station its album.
+- **Browsing.** The remote can browse the library, the now playing list and search results
+  (names, by every word), play an entry and add one to the now playing list. Upstream BlueZ
+  rejects these commands in the target role; the bench's fork answers them (the image's BlueZ,
+  and `make bluez` from `src/bluez`). With an
+  unpatched bluetoothd the player still shows, plays and changes tracks, without the library.
+- **Off.** `PUT /api/media/local-player {"enabled": false}` (the console's *Offer it*) unregisters
+  it, kept in `/data/btbench/player.json`. BlueZ's target then has no player, as in upstream's
+  default.
+
+To try it without a car: two virtual controllers, `btvirt -l2` on the board, are two more
+adapters for bluetoothd (hci1, hci2), and the player is registered on both. Power both on, pair
+hci1 with hci2 (`btmgmt --index 1 pair -c 3 <hci2's address>`), connect AVRCP from hci1
+(`ConnectProfile` 0000110e-…), and hci1's device object gets `avrcp/player0`: the board's player
+as a controller sees it, browsed with its `org.bluez.MediaFolder1` (`ChangeFolder`, `ListItems`,
+`Search`) and played with an item's `Play`. The virtual devices offer A2DP too, and WirePlumber
+was seen spinning on them (pw-dump timing out) until it was restarted: remove them
+(`pkill btvirt`) and `systemctl restart wireplumber` when done.
 
 ## The capture ring
 

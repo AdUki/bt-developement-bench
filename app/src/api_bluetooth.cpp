@@ -382,6 +382,33 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     d.bt.touch();
   }));
 
+  // ---- AVRCP: the board's own player (bench_player.h), what a car or speaker browses ----------
+
+  svr.Get("/api/media/local-player", [&d](const httplib::Request&, httplib::Response& res) {
+    send_json(res, d.player.state());
+  });
+
+  // Body: {"enabled": true|false}: whether the player is registered with BlueZ at all.
+  svr.Put("/api/media/local-player", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    if (!j.contains("enabled") || !j["enabled"].is_boolean()) return send_error(res, 400, "body is {\"enabled\": bool}");
+    std::string err;
+    if (!d.player.set_enabled(j["enabled"].get<bool>(), &err)) return send_error(res, 500, err);
+    send_json(res, d.player.state());
+  }));
+
+  // Body: {"action": "play|pause|stop|next|previous"}, or {"play": <library id>} (a folder plays its
+  // tracks), or {"enqueue": <library id>} (added to the now playing list).
+  svr.Post("/api/media/local-player", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    std::string err;
+    bool ok;
+    if (j.contains("action")) ok = d.player.action(lower(j["action"].get<std::string>()), &err);
+    else if (j.contains("play")) ok = d.player.play_item(j["play"].get<int>(), false, &err);
+    else if (j.contains("enqueue")) ok = d.player.play_item(j["enqueue"].get<int>(), true, &err);
+    else return send_error(res, 400, "body is {\"action\"}, {\"play\": id} or {\"enqueue\": id}");
+    if (!ok) return send_error(res, 400, err);
+    send_json(res, d.player.state());
+  }));
+
   // Body: {"path": "<a MediaPlayer1>"} and any of repeat (off|singletrack|alltracks|group),
   // shuffle (off|alltracks|group), equalizer (off|on), scan (off|alltracks|group).
   svr.Put("/api/media/players", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
