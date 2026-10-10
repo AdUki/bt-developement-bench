@@ -610,7 +610,7 @@ function localPlayerCard(s) {
     <div class="small muted">${s.enabled ? (reg ? 'Offered on ' + esc(reg) : 'Waiting for BlueZ') : 'Not offered to devices'}${s.sink ? ' · plays to ' + esc(s.sink) : ''}</div>
     ${s.error ? `<div class="small bad">${esc(s.error)}</div>` : ''}
     <div class="pl-controls">
-      ${btn('previous', 'Previous')}${btn(playing ? 'pause' : 'play', playing ? 'Pause' : 'Play', 'main')}${btn('next', 'Next')}${btn('stop', 'Stop')}
+      ${btn('previous', 'Previous')}${btn('play', 'Play')}${btn('pause', 'Pause')}${btn('next', 'Next')}${btn('stop', 'Stop')}
       <span class="spacer"></span>
       <label class="row small"><input type="checkbox" id="lp-enabled"${s.enabled ? ' checked' : ''}> Offer it</label>
     </div>
