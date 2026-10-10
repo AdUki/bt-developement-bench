@@ -179,7 +179,10 @@ is done), sorted by handle:
 ```
 
 `value` is what BlueZ has cached (the last read or notification), `null` when it has none; `text`
-is the same bytes as text when they are printable.
+is the same bytes as text: always for a characteristic the spec defines as a UTF-8 string (Device
+Name, the Device Information strings, a track title, a User Description), otherwise when there are
+at least two printable bytes (a lone byte is far more often a number: a battery level of 90 is
+"Z"). Reads and `gatt.notify` carry `text` the same way.
 
 | route | body | what |
 |---|---|---|

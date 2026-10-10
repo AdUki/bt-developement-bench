@@ -48,6 +48,10 @@ nlohmann::json model_devices(const nlohmann::json& objs, const std::string& adap
 // characteristics:[{path, handle, uuid, name, flags:[...], value:"hex", text, notifying,
 // descriptors:[{path, handle, uuid, name, value, text}]}]}]}, by handle.
 nlohmann::json model_gatt(const nlohmann::json& objs, const std::string& dev_path);
+// A characteristic's or descriptor's value as text: of one whose format the spec says is a UTF-8
+// string (Device Name, the Device Information strings, a track title, a User Description), every
+// byte of it; of any other, printable()'s guess, which leaves out a lone byte.
+std::string gatt_text(const std::string& uuid, const std::vector<uint8_t>& value);
 // A characteristic's or descriptor's handle: its Handle property, or the hex BlueZ puts at the end
 // of the object's name (char002a), which is the same number.
 uint16_t gatt_handle(const std::string& path, const nlohmann::json& props);

@@ -262,7 +262,17 @@ void test_names() {
 
 }  // namespace
 
+// String characteristics are text at any length; anything else needs printable()'s two bytes.
+void test_gatt_text() {
+  CHECK_EQ(gatt_text("00002a27-0000-1000-8000-00805f9b34fb", {'1'}), std::string("1"));  // Hardware Revision
+  CHECK_EQ(gatt_text("2a29", {'S', 'U', 0}), std::string("SU"));
+  CHECK_EQ(gatt_text("2a19", {0x5a}), std::string());  // a battery level, not "Z"
+  CHECK_EQ(gatt_text("2a00", {0x01, 'a'}), std::string());  // not a string after all
+  CHECK_EQ(gatt_text("2b97", {}), std::string());
+}
+
 int main() {
+  test_gatt_text();
   std::string err;
   uuid_names().load(std::string(BTB_WWW_DIR) + "/uuids.json", &err);
   test_addresses();

@@ -339,7 +339,9 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
                                      kGattTimeoutMs);
     if (!r.ok) return reply_error(res, r);
     const std::vector<uint8_t> v = bytes_of(json{{"v", r.reply.empty() ? json::array() : r.reply[0]}}, "v");
-    send_json(res, json{{"handle", handle}, {"path", path}, {"value", to_hex(v)}, {"text", printable(v)}});
+    const auto objs = d.bt.objects();
+    const std::string uuid = objs->contains(path) && (*objs)[path].contains(iface) ? str_of((*objs)[path][iface], "UUID") : "";
+    send_json(res, json{{"handle", handle}, {"path", path}, {"value", to_hex(v)}, {"text", gatt_text(uuid, v)}});
   });
 
   // Body: {"value": "hex", "type": "request|command|reliable" (default request), "offset": N}.

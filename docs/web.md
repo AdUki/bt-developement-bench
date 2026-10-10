@@ -69,9 +69,13 @@ sizes; the raw map under a disclosure), the last key pressed and a live log of p
 *Media keys control what plays*: a remote's play/pause, next, previous and volume keys drive the
 connected phone's player, as with a speaker.
 
-**LE** — *GATT explorer*: pick a device, connect, and its services, characteristics and descriptors appear by handle with
-read, write (hex, or `text:…`; request / command / reliable as the flags allow) and notify; every
-value change lands in the notification log; below it, the *advertisers in range*, strongest first,
+**LE** — *GATT explorer*: pick a device, connect (a dual-mode device such as a speaker connects
+and disconnects its LE link only, so a classic connection carrying audio stays), and its services
+appear by handle, folded when there are more than four (each says how many characteristics it
+has; what you open stays open across a reload). A characteristic is one line: its value (as text
+too when it is a string) and read, write (hex, or `text:…`; request / command / reliable as the
+flags allow) and notify; its descriptors read the same way. Every value change lands in the
+notification log; below it, the *advertisers in range*, strongest first,
 with what each advertisement carried. *Advertise*: a form for `LEAdvertisingManager1`
 (type, name, UUIDs, discoverable; under *More fields* manufacturer and service data as `id:hex`,
 appearance, includes, intervals, TX power, timeout); several at once, each with its state (an advertisement whose timeout ran out shows

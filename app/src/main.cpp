@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
                                               {"handle", handle},
                                               {"uuid", uuid},
                                               {"value", btb::to_hex(value)},
-                                              {"text", btb::printable(value)},
+                                              {"text", btb::gatt_text(uuid, value)},
                                               {"ts", now}});
   });
 

@@ -41,16 +41,25 @@ function leOnBt(b) {
   // The first time, the explorer follows the selection by itself (a connected device first).
   if (!gx.addr && sel.value) gx.addr = sel.value;
   const cur = b.devices.find(d => d.address === sel.value);
-  setText($('gx-state'), cur ? (cur.connected ? (cur.services_resolved ? '' : 'Connected, resolving services…')
+  // A dual-mode device (a speaker, a phone) connected over classic alone has no LE GATT to show:
+  // the explorer connects and disconnects its LE bearer, not the whole device.
+  const le = gattBearer(cur);
+  const on = cur && (le ? cur.bearers.le.connected : cur.connected);
+  setText($('gx-state'), cur ? (on ? (cur.services_resolved ? '' : 'Connected, resolving services…')
+    : le && cur.connected ? 'Connected over classic only: Connect LE to read its LE services.'
     : 'Not connected: Connect to read its services.') + (cur.busy ? ' · ' + cur.busy : '') + (cur.error ? ' · ' + cur.error : '') : '');
-  setText($('gx-connect'), cur && cur.connected ? 'Disconnect' : 'Connect');
+  setText($('gx-connect'), `${on ? 'Disconnect' : 'Connect'}${le ? ' LE' : ''}`);
   // A device that just resolved its services gets its tree without another click.
   if (cur && cur.services_resolved && gx.addr === cur.address && !gx.loaded) loadGatt();
 }
 
 // ---------------------------------------------------------------- GATT explorer
 
-const gx = {addr: '', loaded: false, tree: null};
+const gx = {addr: '', loaded: false, tree: null, open: new Set()};
+
+// "le" for a device seen on both transports, whose LE bearer the explorer drives; null otherwise.
+const gattBearer = d => d && d.bearers && d.bearers.le && d.bearers.bredr ? 'le' : null;
+const quoted = t => t ? '“' + t + '”' : '';
 
 function charRow(c) {
   const f = c.flags;
@@ -68,23 +77,27 @@ function charRow(c) {
   if (can('notify') || can('indicate'))
     acts.push(`<button data-g="notify" data-h="${c.handle}" data-on="${c.notifying ? 0 : 1}">${c.notifying ? 'Stop notify' : 'Notify'}</button>`);
   const descs = c.descriptors.map(d => `<div class="gatt-dsc"><span class="mono">0x${d.handle.toString(16).padStart(4, '0')}</span>
-      ${esc(d.name || d.uuid)} <span class="mono">${esc(d.value || '')}</span> ${d.text ? '“' + esc(d.text) + '”' : ''}
-      <button class="small-btn" data-g="read" data-h="${d.handle}">read</button></div>`).join('');
+      ${esc(d.name || d.uuid)} <span class="mono" id="gv-${d.handle}">${esc(d.value || '')}</span> <span id="gt-${d.handle}">${esc(quoted(d.text))}</span>
+      <button class="small-btn" data-g="read" data-h="${d.handle}">Read</button></div>`).join('');
   return `<div class="gatt-chr">
-    <div><span class="mono">${h}</span> <b>${esc(c.name || '')}</b> <span class="mono small muted">${esc(c.uuid)}</span>
+    <div class="info"><div><span class="mono">${h}</span> <b>${esc(c.name || '')}</b> <span class="mono small muted">${esc(c.uuid)}</span>
       <span class="small muted">${esc(f.join(', '))}</span></div>
-    <div class="small">value <span class="mono" id="gv-${c.handle}">${esc(c.value == null ? '—' : c.value || '(empty)')}</span>
-      <span id="gt-${c.handle}">${c.text ? '“' + esc(c.text) + '”' : ''}</span></div>
+    <div class="small val"><span class="mono" id="gv-${c.handle}">${esc(c.value == null ? '—' : c.value || '(empty)')}</span>
+      <span id="gt-${c.handle}">${esc(quoted(c.text))}</span></div></div>
     <div class="acts">${acts.join('')}</div>${descs}</div>`;
 }
 
 function renderGatt() {
   const t = gx.tree;
   if (!t) return setHTML($('gx-tree'), '');
-  setHTML($('gx-tree'), t.services.length ? t.services.map(s => `<div class="gatt-svc">
-      <div class="title"><span class="mono">0x${s.handle.toString(16).padStart(4, '0')}</span> ${esc(s.name || 'Service')}
-        <span class="mono small muted">${esc(s.uuid)}</span>${s.primary ? '' : ' <span class="small muted">secondary</span>'}</div>
-      ${s.characteristics.map(charRow).join('')}</div>`).join('')
+  // A few services open, many folded (an LE Audio device has a dozen): the headers are the map,
+  // and what was opened stays open across a reload.
+  const open = s => gx.open.has(s.uuid + '@' + s.handle) || t.services.length <= 4;
+  setHTML($('gx-tree'), t.services.length ? t.services.map(s => `<details class="gatt-svc" data-key="${esc(s.uuid + '@' + s.handle)}"${open(s) ? ' open' : ''}>
+      <summary class="title"><span class="mono">0x${s.handle.toString(16).padStart(4, '0')}</span> ${esc(s.name || 'Service')}
+        <span class="mono small muted">${esc(s.uuid)}</span>${s.primary ? '' : ' <span class="small muted">secondary</span>'}
+        <span class="small muted count">· ${s.characteristics.length} characteristic${s.characteristics.length === 1 ? '' : 's'}</span></summary>
+      ${s.characteristics.map(charRow).join('')}</details>`).join('')
     : `<div class="small muted">${t.connected ? 'No GATT services on this device yet.' : 'Connect the device to resolve its services.'}</div>`);
 }
 
@@ -106,7 +119,7 @@ function gattAction(op, handle, btn) {
       const v = $('gv-' + handle);
       if (v) v.textContent = r.value || '(empty)';
       const t = $('gt-' + handle);
-      if (t) t.textContent = r.text ? '“' + r.text + '”' : '';
+      if (t) t.textContent = quoted(r.text);
       logLine($('gx-log'), `${fmtTime(Date.now())} read 0x${Number(handle).toString(16)}: ${r.value}${r.text ? ' “' + r.text + '”' : ''}`);
     }).catch(fail);
   } else if (op === 'write') {
@@ -117,11 +130,14 @@ function gattAction(op, handle, btn) {
       .catch(fail);
   } else if (op === 'notify') {
     const on = btn.dataset.on === '1';
+    btn.disabled = true;
+    // Only this button changes: a re-render would drop what is typed in the write fields.
     post(`${base}/notify`, {on}).then(() => {
       const c = findChar(Number(handle));
       if (c) c.notifying = on;
-      renderGatt();
-    }).catch(fail);
+      btn.dataset.on = on ? '0' : '1';
+      btn.textContent = on ? 'Stop notify' : 'Notify';
+    }).catch(fail).finally(() => { btn.disabled = false; });
   }
 }
 
@@ -192,15 +208,22 @@ let lePoll = null;
 
 function setupLe() {
   $('gx-load').onclick = loadGatt;
-  $('gx-dev').onchange = () => { gx.addr = $('gx-dev').value; gx.tree = null; gx.loaded = false; renderGatt(); loadGatt(); };
+  $('gx-dev').onchange = () => { gx.addr = $('gx-dev').value; gx.tree = null; gx.loaded = false; gx.open.clear(); renderGatt(); loadGatt(); };
   $('gx-connect').onclick = () => {
     const d = btState && btState.devices.find(x => x.address === $('gx-dev').value);
     if (!d) return;
     gx.addr = d.address;
     gx.loaded = false;
-    post(`/bluetooth/devices/${d.address}/${d.connected ? 'disconnect' : 'connect'}`).catch(fail);
+    const le = gattBearer(d);
+    const on = le ? d.bearers.le.connected : d.connected;
+    post(`/bluetooth/devices/${d.address}/${on ? 'disconnect' : 'connect'}`, le ? {bearer: le} : {}).catch(fail);
   };
   $('gx-clear').onclick = () => logClear($('gx-log'));
+  // Remembered per service, so a reload or a notify keeps what was opened.
+  $('gx-tree').addEventListener('toggle', e => {
+    const k = e.target.dataset && e.target.dataset.key;
+    if (k) e.target.open ? gx.open.add(k) : gx.open.delete(k);
+  }, true);
   $('gx-tree').onclick = e => {
     const b = e.target.closest('button[data-g]');
     if (b) gattAction(b.dataset.g, b.dataset.h, b);
@@ -242,9 +265,11 @@ registerTab('le', {
       logLine($('gx-log'), `${fmtTime(d.ts)} ${d.address} 0x${d.handle.toString(16).padStart(4, '0')} ${d.uuid}: ${d.value}${d.text ? ' “' + d.text + '”' : ''}`);
       if (d.address === gx.addr) {
         const v = $('gv-' + d.handle);
-        if (v) v.textContent = d.value;
+        if (v) v.textContent = d.value || '(empty)';
+        const t = $('gt-' + d.handle);
+        if (t) t.textContent = quoted(d.text);
         const c = findChar(d.handle);
-        if (c) c.value = d.value;
+        if (c) { c.value = d.value; c.text = d.text; }
       }
     } else if (topic === 'gatt.server') {
       logLine($('gs-log'), `${fmtTime(Date.now())} ${d.op} ${d.uuid}${d.value != null ? ' = ' + d.value : ''}${d.device ? ' by ' + d.device : ''}`);

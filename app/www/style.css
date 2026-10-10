@@ -345,10 +345,16 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 
 /* ------------------------------------------------------------------ GATT */
 
-.gatt-svc { margin: 0.7rem 0; border: 1px solid var(--line-soft); border-radius: 6px; overflow: hidden; }
-.gatt-svc > .title { font-weight: 600; padding: 0.4rem 0.7rem; background: var(--well); }
-.gatt-chr { margin: 0; padding: 0.5rem 0.7rem; border-top: 1px solid var(--line-soft); }
-.gatt-chr .acts { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.35rem; }
+.gatt-svc { margin: 0.5rem 0; border: 1px solid var(--line-soft); border-radius: 6px; overflow: hidden; }
+.gatt-svc > .title { font-weight: 600; padding: 0.4rem 0.7rem; background: var(--well); cursor: pointer; }
+.gatt-svc > .title .count { font-weight: 400; }
+/* A characteristic is one line where it fits: what it is and its value, its actions on the right. */
+.gatt-chr { margin: 0; padding: 0.4rem 0.7rem; border-top: 1px solid var(--line-soft);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.8rem; }
+.gatt-chr > .info { flex: 1 1 18rem; min-width: 0; }
+.gatt-chr .val { overflow-wrap: anywhere; }
+.gatt-chr .acts { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
+.gatt-chr > .gatt-dsc { flex-basis: 100%; }
 .gatt-dsc { margin: 0.2rem 0 0 1rem; font-size: 0.82rem; color: var(--muted); }
 
 /* ------------------------------------------------------------------ graphs */

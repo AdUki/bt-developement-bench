@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <set>
 
 #include "a2dp_codec.h"
 #include "dbus_util.h"
@@ -43,7 +44,23 @@ json uuid_list(const std::vector<std::string>& v) {
   return a;
 }
 
-std::string text_of(const std::vector<uint8_t>& b) { return printable(b); }
+}  // namespace
+
+std::string gatt_text(const std::string& uuid, const std::vector<uint8_t>& value) {
+  // utf8s characteristics of the assigned numbers, those a bench meets: GAP, Device Information,
+  // the LE Audio descriptions and the Media Control strings, and the User Description descriptor.
+  static const std::set<std::string> kStrings = {
+      "2a00", "2a24", "2a25", "2a26", "2a27", "2a28", "2a29", "2a87", "2a8a", "2a90", "2ab5",
+      "2b7c", "2b83", "2b93", "2b97", "2bbf", "2bc0", "2901"};
+  if (!kStrings.count(uuid_short(uuid))) return printable(value);
+  size_t n = value.size();
+  while (n > 0 && value[n - 1] == 0) --n;
+  for (size_t i = 0; i < n; ++i)
+    if (value[i] < 0x20 || value[i] == 0x7f) return printable(value);  // not a string after all
+  return std::string(value.begin(), value.begin() + static_cast<long>(n));
+}
+
+namespace {
 
 // AVRCP track metadata (MediaPlayer1.Track, MediaItem1.Metadata). Numbers the device does not
 // know are all ones, in whichever width it happens to use, and come out as 0 / null.
@@ -276,7 +293,7 @@ json model_gatt(const json& objs, const std::string& dev_path) {
             {"name", uuid_names().name(uuid)},
             {"flags", strv_of(c, "Flags")},
             {"value", c.contains("Value") ? json(to_hex(v)) : json(nullptr)},
-            {"text", text_of(v)},
+            {"text", gatt_text(uuid, v)},
             {"notifying", bool_of(c, "Notifying")},
             {"mtu", c.contains("MTU") ? json(num_of(c, "MTU")) : json(nullptr)},
             {"descriptors", json::array()}};
@@ -299,7 +316,7 @@ json model_gatt(const json& objs, const std::string& dev_path) {
             {"name", uuid_names().name(uuid)},
             {"flags", strv_of(d, "Flags")},
             {"value", d.contains("Value") ? json(to_hex(v)) : json(nullptr)},
-            {"text", text_of(v)}};
+            {"text", gatt_text(uuid, v)}};
     bool placed = false;
     for (json& s : services) {
       for (json& c : s["characteristics"]) {
