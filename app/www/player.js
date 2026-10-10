@@ -108,7 +108,7 @@ function renderNowPlaying() {
   const btn = (a, d, on, cls) => `<button class="np-btn ${cls || ''}" data-np="${a}" title="${a}" aria-label="${a}"${on ? '' : ' disabled'}>${svg(d)}</button>`;
   // Play and pause both, all the buttons alike, and the state said in words: a phone reports its
   // status late or not at all, and buttons that change with it then offer the wrong one.
-  const status = c.kind === 'phone' ? (c.p.status || 'unknown') : c.kind === 'board' ? (c.s.paused ? 'paused' : c.s.state) : '';
+  const status = c.kind === 'phone' ? (c.p.status || 'unknown') : c.kind === 'board' ? (c.s.paused ? 'paused' : c.s.state === 'running' ? 'playing' : c.s.state) : '';
   setHTML($('np-ctl'), btn('previous', PL_SVG.previous, can.prev) +
     btn('play', PL_SVG.play, can.play) + btn('pause', PL_SVG.pause, can.play) +
     btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop) +
@@ -324,6 +324,8 @@ function upnpServers(search) {
   setHTML($('np-crumbs'), '');
   setHTML($('np-lib'), `<div class="empty-line muted">${search ? 'Searching the network…' : 'Loading…'}</div>`);
   api('/audio/upnp/servers' + (search ? '?search=1' : '')).then(r => {
+    // None known yet (the board only remembers what a search found): search now.
+    if (!search && !r.servers.length) return upnpServers(true);
     pl.libItems = r.servers.map(s => ({kind: 'server', title: s.name, id: s.id, sub: [s.manufacturer, s.model].filter(Boolean).join(' ')}));
     renderLib(r.servers.length ? '' : `<div class="empty-line">No media servers found. <button class="small-btn" data-lib-search="1">Search the network</button></div>`);
   }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));

@@ -114,6 +114,11 @@ class GattServer : public BusUser {
   sd_bus_slot* om_slot_ = nullptr;
   std::string adapter_path_;
   bool registered_ = false;
+  // A RegisterApplication sent and not answered: BlueZ coming back (bluez_ready) and a new
+  // definition (set) can both want to register at once, and the second would be refused with
+  // "already exists" although the first succeeds.
+  bool registering_ = false;
+  bool reregister_ = false;  // asked for while one was in flight: done again after its answer
 };
 
 }  // namespace btb

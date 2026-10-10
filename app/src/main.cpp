@@ -215,6 +215,8 @@ int main(int argc, char** argv) {
   if (pc) sopt.wireplumber_conf = data_dir + "/wireplumber-profiles.conf";
   btb::Setup setup(sopt, [&hid_remote] { return hid_remote.state().value("enabled", false); },
                    [&hid_remote](bool on, std::string* err) {
+                     // Already so: nothing to do (registering again would only be refused).
+                     if (hid_remote.state().value("enabled", false) == on) return true;
                      if (!on) {
                        hid_remote.disable();
                        return true;

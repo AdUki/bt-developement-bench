@@ -516,6 +516,11 @@ void GattServer::build(sd_bus* bus) {
 }
 
 void GattServer::register_app(sd_bus* bus) {
+  if (registering_) {
+    // BlueZ may already have read the objects as they were: register again once it answers.
+    reregister_ = true;
+    return;
+  }
   if (registered_ || adapter_path_.empty() || !bus) return;
   {
     std::lock_guard<std::mutex> lk(m_);
@@ -529,6 +534,7 @@ void GattServer::register_app(sd_bus* bus) {
   if (r >= 0) r = append_dict(m, {});
   if (r >= 0) r = sd_bus_call_async(bus, nullptr, m, app_registered, this, 15 * 1000000ull);
   sd_bus_message_unref(m);
+  registering_ = r >= 0;
   if (r < 0) {
     std::shared_ptr<std::promise<void>> w;
     {
@@ -542,6 +548,14 @@ void GattServer::register_app(sd_bus* bus) {
 }
 
 void GattServer::on_registered(const sd_bus_error* e) {
+  registering_ = false;
+  if (reregister_) {
+    reregister_ = false;
+    registered_ = !e;
+    if (registered_) unregister_app(bus_);
+    register_app(bus_);  // its answer completes the waiter
+    return;
+  }
   std::shared_ptr<std::promise<void>> w;
   {
     std::lock_guard<std::mutex> lk(m_);
