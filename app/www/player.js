@@ -21,6 +21,7 @@ const pl = {
   queueItems: [],      // the phone's now-playing list
   queueAt: 0,          // when it was read
   tick: null,
+  ticks: 0,
 };
 
 const PL_SVG = {
@@ -230,7 +231,13 @@ function hearCheck() {
   if (stuck && Date.now() - pl.heardAt > 4000) hearConnect();
 }
 ['error', 'ended', 'stalled'].forEach(ev => npAudio.addEventListener(ev, () => setTimeout(hearCheck, 1000)));
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { pl.heardAt = 0; hearCheck(); } });
+// Back from the background — shown again, thawed after the browser froze the page (Page
+// Lifecycle "resume"), restored from the back/forward cache, or focused: look at once.
+const hearBack = () => { pl.heardAt = 0; hearCheck(); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) hearBack(); });
+document.addEventListener('resume', hearBack);
+window.addEventListener('pageshow', hearBack);
+window.addEventListener('focus', hearBack);
 
 // The lock screen and the notification: what plays, and the keys, which act on the board.
 function setMediaSession() {
@@ -555,7 +562,7 @@ registerTab('player', {
     clearInterval(pl.tick);
     // The progress bar moves between the phone's updates.
     pl.tick = setInterval(() => {
-      if (Date.now() % 3000 < 500) hearCheck();
+      if (++pl.ticks % 6 === 0) hearCheck();  // every 3 s
       const c = current();
       if (c.kind === 'phone' && c.p.status === 'playing') renderTime(playerPosition(c.p), (c.p.track || {}).duration_ms || 0);
     }, 500);
