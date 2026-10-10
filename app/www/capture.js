@@ -36,7 +36,7 @@
           <a class="small-btn btn-link" href="/api/capture/files/${encodeURIComponent(f.name)}" download>Download</a>
           <button class="small-btn" data-an="${esc(f.name)}" title="btmon -a on the board">Summary</button>
           ${f.active ? '' : `<button class="small-btn danger" data-rm="${esc(f.name)}">${armed['cap' + f.name] ? 'Really?' : 'Delete'}</button>`}</td></tr>`).join('')
-      : '<tr><td class="muted">No captures yet: start recording, or the ring fills by itself on the board.</td></tr>');
+      : '<tr><td class="muted empty">No captures yet: start recording, or the ring fills by itself on the board.</td></tr>');
     const open = s.files.find(f => f.name === cv.name);
     if (cv.name && open) {
       cv.active = !!open.active;

@@ -323,6 +323,9 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 .tbl { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
 .tbl th, .tbl td { text-align: left; padding: 0.38rem 0.6rem; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 .tbl tr:last-child td { border-bottom: 0; }
+/* A table's "nothing yet" row is a sentence, not a column: it wraps, or it would push the table
+   wider than a phone. */
+.tbl td.empty { white-space: normal; }
 .tbl th { color: var(--muted); font-weight: 600; font-size: 0.78rem; background: var(--well); border-bottom-color: var(--line); }
 .tbl tr.sel td { background: var(--accent-soft); }
 .tbl tr.click { cursor: pointer; }

@@ -31,7 +31,7 @@ function renderStats(s) {
         <td class="mono">hci${c.index}/${c.handle}${c.connected ? '' : ' ✕'}</td><td>${esc(c.type)}</td><td class="mono">${esc(c.peer)}</td>
         <td>${fmtKbps(c.tx_bps)}</td><td>${fmtKbps(c.rx_bps)}</td><td>${latTxt(c.lat_ms)}</td>
         <td>${c.in_flight} / ${c.credits}</td><td>${media ? media.avdtp.rtp_lost_total : '—'}</td></tr>`;
-    }).join('') : '<tr><td class="muted">No connections seen since the monitor started.</td></tr>');
+    }).join('') : '<tr><td class="muted empty">No connections seen since the monitor started.</td></tr>');
   renderDetail();
 }
 

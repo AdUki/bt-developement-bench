@@ -48,7 +48,7 @@ function renderObex(s) {
         <td>${t.size != null ? fmtBytes(t.size) : '—'}</td>
         <td>${live ? `<button class="small-btn" data-tr="${esc(t.id)}" data-act="${t.status === 'suspended' ? 'resume' : 'suspend'}">${t.status === 'suspended' ? 'Resume' : 'Pause'}</button>
           <button class="small-btn danger" data-tr="${esc(t.id)}" data-act="cancel">Cancel</button>` : ''}</td></tr>`;
-    }).join('') : '<tr><td class="muted">No transfers yet: they show here as sessions send and pull files.</td></tr>');
+    }).join('') : '<tr><td class="muted empty">No transfers yet: they show here as sessions send and pull files.</td></tr>');
   setHTML($('ob-f-out'), obFolder('out', s.files.out, true));
   setHTML($('ob-f-in'), obFolder('in', s.files.in, true));
   setHTML($('ob-f-shared'), obFolder('shared', s.files.shared, true));
