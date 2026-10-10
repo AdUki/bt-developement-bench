@@ -142,7 +142,10 @@ function volumeTarget(c) {
     const s = c.s;
     if (!s.sink) return pl.hearId === s.id ? {kind: 'browser', value: Math.round(npAudio.volume * 100)} : null;
     const ep = pl.endpoints && pl.endpoints.sinks.find(e => e.id === s.sink.target);
-    const t = ep && ep.address && ts.find(x => x.address && x.address.toUpperCase() === ep.address.toUpperCase() && x.volume != null);
+    // A device can have a transport each way (A2DP sink and source): the one the board sends on is
+    // its "Audio Source" side — the other is what the device would send the board.
+    const same = x => ep && ep.address && x.address && x.address.toUpperCase() === ep.address.toUpperCase() && x.volume != null;
+    const t = ts.find(x => same(x) && /source/i.test(x.profile || '')) || ts.find(same);
     if (t) return {kind: 'transport', path: t.path, value: Math.round(t.volume / 127 * 100)};
     return {kind: 'gain', id: s.id, value: Math.round(Math.pow(10, s.gain_db / 40) * 100)};
   }
