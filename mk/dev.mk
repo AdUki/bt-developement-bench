@@ -32,7 +32,9 @@ RESTART ?= 1
 # The dev trees are submodules of this repository (.gitmodules): the bench's forks on GitHub,
 # whose branch bench is what the image is built from (docs/dev.md "The forks"). A tree not checked
 # out yet is (at the commit the repository records, on a branch bench that pushes to the fork's);
-# one that is is left alone, whatever it holds, so `make src` never moves your work. A src dir
+# one that is is left alone, whatever it holds, so `make src` never moves your work. A submodule
+# marked shallow in .gitmodules (src/linux) comes as one commit: --depth 1, which unlike git's own
+# --recommend-shallow also holds for fetching the recorded commit when it is not a branch's tip. A src dir
 # other than src/<name> (BLUEZ_SRC=~/projects/bluez-topic, say) is used as it is. The generated
 # compile_commands.json and .clangd go to the tree's info/exclude, so they never show up in git
 # status.
@@ -45,7 +47,8 @@ elif [ -e "$$src/.git" ]; then \
   echo -e "$(BOLD)src/$$name$(OFF) is there, left as it is $(DIM)($$(git -C "$$src" log -1 --format='%h %s'))$(OFF)"; \
 else \
   echo -e "$(BOLD)src/$$name$(OFF): checking out the submodule"; \
-  git -C $(ROOT) submodule update --init "src/$$name"; \
+  depth=; [ "$$(git -C $(ROOT) config -f .gitmodules --bool "submodule.src/$$name.shallow" 2>/dev/null)" = true ] && depth="--depth 1"; \
+  git -C $(ROOT) submodule update --init $$depth "src/$$name"; \
   git -C "$$src" checkout -q -B bench; \
   git -C "$$src" config branch.bench.remote origin; \
   git -C "$$src" config branch.bench.merge refs/heads/bench; \

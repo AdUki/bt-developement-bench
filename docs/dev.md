@@ -33,7 +33,8 @@ the image has, and a change is a commit, not a patch in the Yocto layer.
 
 `make src` (or `make src-bluez`, `-pipewire`, `-wireplumber`, `-linux`) checks out the ones a
 clone does not have yet, at the recorded commit, on a branch `bench` that pushes to the fork's
-(`git submodule update --init` does the same, but leaves them on a detached HEAD). A tree that is
+(`git submodule update --init`, with `--depth 1` for the kernel, does the same, but leaves
+them on a detached HEAD; without `--depth 1`, git fetches the kernel's whole history). A tree that is
 already there is left alone, whatever it holds. `src/linux` is a shallow submodule: the clone
 gets the one commit it needs, not the kernel's history (`git -C src/linux fetch --unshallow` when
 you want it). To build a tree somewhere else, set `BLUEZ_SRC=~/projects/bluez-topic` (in
