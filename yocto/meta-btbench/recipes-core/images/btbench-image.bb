@@ -46,15 +46,22 @@ IMAGE_LINGUAS = ""
 
 # --- SDK (make sdk) ---------------------------------------------------------------------------
 
-# Debug symbols of everything in the image, so `make gdb` resolves the libraries' frames too.
-SDKIMAGE_FEATURES += "dbg-pkgs"
+# The headers of everything in the image, which the dev trees build against (WirePlumber against
+# PipeWire's, PipeWire against BlueZ's), and its debug symbols, so `make gdb` resolves the
+# libraries' frames too. Both spelled out: poky's default (dev-pkgs dbg-pkgs) is a weak ??=, which
+# any += here would replace rather than extend.
+SDKIMAGE_FEATURES = "dev-pkgs dbg-pkgs"
 # Host tools the PipeWire and WirePlumber builds run: gdbus-codegen (-codegen) and glib-mkenums
 # (-utils).
 TOOLCHAIN_HOST_TASK:append = " nativesdk-glib-2.0-codegen nativesdk-glib-2.0-utils"
-# Libraries the dev trees build against that nothing in the image needs headers for, so the image's
-# own -dev packages would not bring them (BlueZ: ell, libical, readline, sbc, lc3; lua for
-# WirePlumber).
-TOOLCHAIN_TARGET_TASK:append = " ell-dev libical-dev readline-dev sbc-dev liblc3-dev lua-dev"
+# Libraries the dev trees build against that the image's own -dev packages may not bring (BlueZ:
+# ell, libical, readline, sbc, lc3; PipeWire: BlueZ's headers and the codecs it is configured
+# with; WirePlumber: lua, whose liblua.a is in -staticdev). make pipewire configures with the
+# image's options, so a codec missing here stops it at meson setup.
+TOOLCHAIN_TARGET_TASK:append = " ell-dev libical-dev readline-dev sbc-dev liblc3-dev lua-dev lua-staticdev \
+    bluez5-dev libopus-dev \
+    ${@'libfreeaptx-dev ldacbt-dev' if d.getVar('BTBENCH_EXTRA_CODECS') == '1' else ''} \
+    ${@'fdk-aac-dev' if d.getVar('BTBENCH_AAC') == '1' else ''}"
 
 # --- disk image -------------------------------------------------------------------------------
 
