@@ -733,3 +733,19 @@ label.set-row { cursor: pointer; }
 }
 .kd-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0 1.2rem; margin-bottom: 0.6rem; }
 .kd-areas .set-row { border-top: 1px solid var(--line-soft); }
+
+/* Loading: the cover while its image (or the phone's handle for it) is on the way, and lists
+   while the phone or a server answers. */
+.np-art { position: relative; }
+.np-art img[hidden] { display: none; }
+.np-art.loading::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite;
+}
+.np-art.loading svg.ph { opacity: 0.35; }
+.loading-line { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); }
+.spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .np-art.loading::after, .spin { animation: none; border-color: var(--accent); opacity: 0.5; }
+}

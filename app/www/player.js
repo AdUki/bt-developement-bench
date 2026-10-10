@@ -14,14 +14,18 @@ const pl = {
   endpoints: null,     // the board's outputs
   src: lsGet('btbench.pl.src') || '',   // 'board' or a player's path; '' = whichever plays
   boardId: null,       // the stream this view started
-  lib: lsGet('btbench.pl.lib') || 'radio',  // phone | radio | upnp
+  lib: lsGet('btbench.pl.lib') || '',  // phone | radio | upnp; '' = the phone's when there is one
   libPath: [],         // the library's breadcrumbs: [{id, title}] (UPnP), or folders (phone)
   libItems: [],
   upnpServer: null,
   queueItems: [],      // the phone's now-playing list
   queueAt: 0,          // when it was read
+  libSeq: 0,           // the library's latest request, and the phone folder it is loading
+  libLoading: '',
   tick: null,
   ticks: 0,
+  artDone: {},   // cover URL → true (shown) / false (failed)
+  artWait: {},   // player|track → when its cover handle was first waited for
 };
 
 const PL_SVG = {
@@ -34,6 +38,14 @@ const PL_SVG = {
   folder: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2z',
   plus: 'M12 5v14M5 12h14',
 };
+// A cover image's outcome, by URL: the art box stops showing it is loading, and a failed image
+// leaves the placeholder.
+function npArtDone(img, ok) {
+  pl.artDone[img.getAttribute('src')] = ok;
+  img.hidden = !ok;
+  img.parentNode.classList.remove('loading');
+}
+
 const svg = (d, cls) => `<svg viewBox="0 0 24 24" class="${cls || ''}" aria-hidden="true"><path d="${d}"/></svg>`;
 
 // ---------------------------------------------------------------- what plays
@@ -44,7 +56,9 @@ function boardStream() {
   const urls = pl.streams.filter(s => s.source.type === 'url' && live(s));
   return urls.find(s => s.id === pl.boardId) || urls[0] || null;
 }
-const phones = () => (pl.media ? pl.media.players : []);
+// The players worth showing: BlueZ also makes an empty one for a phone's LE Audio media control
+// service (mcp_gmcs: no name, never a track), which would be a second, dead chip for the phone.
+const phones = () => (pl.media ? pl.media.players : []).filter(p => p.name || p.browsable || (p.track && p.track.title));
 
 // The source on screen: the one chosen if it is still there, else the board if it plays, else a
 // phone that plays, else any phone.
@@ -66,11 +80,15 @@ function renderNowPlaying() {
   const c = current();
   const b = boardStream();
   // Source chips: every phone, and the board when it plays.
-  const chips = phones().map(p => ({key: p.path, label: devName(p.address), icon: PL_SVG.phone, on: c.kind === 'phone' && c.p.path === p.path}));
+  // A chip names the device and the player in it: one phone can have several (Samsung Music,
+  // Spotify), and the device's name alone would make them look the same.
+  const chips = phones().map(p => ({key: p.path, label: devName(p.address) + (p.name ? ' · ' + p.name : ''),
+    icon: PL_SVG.phone, on: c.kind === 'phone' && c.p.path === p.path}));
   if (b) chips.push({key: 'board', label: 'This board', icon: PL_SVG.radio, on: c.kind === 'board'});
   setHTML($('np-src'), chips.length > 1 ? chips.map(x =>
     `<button class="chip${x.on ? ' on' : ''}" data-src="${esc(x.key)}">${svg(x.icon)}${esc(x.label)}</button>`).join('') : '');
 
+  let artSrc = '', artLoading = false;
   let art = svg(PL_SVG.note, 'ph'), title = 'Nothing playing', sub = '', sub2 = '', playing = false, pos = 0, dur = 0;
   let can = {prev: false, next: false, play: false, stop: false};
   if (c.kind === 'phone') {
@@ -82,9 +100,14 @@ function renderNowPlaying() {
     pos = playerPosition(p);
     dur = t.duration_ms || 0;
     if (p.obex_port != null && t.img_handle) {
-      art = `<img alt="" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}" onerror="this.remove()">`;
+      artSrc = `/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${encodeURIComponent(t.img_handle)}`;
     } else if (p.obex_port != null) {
       coverConnect(p);
+      // The phone sends a cover's handle only once its image channel is up: a few seconds after
+      // a track starts (or the board connects). Shown as loading for that long, then as no cover.
+      const k = p.path + '|' + (t.title || '');
+      if (!pl.artWait[k]) pl.artWait[k] = Date.now();
+      artLoading = Date.now() - pl.artWait[k] < 12000;
     }
     can = {prev: true, next: true, play: true, stop: true};
   } else if (c.kind === 'board') {
@@ -96,11 +119,17 @@ function renderNowPlaying() {
     sub2 = s.sink ? 'Playing on ' + outLabel(s.sink.target) : 'Playing in this browser';
     pos = (s.track_seconds || 0) * 1000;
     dur = (item.duration_s || 0) * 1000;
-    if (item.art) art = `<img alt="" src="${esc(item.art)}" onerror="this.remove()">`;
+    if (item.art) artSrc = item.art;
     else art = svg(list.length > 1 ? PL_SVG.note : PL_SVG.radio, 'ph');
     can = {prev: s.track > 0, next: s.track + 1 < list.length, play: true, stop: true};
   }
+  // An image: loading until it arrived (or failed: then the note stays).
+  if (artSrc) {
+    art = svg(PL_SVG.note, 'ph') + `<img alt="" src="${esc(artSrc)}" onload="npArtDone(this, true)" onerror="npArtDone(this, false)"${pl.artDone[artSrc] === true ? '' : ' hidden'}>`;
+    artLoading = pl.artDone[artSrc] === undefined;
+  }
   setHTML($('np-art'), art);
+  $('np-art').classList.toggle('loading', artLoading);
   setText($('np-title'), title);
   setText($('np-sub'), sub);
   setText($('np-sub2'), sub2);
@@ -278,13 +307,34 @@ function renderQueue(c) {
       note = 'A radio stream';
     }
   } else if (c.kind === 'phone') {
-    // The phone's now-playing list, read again when the track changes.
+    // The phone's now-playing list: read when the track changes, and retried a little later after
+    // a failure (a phone answers browsing slowly, or not at all, for a while after it connects).
+    // Not re-read on a timer: every read moves the phone's browsing from the library's folder to
+    // Now Playing, which drops the items BlueZ holds for the other, and on some phones (an S25)
+    // costs 10 s during which the library waits.
     const key = c.p.path + '|' + ((c.p.track || {}).title || '');
-    if (c.p.browsable && pl.queueKey !== key && Date.now() - pl.queueAt > 1500) {
-      pl.queueKey = key;
+    const due = pl.queueKey !== key ? 0 : pl.queueOk ? Infinity : 8000;
+    if (c.p.browsable && !pl.queueBusy && Date.now() - pl.queueAt > due) {
+      pl.queueBusy = true;
       pl.queueAt = Date.now();
       post('/media/players/browse', {path: c.p.path, folder: c.p.path + '/NowPlaying'})
-        .then(r => { pl.queueItems = r.items || []; renderNowPlaying(); }).catch(() => { pl.queueItems = []; });
+        .then(r => {
+          const items = r.items || [];
+          // An empty answer right after a track change is the phone rebuilding its list (AVRCP
+          // "UIDs changed": BlueZ drops the old items meanwhile). The list on screen stays, and
+          // the phone is asked again in a few seconds instead of the queue going blank.
+          if (!items.length && pl.queueItems.length && pl.queuePlayer === c.p.path) {
+            pl.queueKey = key;
+            pl.queueOk = false;
+            return;
+          }
+          pl.queueItems = items;
+          pl.queuePlayer = c.p.path;
+          pl.queueKey = key;
+          pl.queueOk = true;
+        })
+        .catch(() => { pl.queueKey = key; pl.queueOk = false; })
+        .finally(() => { pl.queueBusy = false; renderNowPlaying(); });
     }
     const cur = (c.p.track || {}).title;
     rows = pl.queueItems.map((it, i) => {
@@ -297,7 +347,9 @@ function renderQueue(c) {
     note = c.p.browsable ? '' : 'This player does not share its list';
   }
   setText($('np-q-note'), note);
-  setHTML($('np-queue'), rows || `<div class="empty-line">${c.kind === 'none' ? 'Pick something from the library.' : 'Nothing queued.'}</div>`);
+  const waiting = c.kind === 'phone' && c.p.browsable && pl.queueBusy && !pl.queueItems.length;
+  setHTML($('np-queue'), rows || (waiting ? '<div class="empty-line loading-line"><span class="spin"></span>Getting the phone’s list…</div>'
+    : `<div class="empty-line">${c.kind === 'none' ? 'Pick something from the library.' : 'Nothing queued.'}</div>`));
 }
 
 // ---------------------------------------------------------------- the library
@@ -305,14 +357,21 @@ function renderQueue(c) {
 function renderLibTabs() {
   const tabs = [['radio', 'Radio'], ['upnp', 'Media servers']];
   if (phones().some(p => p.browsable)) tabs.unshift(['phone', 'Phone']);
-  if (!tabs.some(t => t[0] === pl.lib)) pl.lib = tabs[0][0];
+  if (!tabs.some(t => t[0] === pl.lib)) pl.lib = tabs[0][0];  // the phone's first, when browsable
   setHTML($('np-lib-tabs'), tabs.map(([k, l]) => `<button class="seg${pl.lib === k ? ' on' : ''}" data-lib="${k}">${l}</button>`).join(''));
   $('np-search-row').hidden = !(pl.lib === 'phone' && phones().some(p => p.searchable));
 }
 
-function openLib(kind) {
+function openLib(kind, chosen) {
+  const phone = kind === 'phone' && phones().find(x => x.browsable);
+  // The phone's top folder already on its way (the tab shown twice while the phone is slow): wait
+  // for that answer rather than queueing a second request behind it.
+  if (phone && pl.lib === kind && pl.libLoading === phone.path + '/Filesystem') return;
+  // Whatever the library was loading is no longer wanted (see phoneFolder).
+  pl.libSeq++;
+  pl.libLoading = '';
   pl.lib = kind;
-  lsSet('btbench.pl.lib', kind);
+  if (chosen) lsSet('btbench.pl.lib', kind);  // only a tab picked by hand is remembered
   pl.libPath = [];
   renderLibTabs();
   if (kind === 'radio') {
@@ -324,15 +383,14 @@ function openLib(kind) {
   } else if (kind === 'upnp') {
     pl.upnpServer = null;
     upnpServers(false);
-  } else {
-    const p = phones().find(x => x.browsable);
-    if (p) phoneFolder(p, p.path + '/Filesystem', 'Files');
+  } else if (phone) {
+    phoneFolder(phone, phone.path + '/Filesystem', 'Files');
   }
 }
 
 function upnpServers(search) {
   setHTML($('np-crumbs'), '');
-  setHTML($('np-lib'), `<div class="empty-line muted">${search ? 'Searching the network…' : 'Loading…'}</div>`);
+  setHTML($('np-lib'), `<div class="empty-line loading-line"><span class="spin"></span>${search ? 'Searching the network…' : 'Loading…'}</div>`);
   api('/audio/upnp/servers' + (search ? '?search=1' : '')).then(r => {
     // None known yet (the board only remembers what a search found): search now.
     if (!search && !r.servers.length) return upnpServers(true);
@@ -342,10 +400,11 @@ function upnpServers(search) {
 }
 
 function upnpFolder(server, id, title, push) {
+  pl.libSeq++;
   pl.upnpServer = server;
   if (push !== false) pl.libPath.push({id, title});
   renderCrumbs();
-  setHTML($('np-lib'), '<div class="empty-line muted">Loading…</div>');
+  setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
   api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&count=200`).then(r => {
     pl.libItems = r.containers.map(c => ({kind: 'folder', title: c.title, id: c.id, sub: c.child_count != null ? c.child_count + ' items' : ''}))
       .concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url, art: it.art,
@@ -354,15 +413,26 @@ function upnpFolder(server, id, title, push) {
   }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
 }
 
+// A phone's item as a library row. A folder's name is its path in the phone's tree
+// ("/Filesystem/Favorites"): only the last part is shown.
+const phoneRow = (i, player) => ({kind: i.type === 'folder' ? 'pfolder' : 'ptrack',
+  title: i.title || (i.metadata && i.metadata.title) || (i.name || '').replace(/^.*\//, ''),
+  sub: i.artist || (i.metadata && i.metadata.artist) || '', path: i.path, playable: i.playable, player});
+
 function phoneFolder(p, folder, title, push) {
   if (push !== false) pl.libPath.push({id: folder, title});
   renderCrumbs();
-  setHTML($('np-lib'), '<div class="empty-line muted">Loading…</div>');
+  setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
+  // Only the last folder asked for is shown: browsing waits its turn on the board, and an earlier
+  // answer arriving late must not replace the one opened since.
+  const seq = ++pl.libSeq;
+  pl.libLoading = folder;
   post('/media/players/browse', {path: p.path, folder}).then(r => {
-    pl.libItems = (r.items || []).map(i => ({kind: i.type === 'folder' ? 'pfolder' : 'ptrack', title: i.title || (i.metadata && i.metadata.title) || i.name,
-      sub: i.artist || (i.metadata && i.metadata.artist) || '', path: i.path, playable: i.playable, player: p.path}));
+    if (seq !== pl.libSeq) return;
+    pl.libItems = (r.items || []).map(i => phoneRow(i, p.path));
     renderLib();
-  }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
+  }).catch(e => { if (seq === pl.libSeq) setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`); })
+    .finally(() => { if (seq === pl.libSeq) pl.libLoading = ''; });
 }
 
 function renderCrumbs() {
@@ -517,7 +587,7 @@ function setupPlayer() {
   };
   $('np-lib-tabs').onclick = e => {
     const b = e.target.closest('[data-lib]');
-    if (b) openLib(b.dataset.lib);
+    if (b) openLib(b.dataset.lib, true);
   };
   $('np-crumbs').onclick = e => {
     const a = e.target.closest('[data-crumb]');
@@ -544,8 +614,7 @@ function setupPlayer() {
     post('/media/players/search', {path: p.path, value: e.target.value}).then(r => {
       pl.libPath = [{id: r.folder, title: '“' + e.target.value + '”'}];
       renderCrumbs();
-      pl.libItems = (r.items || []).map(i => ({kind: i.type === 'folder' ? 'pfolder' : 'ptrack', title: i.title || (i.metadata && i.metadata.title) || i.name,
-        sub: i.artist || '', path: i.path, playable: i.playable, player: p.path}));
+      pl.libItems = (r.items || []).map(i => phoneRow(i, p.path));
       renderLib();
     }).catch(fail);
   };
@@ -554,11 +623,12 @@ function setupPlayer() {
 registerTab('player', {
   topics: () => ['media', 'audio.streams'],
   show() {
-    api('/media').then(m => { pl.media = m; notePlayers(m.players); renderNowPlaying(); renderLibTabs(); }).catch(() => {});
+    // The library opens once the players are known: a browsable phone's is the first tab.
+    api('/media').then(m => { pl.media = m; notePlayers(m.players); renderNowPlaying(); renderLibTabs(); openLib(pl.lib); })
+      .catch(() => { renderLibTabs(); openLib(pl.lib); });
     api('/bluetooth').then(b => { if (!btState) btState = b; }).catch(() => {});
     api('/audio/endpoints').then(renderOutputs).catch(() => {});
     refreshPlayerStreams();
-    openLib(pl.lib);
     clearInterval(pl.tick);
     // The progress bar moves between the phone's updates.
     pl.tick = setInterval(() => {
