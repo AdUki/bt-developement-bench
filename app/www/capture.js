@@ -75,6 +75,11 @@
     selIdx: -1, selN: null, detail: null, hexSpans: [],
     graph: null, conn: '', graphGen: 0, drag: null, pendingSel: null,
     progressTimer: null, follow: false, followTimer: null,
+    // The time column: since the first packet, time of day, or since the row above.
+    time: ['rel', 'tod', 'delta'].includes(lsGet('btbench.cv.time')) ? lsGet('btbench.cv.time') : 'rel',
+    dtab: lsGet('btbench.cv.dtab') === 'btmon' ? 'btmon' : 'fields',  // the detail: our fields, or btmon's
+    btmon: new Map(),      // frame → btmon's text, for the open file
+    statsOpen: false, stats: null, statsGen: 0,
   };
 
   const enc = encodeURIComponent;
@@ -82,6 +87,20 @@
   const tTerms = f => f.split(/\s+/).filter(w => /^t(>=|<=|>|<|=)/.test(w));
   const nonT = f => f.split(/\s+/).filter(w => w && !/^t(>=|<=|>|<|=)/.test(w)).join(' ');
   const fmtT = t => t == null ? '' : t.toFixed(6);
+  // "08:03:41.476915": the capture's own clock, to the µs it was stamped with.
+  const fmtTod = ms => {
+    const us = Math.round((ms % 1000) * 1000);
+    return `${fmtTime(Math.floor(ms))}.${String(us).padStart(6, '0').slice(0, 6)}`;
+  };
+  const TIME_HEAD = {rel: 'time (s)', tod: 'time', delta: 'Δ (s)'};
+  function timeCell(i, p) {
+    if (cv.time === 'tod') return fmtTod(p.ts_ms);
+    if (cv.time === 'delta') {
+      const prev = cv.rows.get(i - 1);
+      return i === 0 ? fmtT(0) : prev ? fmtT(p.t - prev.t) : '';
+    }
+    return fmtT(p.t);
+  }
   const fmtN = n => Number(n).toLocaleString();
 
   // ------------------------------------------------------------ opening a file
@@ -97,6 +116,7 @@
     cv.selIdx = -1;
     cv.selN = null;
     cv.conn = '';
+    cv.btmon.clear();
     clearDetail();
     applyFilter($('cv-filter').value.trim(), false);
     if (capState) renderCapture(capState);
@@ -133,6 +153,8 @@
       fetchRows(0);
     }
     fetchGraph();
+    if (cv.statsOpen) fetchStats();
+    renderSave();
   }
 
   function renderChips() {
@@ -261,7 +283,7 @@
       const cls = ['cv-row', 't-' + p.type, p.dir ? 'd-' + p.dir : '', p.err ? 'err' : '', p.mark ? 'mark' : '',
         i === cv.selIdx ? 'sel' : ''].join(' ');
       html += `<div class="${cls}" data-i="${i}" title="${esc(fmtTime(p.ts_ms))}.${String(Math.floor((p.ts_ms % 1000) * 1000)).padStart(6, '0').slice(0, 6)}">` +
-        `<span>${p.n}</span><span>${fmtT(p.t)}</span><span class="cv-dir cv-c-d">${p.dir}</span>` +
+        `<span>${p.n}</span><span>${timeCell(i, p)}</span><span class="cv-dir cv-c-d">${p.dir}</span>` +
         `<span class="cv-c-h">${p.handle == null ? '' : p.handle}</span><span>${p.proto || p.type}</span>` +
         `<span class="cv-c-l">${p.len}</span><span class="cv-sum">${esc(p.summary)}${p.lat_ms != null ? ` <i class="muted">${p.lat_ms} ms</i>` : ''}</span></div>`;
     }
@@ -285,6 +307,93 @@
     if (r.datalink !== 2001) bits.push(r.datalink === 1002 ? 'H4 capture' : 'HCI capture');
     setText($('cv-status'), bits.join(' · '));
     setClass($('cv-status'), 'small ' + (r.complete ? 'muted' : 'warn-text'));
+    renderSave();
+  }
+
+  // The matches as a file of their own, once the board has found them all (it answers 409
+  // before).
+  function renderSave() {
+    const a = $('cv-save');
+    const ready = !!cv.name && cv.complete && !cv.error && cv.total > 0;
+    a.classList.toggle('disabled', !ready);
+    a.setAttribute('aria-disabled', String(!ready));
+    if (ready) a.href = `/api${base()}/export?filter=${enc(cv.filter)}${$('cv-ctx').checked ? '&context=1' : ''}`;
+    else a.removeAttribute('href');
+    setText(a, cv.filter ? `Save ${fmtN(cv.total)} matches` : 'Save a copy');
+  }
+
+  // ------------------------------------------------------------ statistics
+
+  function fetchStats() {
+    if (!cv.name) return;
+    const gen = ++cv.statsGen;
+    api(`${base()}/stats?filter=${enc(cv.filter)}`).then(st => {
+      if (gen !== cv.statsGen) return;
+      cv.stats = st;
+      renderStats();
+      if (!st.complete) setTimeout(() => { if (gen === cv.statsGen && cv.statsOpen) fetchStats(); }, 400);
+    }).catch(e => { if (gen === cv.statsGen) setHTML($('cv-stats'), `<div class="bad-text small">${esc(e.message)}</div>`); });
+  }
+
+  function renderStats() {
+    const st = cv.stats;
+    if (!st || !cv.statsOpen) return;
+    const t = st.total;
+    const share = (n, of) => `<span class="cv-bar"><i style="width:${of ? Math.max(1, Math.round(100 * n / of)) : 0}%"></i></span>`;
+    const head = [`${fmtN(t.pkts)} packets`, fmtBytes(t.bytes), `TX ${fmtN(t.tx)} · RX ${fmtN(t.rx)}`,
+      st.span_s ? `over ${st.span_s.toFixed(1)} s` : ''].filter(Boolean);
+    const flags = [];
+    if (t.err) flags.push(`<button class="small-btn link-btn bad-text" data-sterm="is:err">${fmtN(t.err)} errors</button>`);
+    if (st.marks) flags.push(`<button class="small-btn link-btn" data-sterm="is:mark">${fmtN(st.marks)} marks</button>`);
+    if (st.cont) flags.push(`${fmtN(st.cont)} continuation fragments`);
+    const lat = st.latency ? `TX latency (HCI → NOCP, ${fmtN(st.latency.n)} packets): p50 ${st.latency.p50_ms} ms · p95 ${st.latency.p95_ms} ms · max ${st.latency.max_ms} ms` : '';
+    const protos = st.protos.map(p => `<tr><td>${p.proto === 'other' ? '<span class="muted">other</span>'
+        : `<button class="small-btn link-btn" data-sterm="proto:${esc(p.proto)}">${esc(p.proto)}</button>`}</td>
+      <td class="num">${fmtN(p.pkts)}</td><td>${share(p.pkts, t.pkts)}</td><td class="num">${fmtBytes(p.bytes)}</td>
+      <td class="num muted">${fmtN(p.tx)} / ${fmtN(p.rx)}</td><td class="num${p.err ? ' bad-text' : ' muted'}">${p.err || ''}</td></tr>`).join('');
+    const peerName = a => (a && typeof devName === 'function' && devName(a) !== a ? `${devName(a)} ` : '') + (a || '');
+    const links = st.links.map(l => `<tr><td><button class="small-btn link-btn" data-sterm="handle:${l.handle}">hci${l.index}/${l.handle}</button></td>
+      <td>${esc(l.type || '')}</td><td>${l.peer ? `<button class="small-btn link-btn" data-sterm="addr:${esc(l.peer)}">${esc(peerName(l.peer))}</button>` : '<span class="muted">unknown</span>'}</td>
+      <td class="num">${fmtN(l.pkts)}</td><td class="num">${fmtBytes(l.bytes)}</td><td class="num${l.err ? ' bad-text' : ' muted'}">${l.err || ''}</td></tr>`).join('');
+    setHTML($('cv-stats'), `<div class="cv-stats-head">${head.map(esc).join(' · ')}${flags.length ? ' · ' + flags.join(' · ') : ''}
+        ${st.complete ? '' : ' <span class="warn-text">counting…</span>'}</div>
+      ${lat ? `<div class="small muted">${esc(lat)}</div>` : ''}
+      <div class="cv-stats-cols">
+        <div class="scroll-x"><table class="tbl compact"><tr><th>Protocol</th><th class="num">packets</th><th></th><th class="num">bytes</th><th class="num">TX / RX</th><th class="num">errors</th></tr>${protos}</table></div>
+        ${links ? `<div class="scroll-x"><table class="tbl compact"><tr><th>Link</th><th>type</th><th>peer</th><th class="num">packets</th><th class="num">bytes</th><th class="num">errors</th></tr>${links}</table></div>` : ''}
+      </div>`);
+  }
+
+  // ------------------------------------------------------------ adding a term to the filter
+
+  // The filter with one more term (or "!term"), keeping everything else: what a click on a term
+  // in the detail or the statistics does. A filter with "||" groups is left to be edited by hand.
+  function addTerm(term, neg) {
+    const cur = cv.filter.trim();
+    if (/(^|\s)\|\|(\s|$)/.test(cur)) { toast('This filter has || groups: add the term where it belongs by hand'); return; }
+    const t = (neg ? '!' : '') + term;
+    const words = cur ? cur.split(/\s+/) : [];
+    if (words.includes(t)) return;
+    // The opposite term goes (handle:12 → !handle:12 replaces it).
+    const opposite = neg ? term : '!' + term;
+    applyFilter(words.filter(w => w !== opposite).concat(t).join(' '));
+  }
+
+  function termsOf(d) {
+    const hex = (v, w) => '0x' + v.toString(16).padStart(w, '0');
+    const t = [];
+    if (d.handle != null) t.push(`handle:${d.handle}`);
+    if (d.peer) t.push(`addr:${d.peer}`);
+    if (d.proto) t.push(`proto:${d.proto}`);
+    if (d.cid != null) t.push(`cid:${hex(d.cid, 4)}`);
+    if (d.psm != null) t.push(`psm:${d.psm}`);
+    if (d.opcode != null) t.push(`opcode:${hex(d.opcode, 4)}`);
+    if (d.evt != null) t.push(`evt:${hex(d.evt, 2)}`);
+    if (d.subevt != null) t.push(`subevt:${hex(d.subevt, 2)}`);
+    if (d.dir) t.push(`dir:${d.dir}`);
+    t.push(`type:${d.type}`);
+    if (d.err) t.push('is:err');
+    return t;
   }
 
   function showError(e) {
@@ -312,10 +421,53 @@
     drawGraph();
   }
 
+  // btmon's decode of frame n: fetched once per frame (it runs btmon on the board), kept while the
+  // file is open.
+  function showBtmon(n) {
+    const pre = $('cv-btmon');
+    const have = cv.btmon.get(n);
+    if (have != null) return setHTML(pre, have);
+    setHTML(pre, '<span class="muted">btmon is decoding…</span>');
+    const name = cv.name;
+    api(`${base()}/packets/${n}/btmon`).then(r => {
+      const note = r.context ? `<span class="muted">btmon -r, with ${fmtN(r.context)} packets of context${r.frames.length > 1 ? ` · frames ${r.frames.join(', ')} (one L2CAP packet)` : ''}</span>\n\n` : '';
+      const html = note + esc(r.text);
+      if (name !== cv.name) return;
+      cv.btmon.set(n, html);
+      if (cv.selN === n) setHTML(pre, html);
+    }).catch(e => { if (name === cv.name && cv.selN === n) setHTML(pre, `<span class="bad-text">${esc(e.message)}</span>`); });
+  }
+
+  function setDtab(tab) {
+    cv.dtab = tab;
+    lsSet('btbench.cv.dtab', tab);
+    for (const b of $('cv-dtabs').querySelectorAll('[data-dtab]')) {
+      const on = b.dataset.dtab === tab;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+    $('cv-dfields').hidden = tab !== 'fields';
+    $('cv-btmon').hidden = tab !== 'btmon';
+    if (tab === 'btmon') {
+      if (cv.selN) showBtmon(cv.selN);
+      else setHTML($('cv-btmon'), '<span class="muted">Select a packet: click a row, or move with ↑ ↓.</span>');
+    }
+  }
+
+  function setTimeMode(mode) {
+    cv.time = mode;
+    lsSet('btbench.cv.time', mode);
+    $('cv-time').value = mode;
+    setText($('cv-time-h'), TIME_HEAD[mode]);
+    $('cv-table').classList.toggle('cv-tod', mode === 'tod');
+    queueRows();
+  }
+
   function clearDetail() {
     cv.detail = null;
     cv.hexSpans = [];
     setHTML($('cv-fields'), '<div class="muted small">Select a packet: click a row, or move with ↑ ↓.</div>');
+    setHTML($('cv-btmon'), '<span class="muted">Select a packet: click a row, or move with ↑ ↓.</span>');
     setHTML($('cv-hex'), '');
   }
 
@@ -351,8 +503,10 @@
 
   function renderDetail(d) {
     cv.detail = d;
-    const head = `<div class="cv-dhead"><b>#${d.n}</b> ${esc(d.summary)}</div>`;
+    const terms = termsOf(d).map(t => `<button class="cv-term" data-term="${esc(t)}" title="Add to the filter (shift: without it)">${esc(t)}</button>`).join('');
+    const head = `<div class="cv-dhead"><b>#${d.n}</b> ${esc(d.summary)}</div><div class="cv-terms">${terms}</div>`;
     setHTML($('cv-fields'), head + fieldsHTML(d.fields));
+    if (cv.dtab === 'btmon') showBtmon(d.n);
     setHTML($('cv-hex'), d.hex ? hexHTML(d.hex) : '<span class="muted">(no bytes)</span>');
     cv.hexSpans = Array.from($('cv-hex').querySelectorAll('[data-o]'));
   }
@@ -669,6 +823,21 @@
       applyFilter(`${b.dataset.chip}${t ? ' ' + t : ''}`.trim());
     };
     $('cv-conn').onchange = e => { cv.conn = e.target.value; fetchGraph(); };
+    $('cv-time').onchange = e => setTimeMode(e.target.value);
+    $('cv-dtabs').onclick = e => { const b = e.target.closest('[data-dtab]'); if (b) setDtab(b.dataset.dtab); };
+    $('cv-ctx').onchange = renderSave;
+    $('cv-save').onclick = e => { if ($('cv-save').classList.contains('disabled')) e.preventDefault(); };
+    $('cv-stats-btn').onclick = () => {
+      cv.statsOpen = !cv.statsOpen;
+      $('cv-stats').hidden = !cv.statsOpen;
+      $('cv-stats-btn').setAttribute('aria-expanded', String(cv.statsOpen));
+      $('cv-stats-btn').classList.toggle('on', cv.statsOpen);
+      if (cv.statsOpen) {
+        setHTML($('cv-stats'), '<div class="muted small loading-line"><span class="spin"></span>Counting…</div>');
+        fetchStats();
+      }
+    };
+    $('cv-stats').onclick = e => { const b = e.target.closest('[data-sterm]'); if (b) addTerm(b.dataset.sterm, e.shiftKey); };
     $('cv-follow').onchange = e => setFollow(e.target.checked);
 
     const body = $('cv-body');
@@ -689,6 +858,10 @@
       moveSel(moves[e.key]);
     });
     const fields = $('cv-fields');
+    fields.addEventListener('click', e => {
+      const b = e.target.closest('[data-term]');
+      if (b) addTerm(b.dataset.term, e.shiftKey);
+    });
     fields.addEventListener('mouseover', e => {
       const f = e.target.closest('[data-off]');
       highlight(f ? Number(f.dataset.off) : null, f ? Number(f.dataset.len) : 0);
@@ -698,6 +871,8 @@
     window.addEventListener('resize', () => { if (cv.name) { queueRows(); } });
     clearDetail();
     renderChips();
+    setTimeMode(cv.time);
+    setDtab(cv.dtab);
   }
 
   registerTab('capture', {

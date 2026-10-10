@@ -541,6 +541,35 @@ canvas.cv-graph {
   white-space: pre; overflow-x: auto; font-size: 12px; line-height: 1.5;
 }
 .cv-hex span.hl { background: var(--accent); color: var(--on-accent); border-radius: 2px; }
+/* The row under the chips: what to do with the matches, and how to show time. */
+.cv-tools { gap: 0.4rem 0.8rem; margin: 0.1rem 0 0.3rem; }
+.cv-tools label { display: inline-flex; align-items: center; gap: 0.3rem; }
+#cv-stats-btn.on { border-color: var(--accent); color: var(--accent); }
+a.small-btn.disabled { opacity: 0.45; cursor: default; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+.cv-stats { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 0.5rem 0.6rem; margin: 0.3rem 0 0.5rem; }
+.cv-stats-head { font-size: 0.85rem; margin-bottom: 0.2rem; }
+.cv-stats-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 0.4rem 1rem; margin-top: 0.4rem; }
+.tbl.compact th, .tbl.compact td { padding: 0.15rem 0.5rem 0.15rem 0; font-size: 0.82rem; white-space: nowrap; }
+.tbl.compact th { font-weight: 600; color: var(--muted); }
+.tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+.cv-bar { display: inline-block; width: 4.5rem; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; vertical-align: middle; }
+.cv-bar i { display: block; height: 100%; background: var(--accent); }
+/* The packet's terms under its summary: a click adds one to the filter. */
+.cv-terms { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: -0.1rem 0 0.5rem; }
+.cv-term {
+  border: 1px solid var(--line); background: var(--well); color: var(--fg); border-radius: 999px; padding: 0 0.45rem;
+  font: 11px/18px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; cursor: pointer;
+}
+.cv-term:hover { border-color: var(--accent); color: var(--accent); }
+.cv-dtabs { margin-bottom: 0.45rem; }
+.cv-btmon {
+  margin: 0; font: 12px/1.45 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; white-space: pre;
+  overflow-x: auto; color: var(--fg);
+}
+/* Time of day needs a wider time column. */
+.cv-table.cv-tod .cv-head, .cv-table.cv-tod .cv-row { grid-template-columns: 4.4rem 7.8rem 1.7rem 3rem 3.5rem 2.8rem minmax(0, 1fr); }
 @media (max-width: 900px) {
   .cv-split { grid-template-columns: minmax(0, 1fr); }
   .cv-body { height: 360px; }
@@ -551,6 +580,7 @@ canvas.cv-graph {
   .cv-table { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
   .cv-head, .cv-body { min-width: 48rem; }
   .cv-head, .cv-row { grid-template-columns: 3.6rem 6.2rem 1.7rem 3rem 3.5rem 2.8rem minmax(24rem, 1fr); }
+  .cv-table.cv-tod .cv-head, .cv-table.cv-tod .cv-row { grid-template-columns: 3.6rem 7.8rem 1.7rem 3rem 3.5rem 2.8rem minmax(24rem, 1fr); }
 }
 
 /* Live packets (Monitor tab): the Capture viewer's table and detail, its rows appended as they

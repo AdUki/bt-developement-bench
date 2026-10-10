@@ -517,17 +517,32 @@
         <button id="cv-apply">Filter</button>
       </div>
       <div id="cv-chips" class="cv-chips"></div>
+      <div class="row wrap small cv-tools">
+        <button class="small-btn" id="cv-stats-btn" aria-expanded="false" aria-controls="cv-stats">Statistics</button>
+        <label>Time <select id="cv-time" class="small" aria-label="Time column">
+          <option value="rel">since the first packet</option><option value="tod">time of day</option><option value="delta">since the row above</option>
+        </select></label>
+        <span class="grow"></span>
+        <label class="check" title="Put in the packets btmon needs to decode the matches too (connections, L2CAP and AVDTP signalling, GATT discovery), and the context the file began with">
+          <input type="checkbox" id="cv-ctx"> with context</label>
+        <a class="small-btn btn-link" id="cv-save" download title="The matching packets as a btsnoop file (btmon -r, Wireshark)">Save matches</a>
+      </div>
+      <div id="cv-stats" class="cv-stats" hidden></div>
       <details class="small muted cv-hint more-fields">
         <summary>Filter syntax</summary>
-        <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value.
+        <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value;
+          <code>a b || c</code> matches either group.
           <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
           <code>proto:hci|l2cap|att|smp|sdp|rfcomm|avdtp|rtp|avctp|bnep|hid|sco|iso</code> ·
           <code>handle:11</code> <code>cid:0x40</code> <code>psm:25</code> <code>index:0</code> ·
           <code>opcode:0x0406</code> (a command and its Complete/Status) <code>evt:0x13</code> <code>subevt:0x02</code> ·
           <code>is:err|mark|cont|lat</code> · <code>len&gt;100</code> <code>n&lt;=500</code> <code>lat&gt;20</code> (TX → NOCP, ms) ·
-          <code>t&gt;=12.5 t&lt;30</code> (seconds since the first packet). Any other word, or a <code>"quoted phrase"</code>,
+          <code>t&gt;=12.5 t&lt;30</code> (seconds since the first packet) ·
+          <code>addr:AA:BB:CC:DD:EE:FF</code> (that peer's links, and packets that name it; its first bytes are enough).
+          Any other word, or a <code>"quoted phrase"</code>,
           is searched in the summaries (case-insensitive) — slower, so on a big file the results arrive over a few seconds.
-          Drag across the graph to select a time range; click it to jump there.</p>
+          Drag across the graph to select a time range; click it to jump there. In a packet's detail, a term under
+          its summary adds it to the filter (shift-click: without it).</p>
       </details>
       <div class="cv-graph-wrap">
         <div class="row wrap small">
@@ -540,12 +555,19 @@
       </div>
       <div class="cv-split">
         <div class="cv-table" id="cv-table" tabindex="0">
-          <div class="cv-head"><span>No.</span><span>time (s)</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
+          <div class="cv-head"><span>No.</span><span id="cv-time-h">time (s)</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
           <div class="cv-body" id="cv-body"><div id="cv-spacer"></div><div class="cv-rows" id="cv-rows"></div></div>
         </div>
         <div class="cv-detail">
-          <div id="cv-fields" class="cv-fields"></div>
-          <pre id="cv-hex" class="cv-hex"></pre>
+          <div class="cv-dtabs"><div class="segs" id="cv-dtabs" role="tablist" aria-label="Detail">
+            <button class="seg on" data-dtab="fields" role="tab" aria-selected="true">Fields</button>
+            <button class="seg" data-dtab="btmon" role="tab" aria-selected="false" title="BlueZ's own decoder: btmon -r on the board, over this packet and the context it needs">btmon</button>
+          </div></div>
+          <div id="cv-dfields">
+            <div id="cv-fields" class="cv-fields"></div>
+            <pre id="cv-hex" class="cv-hex"></pre>
+          </div>
+          <pre id="cv-btmon" class="cv-btmon" hidden></pre>
         </div>
       </div>
     </div>
