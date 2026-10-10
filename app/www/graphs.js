@@ -1,10 +1,11 @@
 'use strict';
 // Graphs: live, scrolling time series of everything the bench measures, on one time axis —
 // per connection the throughput, TX latency (p50/p95/max), packets in flight against the
-// controller's credits, the AVDTP media stream's RTP rate, loss and jitter; the audio streams'
-// levels; the board's CPU and temperature. Fed by the WebSocket (hci.stats and system once a
-// second, audio.streams four times), backfilled from /api/hci/history when the tab opens, and
-// kept in the browser for five minutes. Nothing is asked of the board while the tab is hidden.
+// controller's credits, the AVDTP media stream's RTP rate, loss and jitter; PipeWire's DSP load,
+// cycle times and xruns per driver; the audio streams' levels; the board's CPU and temperature.
+// Fed by the WebSocket (hci.stats, pipewire and system once a second, audio.streams four times),
+// backfilled from /api/hci/history when the tab opens, and kept in the browser for five minutes.
+// Nothing is asked of the board while the tab is hidden (pw-top runs only while it is shown).
 
 const GR_KEEP_MS = 300 * 1000;
 const GR_PALETTE = ['#1f6feb', '#1a8f5a', '#8250df', '#cf3a3a', '#b7791f', '#0e8a9b', '#c2185b', '#5d6b00'];
@@ -17,12 +18,15 @@ const GR_CHARTS = [
   {id: 'flight', title: 'Packets in flight, and the controller\'s free credits', unit: 'packets', styles: ['in flight', 'credits']},
   {id: 'rtp', title: 'AVDTP media: RTP packets and losses per second', unit: '/s', styles: ['packets', 'lost']},
   {id: 'jitter', title: 'AVDTP media: RTP jitter', unit: 'ms'},
+  {id: 'pwload', title: 'PipeWire: DSP load (the graph cycle\'s busy time as a share of the quantum)', unit: '%', styles: ['driver', 'busiest follower']},
+  {id: 'pwtime', title: 'PipeWire: graph cycle against its period', unit: 'ms', styles: ['busy', 'wait', 'period (quantum ÷ rate)']},
+  {id: 'pwxrun', title: 'PipeWire: xruns', unit: '/s'},
   {id: 'audio', title: 'Audio streams: level', unit: 'dBFS', min: -60, max: 0, styles: ['RMS', null, 'peak']},
   {id: 'sys', title: 'Board: CPU and temperature', unit: '% · °C', styles: ['CPU %', 'temperature']},
 ];
 
 const gr = {series: {}, order: [], skew: null, paused: false, frozenAt: 0, hover: null, hidden: new Set(),
-  conns: {}, raf: null, last: 0, backfilled: new Set()};
+  conns: {}, pw: {}, raf: null, last: 0, backfilled: new Set()};
 
 try { (JSON.parse(lsGet('btbench.gr.hidden-groups') || '[]')).forEach(k => gr.hidden.add(k)); } catch (e) { /* none */ }
 
@@ -96,6 +100,26 @@ function grFromSystem(h) {
   const t = Date.now();
   grPush('sys:cpu', {group: 'board', chart: 'sys', label: 'CPU %'}, t, h.cpu_pct);
   if (h.temp_c != null) grPush('sys:temp', {group: 'board', chart: 'sys', label: 'temperature °C', dash: [5, 3]}, t, h.temp_c);
+}
+
+// pw-top's table (audio/pwtop.h), a second at a time: per running driver its load, its cycle
+// times against the period they must fit in, and the xruns of it and its followers.
+const pwShort = n => n.replace(/^(alsa|bluez)_(output|input)\./, '$1 $2 ').replace(/\.(analog|iec958)-stereo$/, '');
+function grFromPipewire(t) {
+  const at = Date.now();
+  for (const d of t.drivers || []) {
+    if (!/[RITt]/.test(d.state) || d.quantum == null) continue;
+    const g = 'pw' + d.id, name = `${pwShort(d.name)} (${d.quantum}/${d.rate})`;
+    gr.pw[g] = name;
+    if (d.busy_q != null) grPush(g + ':load', {group: g, chart: 'pwload', label: `${name} load`}, at, d.busy_q * 100);
+    const fq = (d.followers || []).map(f => f.busy_q).filter(v => v != null);
+    if (fq.length) grPush(g + ':fload', {group: g, chart: 'pwload', label: `${name} busiest follower`, dash: [5, 3]}, at, Math.max(...fq) * 100);
+    if (d.busy_ms != null) grPush(g + ':busy', {group: g, chart: 'pwtime', label: `${name} busy`}, at, d.busy_ms);
+    if (d.wait_ms != null) grPush(g + ':wait', {group: g, chart: 'pwtime', label: `${name} wait`, dash: [5, 3]}, at, d.wait_ms);
+    if (d.period_ms != null) grPush(g + ':period', {group: g, chart: 'pwtime', label: `${name} period`, dash: [1, 3]}, at, d.period_ms);
+    const x = (d.xruns || 0) + (d.followers || []).reduce((a, f) => a + (f.xruns || 0), 0);
+    grPush(g + ':xrun', {group: g, chart: 'pwxrun', label: `${name} xruns`}, at, x);
+  }
 }
 
 function grFromAudio(list) {
@@ -186,7 +210,8 @@ function grLegend() {
     const s = gr.series[k];
     if (s.data.length && !groups.has(s.group)) groups.set(s.group, s);
   }
-  const name = s => s.group === 'board' ? 'board' : s.group.startsWith('stream') ? s.label.replace(/ peak$/, '') : gr.conns[s.group] || s.group;
+  const name = s => s.group === 'board' ? 'board' : s.group.startsWith('stream') ? s.label.replace(/ peak$/, '')
+    : s.group.startsWith('pw') ? 'PipeWire ' + (gr.pw[s.group] || s.group) : gr.conns[s.group] || s.group;
   setHTML($('gr-legend'), [...groups.values()].map(s => `<span data-k="${esc(s.group)}" class="${gr.hidden.has(s.group) ? 'off' : ''}">` +
     `<i style="background:${grColor(s.colorIndex)}"></i>${esc(name(s))}</span>`).join(''));
 }
@@ -303,7 +328,8 @@ function niceCeil(v) {
   for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p;
   return 10 * p;
 }
-const fmtAxis = v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0) + 'k' : (Math.abs(v) < 10 && v % 1 ? v.toFixed(1) : String(Math.round(v)));
+// Ticks are quarters of a nice number (1.25, 3.75): shown as they are, not rounded to 1.3.
+const fmtAxis = v => Math.abs(v) >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0) + 'k' : (Math.abs(v) < 10 && v % 1 ? String(+v.toFixed(2)) : String(Math.round(v)));
 const fmtVal = v => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
 
 // Scrolls at about 8 frames a second: smooth enough for a 1 Hz feed, cheap for a laptop.
@@ -352,7 +378,7 @@ function setupGraphs() {
 }
 
 registerTab('graphs', {
-  topics: () => ['hci.stats', 'system', 'audio.streams'],
+  topics: () => ['hci.stats', 'system', 'audio.streams', 'pipewire'],
   show() {
     api('/hci/stats').then(s => {
       setText($('gr-msg'), s.source && !s.source.available ? 'The HCI monitor is not reading: no connection graphs (see the daemon log).' : '');
@@ -371,7 +397,8 @@ registerTab('graphs', {
     if (topic === 'hci.stats') { grFromStats(d); grBackfill(d); }
     else if (topic === 'system') grFromSystem(d);
     else if (topic === 'audio.streams') grFromAudio(d);
-    if (gr.order.length !== before || topic === 'system') grLegend();
+    else if (topic === 'pipewire') grFromPipewire(d);
+    if (gr.order.length !== before || topic === 'system' || topic === 'pipewire') grLegend();
   },
 });
 setupGraphs();

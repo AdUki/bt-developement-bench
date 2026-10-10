@@ -910,8 +910,37 @@ function setupAudio() {
   };
 }
 
+// ---------------------------------------------------------------- PipeWire's graph (pw-top)
+
+// The drivers, running ones first, each with its followers under it.
+function renderPipewire(t) {
+  if (!t.drivers) {
+    setText($('pw-note'), t.error ? 'pw-top: ' + t.error : 'waiting for pw-top…');
+    return;
+  }
+  setText($('pw-note'), `${fmtTime(t.ts)}${t.xruns ? ` · ${t.xruns} xrun${t.xruns === 1 ? '' : 's'} this second` : ''}`);
+  const on = st => /[RITt]/.test(st);
+  const stName = {R: 'running', I: 'idle', S: 'suspended', C: 'creating', E: 'error', T: 'running', t: 'starting'};
+  const load = q => q == null ? '' : `<span class="pw-load${q > 0.8 ? ' bad' : q > 0.5 ? ' warn' : ''}"><i style="width:${Math.min(100, Math.round(q * 100))}%"></i></span> ${Math.round(q * 100)}%`;
+  const ms = v => v == null ? '' : v < 1 ? `${(v * 1000).toFixed(0)} µs` : `${v.toFixed(2)} ms`;
+  const errCell = n => `<td class="num${n.xruns ? ' bad-text' : n.err ? ' warn-text' : ' muted'}" title="${n.err} since pw-top started">${n.xruns ? '+' + n.xruns : n.err || ''}</td>`;
+  const drivers = [...t.drivers].sort((a, b) => on(b.state) - on(a.state));
+  const rows = drivers.map(d => {
+    const head = `<tr class="${on(d.state) ? '' : 'muted'}"><td>${pill(stName[d.state] || d.state, d.state === 'E' ? 'bad' : on(d.state) ? 'good' : '')}</td>
+      <td class="mono"><b>${esc(d.name)}</b></td><td class="mono">${d.quantum != null ? `${d.quantum}/${d.rate}` : ''}</td>
+      <td class="num">${d.period_ms != null ? d.period_ms + ' ms' : ''}</td><td>${load(d.busy_q)}</td>
+      <td class="num">${ms(d.busy_ms)}</td><td class="num">${ms(d.wait_ms)}</td>${errCell(d)}<td class="mono small">${esc(d.format || '')}</td></tr>`;
+    const fol = (d.followers || []).map(f => `<tr class="pw-fol${on(f.state) ? '' : ' muted'}"><td></td>
+      <td class="mono">↳ ${esc(f.name)}</td><td></td><td class="num" title="the latency it reports">${f.latency_ms != null ? f.latency_ms + ' ms' : ''}</td>
+      <td>${load(f.busy_q)}</td><td class="num">${ms(f.busy_ms)}</td><td class="num">${ms(f.wait_ms)}</td>${errCell(f)}<td class="mono small">${esc(f.format || '')}</td></tr>`).join('');
+    return head + fol;
+  }).join('');
+  setHTML($('pw-graph'), `<table class="tbl compact pw-tbl"><tr><th></th><th>Node</th><th>quantum</th><th class="num">period</th><th>load</th>
+    <th class="num">busy</th><th class="num">wait</th><th class="num">xruns</th><th>format</th></tr>${rows}</table>`);
+}
+
 registerTab('audio', {
-  topics: () => ['media', 'audio.streams'],
+  topics: () => ['media', 'audio.streams'].concat(panes.audio === 'stack' ? ['pipewire'] : []),
   show() {
     refreshAudio();
     refreshMedia();
@@ -931,6 +960,7 @@ registerTab('audio', {
     au.tick = null;
   },
   onMessage(topic, data) {
+    if (topic === 'pipewire') return renderPipewire(data);
     if (currentTab !== 'audio') return;
     if (topic === 'media') {
       // The codec list changes when a device's transports do, not with every track position.

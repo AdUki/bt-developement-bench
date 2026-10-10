@@ -149,6 +149,8 @@ int main(int argc, char** argv) {
   btb::Jobs jobs(publish);
   btb::JournalFollower journal([&hub] { return hub.has_subscribers("journal"); },
                                [&hub](const nlohmann::json& e) { hub.publish("journal", e); });
+  btb::audio::PwTop pwtop([&hub] { return hub.has_subscribers("pipewire"); },
+                          [&hub](const nlohmann::json& t) { hub.publish("pipewire", t); });
   btb::TargetScripts scripts(scripts_dir);
   btb::SystemInfo sys(data_dir);
 
@@ -226,7 +228,7 @@ int main(int argc, char** argv) {
                    [&obex](const std::string& noplugin) { obex.set_noplugin(noplugin); });
   obex.set_noplugin(setup.obex_noplugin());
 
-  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, obex, hid_remote, hid_host, setup};
+  btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup};
   btb::WebServer server(deps, wopt);
   bt.on_change([&server, &hid_host](bool request) {
     server.publish_bt(request);
@@ -251,6 +253,7 @@ int main(int argc, char** argv) {
     bt.start();
   }
   journal.start();
+  pwtop.start();
 
   g_server = &server;
   std::signal(SIGINT, on_signal);
@@ -264,6 +267,7 @@ int main(int argc, char** argv) {
   g_stopping.store(true);
   g_server = nullptr;
   journal.stop();
+  pwtop.stop();
   jobs.stop_all();
   audio.stop_all();
   obex.stop();

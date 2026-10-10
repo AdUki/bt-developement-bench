@@ -236,6 +236,8 @@ function showTab(name, pane) {
     updateTopics();
     window.scrollTo(0, 0);
   }
+  // A pane can want topics of its own (Audio → Stack: pipewire), so a pane switch asks too.
+  updateTopics();
   renderNav();
 }
 

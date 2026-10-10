@@ -117,6 +117,9 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
   (pipewire-tools, with `PIPEWIRE_RUNTIME_DIR=/run/pipewire` from the unit), `aplay`/`arecord`
   (alsa-utils-aplay), `mpg123` (packagegroup-btbench-audio), `ffmpeg` (only with
   `BTBENCH_FFMPEG = "1"`), `curl`. A missing one fails only the streams that need it.
+- PipeWire's timing (`/api/audio/pipewire`, the `pipewire` topic) runs `pw-top -b`
+  (pipewire-tools), through `stdbuf -oL` (coreutils) when it is there so its table is not held in
+  a pipe buffer; only while someone subscribes.
 
 ### HCI monitor API (HCI monitor area; btbenchd wires it in)
 

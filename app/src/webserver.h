@@ -8,6 +8,7 @@
 
 #include "adv.h"
 #include "audio/engine.h"
+#include "audio/pwtop.h"
 #include "obex/obex.h"
 #include "bluetooth.h"
 #include "gatt_server.h"
@@ -49,6 +50,7 @@ struct Deps {
   SystemInfo& sys;
   WsHub& hub;
   audio::AudioEngine& audio;
+  audio::PwTop& pwtop;
   obex::ObexManager& obex;
   HidRemote& hid_remote;
   HidHost& hid_host;

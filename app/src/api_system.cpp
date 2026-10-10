@@ -38,6 +38,12 @@ void after_reply(std::function<void()> fn) {
 void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt) {
   // ---- Audio mode (btbench-audio) ---------------------------------------------------------------
 
+  // PipeWire's timing (audio/pwtop.h): the last pw-top table, while someone follows the
+  // "pipewire" topic; {"running": false} otherwise. The topic is how it is meant to be read.
+  svr.Get("/api/audio/pipewire", [&d](const httplib::Request&, httplib::Response& res) {
+    send_json(res, d.pwtop.last());
+  });
+
   svr.Get("/api/audio", [&d](const httplib::Request&, httplib::Response& res) {
     reply(res, d.scripts.json_cmd("btbench-audio", {"status"}, 10000));
   });
@@ -142,7 +148,8 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     send_json(res, json{{"dir", opt.logs_dir}, {"files", files}});
   });
 
-  // A file as text; ?tail=N for its last N lines. Only a plain file directly in the directory.
+  // A file as text; ?tail=N for its last N lines, ?from=OFFSET for what came after. Only a plain
+  // file directly in the directory.
   svr.Get(R"(/api/system/logs/([A-Za-z0-9_.-]+))", [opt](const httplib::Request& req, httplib::Response& res) {
     const std::string name = req.matches[1];
     const std::string p = opt.logs_dir + "/" + name;
@@ -150,9 +157,38 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     if (name.empty() || name[0] == '.' || lstat(p.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
       return send_error(res, 404, "no such log file");
     std::ifstream f(p, std::ios::binary);
+    res.set_header("Cache-Control", "no-store");
+    // ?from=OFFSET: what was appended since, in whole lines, for a viewer following the file.
+    // X-Size is where to ask from next; X-Reset says the file was rotated (or the gap was over
+    // 1 MiB) and the text starts afresh rather than where the viewer stopped.
+    if (req.has_param("from")) {
+      const long long size = static_cast<long long>(st.st_size);
+      long long from = std::atoll(query(req, "from", "0").c_str());
+      bool reset = false;
+      if (from < 0 || from > size) from = 0, reset = true;
+      constexpr long long kMax = 1 << 20;
+      if (size - from > kMax) from = size - kMax, reset = true;
+      std::string text(static_cast<size_t>(size - from), '\0');
+      f.seekg(from);
+      f.read(text.data(), static_cast<std::streamsize>(text.size()));
+      text.resize(static_cast<size_t>(f.gcount()));
+      size_t cut = text.rfind('\n');
+      cut = cut == std::string::npos ? 0 : cut + 1;
+      // Joining mid-file after a reset: start at a line boundary.
+      size_t start = 0;
+      if (reset && from > 0) {
+        const size_t nl = text.find('\n');
+        start = nl == std::string::npos || nl >= cut ? cut : nl + 1;
+      }
+      res.set_header("X-Size", std::to_string(from + static_cast<long long>(cut)));
+      if (reset) res.set_header("X-Reset", "1");
+      res.set_content(text.substr(start, cut - start), "text/plain; charset=utf-8");
+      return;
+    }
     std::stringstream ss;
     ss << f.rdbuf();
     std::string text = ss.str();
+    res.set_header("X-Size", std::to_string(text.size()));
     const long tail = std::atol(query(req, "tail", "0").c_str());
     if (tail > 0) {
       size_t at = text.size();
@@ -162,7 +198,6 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
       }
       if (at > 0) text = text.substr(at + 1);
     }
-    res.set_header("Cache-Control", "no-store");
     if (query(req, "download", "") == "1") res.set_header("Content-Disposition", "attachment; filename=\"" + name + "\"");
     res.set_content(text, "text/plain; charset=utf-8");
   });

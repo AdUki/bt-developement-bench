@@ -335,6 +335,11 @@
         <div id="au-services" class="small muted"></div>
         <div id="au-msg" class="small muted"></div>
       </div>
+      <div class="card">
+        <div class="card-head"><h3>PipeWire graph</h3><span id="pw-note" class="small muted"></span></div>
+        <p class="hint">Each driver (a sound card, a Bluetooth transport) runs a cycle of one quantum and pulls its followers through it. Load is the cycle's busy time against the quantum; an xrun is a cycle that did not finish in time. From pw-top, a second at a time, while this is on screen.</p>
+        <div id="pw-graph" class="scroll-x"></div>
+      </div>
       <h2>Transports</h2>
       <div id="au-transports" class="rows-cards"></div>
       <h2>Remote endpoints</h2>
@@ -618,17 +623,29 @@
         <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
         <div id="kd-msg" class="small muted"></div>
       </div>
-      <div class="card">
+      <div class="card" id="lg">
         <div class="card-head">
-          <h3>Journal</h3>
+          <h3>Logs</h3>
           <div class="acts">
-            <select id="sys-j-unit" aria-label="Unit"></select>
-            <button id="sys-j-load">Last 200</button>
-            <label class="switch inline small"><input type="checkbox" id="sys-j-follow"><i></i> Follow</label>
-            <button class="small-btn" id="sys-j-clear">Clear</button>
+            <select id="lg-src" aria-label="Log"></select>
+            <select id="lg-lines" aria-label="Lines to load" class="small">
+              <option value="200" selected>last 200</option><option value="1000">last 1000</option><option value="2000">last 2000</option></select>
+            <label class="switch inline small"><input type="checkbox" id="lg-follow"><i></i> Follow</label>
+            <button class="small-btn" id="lg-reload">Reload</button>
+            <button class="small-btn" id="lg-clear">Clear</button>
           </div>
         </div>
-        <pre id="sys-journal" class="log tall"></pre>
+        <div class="row wrap lg-bar">
+          <input id="lg-filter" class="mono grow" spellcheck="false" autocomplete="off" aria-label="Filter"
+                 placeholder='words to match · !word to hide · /regex/ · "a phrase"'>
+          <div class="segs" id="lg-prio" role="group" aria-label="Lowest priority shown">
+            <button class="seg on" data-prio="7">all</button><button class="seg" data-prio="6">info</button>
+            <button class="seg" data-prio="4">warnings</button><button class="seg" data-prio="3">errors</button>
+          </div>
+          <label class="check small"><input type="checkbox" id="lg-wrap" checked> wrap</label>
+        </div>
+        <div class="small muted lg-status"><span id="lg-count"></span> <span id="lg-err" class="bad-text"></span></div>
+        <div id="lg-view" class="lg-view wrap" tabindex="0" aria-label="Log lines"></div>
       </div>
       <div class="card">
         <div class="card-head"><h3>Run a tool</h3></div>
@@ -702,6 +719,7 @@
 <script src="wifi.js"></script>
 <script src="kernel.js"></script>
 <script src="system.js"></script>
+<script src="logs.js"></script>
 <script>startConsole();</script>
 </body>
 </html>

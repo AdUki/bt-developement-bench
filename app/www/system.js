@@ -5,7 +5,6 @@
 
 let sysInfo = null;
 let jobSel = null;       // the job whose output is shown
-let journalFollow = false;
 
 function renderHealth(h) {
   if (!h || currentTab !== 'system') return;
@@ -33,12 +32,7 @@ function renderSystem(s) {
     ${s.board ? `<span>board</span><span class="mono">${esc(Object.entries(s.board).map(e => e.join('=')).join(' '))}</span>` : ''}</div>`);
   renderServices(s.services || {});
   if (idle($('sys-btargs'))) $('sys-btargs').value = s.bluetoothd_args || '';
-  // The journal's unit list: the stack's services, as GET /api/system reports them.
-  const units = Object.keys(s.services || {});
-  if (units.length && !$('sys-j-unit').options.length) {
-    $('sys-j-unit').innerHTML = units.map(u => `<option>${esc(u)}</option>`).join('') + '<option value="kernel">Kernel log</option>';
-    $('sys-j-unit').value = 'bluetooth.service';
-  }
+  logsUnits(Object.keys(s.services || {}));
 }
 
 function renderServices(sv) {
@@ -50,18 +44,6 @@ function renderServices(sv) {
 }
 
 const refreshSystem = () => api('/system').then(renderSystem).catch(fail);
-
-// ---------------------------------------------------------------- journal
-
-const journalLine = e => `${fmtTime(e.ts)} ${e.ident || e.unit}${e.pid ? '[' + e.pid + ']' : ''}: ${e.msg}`;
-
-function loadJournal() {
-  const unit = $('sys-j-unit').value || 'bluetooth.service';
-  api(`/system/journal?unit=${encodeURIComponent(unit)}&lines=200`).then(r => {
-    logClear($('sys-journal'));
-    r.entries.forEach(e => logLine($('sys-journal'), journalLine(e)));
-  }).catch(e => setText($('sys-journal'), e.message));
-}
 
 // ---------------------------------------------------------------- jobs
 
@@ -101,15 +83,13 @@ function setupSystem() {
       setText($('sys-btargs-msg'), `saved "${r.args}"${r.restarted ? ', bluetooth restarted' : ', takes effect at the next bluetooth restart'}`))
       .catch(e => setText($('sys-btargs-msg'), e.message));
   };
-  $('sys-j-load').onclick = loadJournal;
-  $('sys-j-clear').onclick = () => logClear($('sys-journal'));
-  const follow = () => {
-    journalFollow = $('sys-j-follow').checked;
-    if (journalFollow) put('/system/journal', {unit: $('sys-j-unit').value || 'bluetooth.service'}).catch(fail);
-    updateTopics();
+  $('lf-list').onclick = e => {
+    const a = e.target.closest('[data-lf]');
+    if (!a) return;
+    e.preventDefault();
+    logsOpen('f:' + a.dataset.lf, false);
+    $('lg').scrollIntoView({block: 'start', behavior: 'smooth'});
   };
-  $('sys-j-follow').onchange = follow;
-  $('sys-j-unit').onchange = () => { loadJournal(); if (journalFollow) follow(); };
   $('job-start').onclick = () => post('/jobs', {cmd: $('job-cmd').value, args: $('job-args').value})
     .then(j => { refreshJobs(); showJob(j.id); }).catch(fail);
   $('job-list').onclick = e => {
@@ -130,13 +110,13 @@ function renderLogFiles(r) {
   setText($('lf-dir'), r.dir);
   setHTML($('lf-list'), r.files.length ? r.files.map(f => f.link
     ? `<div class="file-row"><span class="mono">${esc(f.name)}</span><span class="small muted">→ ${esc(f.link)}</span></div>`
-    : `<div class="file-row"><span><a href="/api/system/logs/${encodeURIComponent(f.name)}?tail=2000" target="_blank" rel="noopener" class="mono">${esc(f.name)}</a>
+    : `<div class="file-row"><span><a href="#" data-lf="${esc(f.name)}" class="mono" title="Open in the viewer below">${esc(f.name)}</a>
         <span class="small muted">${fmtBytes(f.size)} · ${fmtTime(f.mtime_ms)}</span></span>
       <a class="small-btn btn-link" href="/api/system/logs/${encodeURIComponent(f.name)}?download=1">Download</a></div>`).join('')
     : '<div class="muted small">No log files yet: btbench-logs.service writes them on the board.</div>');
 }
 
-const refreshLogFiles = () => api('/system/logs').then(renderLogFiles).catch(() => {});
+const refreshLogFiles = () => api('/system/logs').then(r => { renderLogFiles(r); logsFiles(r.files); }).catch(() => {});
 
 // ---------------------------------------------------------------- kernel Bluetooth logs
 
@@ -171,25 +151,22 @@ function setupBtDebug() {
   $('kd-keep').onchange = e => put('/system/btdebug', {keep: e.target.checked ? on() : []}).then(renderBtDebug).catch(fail);
   $('kd-off').onclick = () => put('/system/btdebug', {off: ['all']}).then(renderBtDebug).catch(fail);
   $('kd-show').onclick = () => {
-    $('sys-j-unit').value = 'kernel';
-    $('sys-j-follow').checked = true;
-    $('sys-j-unit').onchange();
-    $('sys-j-follow').onchange();
-    $('sys-journal').scrollIntoView({block: 'start', behavior: 'smooth'});
+    logsOpen('j:kernel', true);
+    $('lg').scrollIntoView({block: 'start', behavior: 'smooth'});
   };
 }
 
 registerTab('system', {
-  topics: () => [].concat(journalFollow ? ['journal'] : [], jobSel ? ['job.' + jobSel] : []),
+  topics: () => logsTopics().concat(jobSel ? ['job.' + jobSel] : []),
   show() {
-    refreshSystem().then(() => { if (!$('sys-journal').textContent) loadJournal(); });
+    refreshSystem().then(logsShow);
     refreshJobs();
     refreshBtDebug();
     refreshLogFiles();
   },
   onMessage(topic, d) {
     if (topic === 'system') renderHealth(d);
-    else if (topic === 'journal' && journalFollow) logLine($('sys-journal'), journalLine(d));
+    else if (topic === 'journal') logsJournal(d);
     else if (jobSel && topic === 'job.' + jobSel) {
       if ('line' in d) logLine($('job-out'), (d.stream === 'err' ? '! ' : '') + d.line);
       else {

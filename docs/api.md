@@ -34,6 +34,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 | `hid.input` | `{address, device, event, type: "key\|rel\|abs", code, name, value, ts}` | an input event of a Bluetooth keyboard, remote or mouse connected to the board (`value` 1 down, 0 up, 2 repeat) |
 | `system` | the body of `GET /api/system/health` | 1 Hz |
 | `journal` | `{ts, prio, unit, ident, pid, msg}` | each new entry of the followed unit (`PUT /api/system/journal`) |
+| `pipewire` | PipeWire's graph timing, as `GET /api/audio/pipewire` | once a second, from `pw-top -b`, which runs only while someone subscribes |
 | `job.<id>` | `{stream: "out\|err", line}`, then `{exit, killed}` | a job's output |
 | `hci.stats` | the body of `GET /api/hci/stats` | 1 Hz |
 | `hci.event` | one entry of `GET /api/hci/events` | per event |
@@ -517,6 +518,28 @@ They answer 503 with the reason when the monitor socket cannot be opened (no `CA
 `btbenchd --hci-replay FILE.btsnoop` feeds the monitor from a capture instead (`make run
 HCI=replay:FILE`).
 
+### PipeWire's graph
+
+`GET /api/audio/pipewire`: the last table of `pw-top -b` (PipeWire's profiler), while someone
+follows the `pipewire` topic; `{"running": false, "error": ...}` otherwise. pw-top is a process of
+its own, so it runs only while watched (the Graphs tab, Audio → Stack).
+
+```json
+{"running": true, "ts": 1791620110152, "xruns": 0,
+ "drivers": [{"id": 49, "state": "R", "name": "alsa_output.platform-snd_aloop.0.analog-stereo",
+              "quantum": 2048, "rate": 48000, "period_ms": 42.667, "format": "S32P 2 48000",
+              "busy_ms": 1.4, "wait_ms": 0.115, "busy_q": 0.03, "wait_q": 0.0, "err": 0, "xruns": 0,
+              "followers": [{"id": 53, "state": "R", "name": "btbench-stream-1", "latency_ms": 60.0,
+                             "busy_ms": 0.42, "wait_ms": 2.4, "busy_q": 0.01, "err": 3, "xruns": 0, ...}]}]}
+```
+
+A driver (a sound card, a Bluetooth transport) runs one graph cycle per quantum. `busy_q` is that
+cycle's work as a share of the quantum (the DSP load); `period_ms` is quantum ÷ rate, the time the
+cycle must fit in. A follower's `latency_ms` is the latency it reports. `err` counts xruns since
+pw-top started; `xruns` is how many came since the table before, and the top-level `xruns` is
+their sum. States: `R` running, `I` idle, `S` suspended, `C` creating, `E` error, `T`/`t`
+transport running/starting. Times are `null` when pw-top did not measure them.
+
 ## Audio mode
 
 `GET /api/audio` — `btbench-audio status`:
@@ -617,7 +640,8 @@ servers did. A restart drops every connection. Answers with the state plus `rest
 | `PUT /api/system/bluetoothd-args` `{"args": "-d -E", "restart": true}` | writes `BLUETOOTHD_ARGS` in `/data/btbench/bluetoothd.env` (other lines, `BLUETOOTHD_NOPLUGIN`, are kept) and restarts bluetooth.service |
 | `GET /api/system/journal?unit=bluetooth&lines=200` | `{unit, entries: [{ts, prio, unit, ident, pid, msg}]}`, oldest first; `unit=kernel` is the kernel's log (`journalctl -k`) |
 | `GET /api/system/logs` | `{dir, files: [{name, size, mtime_ms, link}]}`: btbench-logd's files (`/tmp/logs`, `--logs-dir`); `link` is a symbolic link's target (`btsnoop`) |
-| `GET /api/system/logs/{name}?tail=2000&download=1` | one file as `text/plain`, or its last `tail` lines; `download=1` as an attachment |
+| `GET /api/system/logs/{name}?tail=2000&download=1` | one file as `text/plain`, or its last `tail` lines; `download=1` as an attachment. `X-Size` is its size |
+| `GET /api/system/logs/{name}?from=OFFSET` | what was appended after `OFFSET`, in whole lines, for following a file; `X-Size` is the offset to ask from next, `X-Reset: 1` that the file was rotated or more than 1 MiB came, and the text starts afresh |
 | `GET /api/system/btdebug` | the kernel's Bluetooth debug messages by area: `btbench-btdebug status` (docs/contracts.md); 503 on a PC |
 | `PUT /api/system/btdebug` `{"on": ["l2cap", "smp"], "off": ["all"], "keep": ["l2cap"]}` | any of them, applied off → on → keep; `keep` replaces the areas on from boot (`[]`: none). Answers with the status |
 | `PUT /api/system/journal` `{"unit": "pipewire"}` | the unit the `journal` topic follows (default bluetooth) |

@@ -29,6 +29,10 @@
   --p50: #8250df;
   --p95: #cf3a3a;
   --fl: #b7791f;
+  /* The log viewer: a colour per program, and the things picked out in its lines. */
+  --lg-c0: #1f6feb; --lg-c1: #1a8f5a; --lg-c2: #8250df; --lg-c3: #b7791f;
+  --lg-c4: #0e8a9b; --lg-c5: #c2185b; --lg-c6: #5d6b00; --lg-c7: #6e5494;
+  --lg-addr: #0b63ce; --lg-path: #0e7a86; --lg-num: #8a4b08; --lg-mark: #ffe58a;
   --radius: 8px;
   --rail-w: 188px;
 }
@@ -55,6 +59,9 @@
     --p50: #b48cff;
     --p95: #ef5b5b;
     --fl: #f5a623;
+    --lg-c0: #4da3ff; --lg-c1: #3ecf8e; --lg-c2: #b48cff; --lg-c3: #f5a623;
+    --lg-c4: #3fc6d6; --lg-c5: #f06292; --lg-c6: #b8c94a; --lg-c7: #c3a6ff;
+    --lg-addr: #6cb4ff; --lg-path: #4fd1c5; --lg-num: #f0b46a; --lg-mark: #6b5a12;
   }
 }
 
@@ -779,3 +786,46 @@ label.set-row { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .np-art.loading::after, .spin { animation: none; border-color: var(--accent); opacity: 0.5; }
 }
+
+/* Audio → Stack: PipeWire's graph (pw-top). */
+.pw-tbl td { vertical-align: middle; }
+.pw-fol td:nth-child(2) { padding-left: 0.8rem; }
+.pw-load { display: inline-block; width: 3.5rem; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; vertical-align: middle; }
+.pw-load i { display: block; height: 100%; background: var(--good); }
+.pw-load.warn i { background: var(--warn); }
+.pw-load.bad i { background: var(--bad); }
+
+/* System → Logs: one line a row, coloured by priority; the filter's hits marked. */
+.lg-bar { margin: 0.5rem 0 0.3rem; gap: 0.4rem 0.6rem; }
+.lg-bar input.bad { border-color: var(--bad); }
+.lg-status { min-height: 1.2em; margin-bottom: 0.25rem; }
+.lg-view {
+  background: var(--well); border: 1px solid var(--line-soft); border-radius: 6px; padding: 0.35rem 0.5rem;
+  height: 30rem; overflow: auto; font: 12px/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: pre; outline: none;
+}
+.lg-view.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lg-line { padding: 0 0.25rem; border-left: 2px solid transparent; }
+.lg-line:hover { background: var(--line-soft); }
+.lg-line.p0, .lg-line.p1, .lg-line.p2, .lg-line.p3 {
+  color: var(--bad); border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+.lg-line.p4 { color: var(--warn); border-left-color: var(--warn); }
+.lg-line.p5 { font-weight: 600; }
+.lg-line.p7 { color: var(--muted); }
+.lg-note { color: var(--muted); font-style: italic; text-align: center; }
+.lg-ts, .lg-pid { color: var(--muted); font-weight: 400; }
+.lg-who { font-weight: 600; }
+.lg-lvl { font-size: 10px; letter-spacing: 0.02em; opacity: 0.75; }
+.lg-who.c0 { color: var(--lg-c0); } .lg-who.c1 { color: var(--lg-c1); } .lg-who.c2 { color: var(--lg-c2); }
+.lg-who.c3 { color: var(--lg-c3); } .lg-who.c4 { color: var(--lg-c4); } .lg-who.c5 { color: var(--lg-c5); }
+.lg-who.c6 { color: var(--lg-c6); } .lg-who.c7 { color: var(--lg-c7); }
+.lg-addr { color: var(--lg-addr); font-weight: 600; }
+.lg-path { color: var(--lg-path); }
+.lg-src { color: var(--muted); }
+.lg-hex, .lg-uuid { color: var(--lg-num); }
+.lg-bad { color: var(--bad); font-weight: 600; }
+.lg-warn { color: var(--warn); }
+.lg-good { color: var(--good); }
+.lg-line.p7 .lg-addr, .lg-line.p7 .lg-path, .lg-line.p7 .lg-hex { opacity: 0.85; }
+.lg-view mark { background: var(--lg-mark); color: inherit; border-radius: 2px; }
