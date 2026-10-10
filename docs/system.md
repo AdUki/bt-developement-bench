@@ -84,8 +84,11 @@ Plug the Zero W's **USB** port (not PWR) into the PC. It is one composite USB de
 - **Serial console**: `/dev/ttyACM0` on the PC (`picocom /dev/ttyACM0`), a login on `ttyGS0`.
   It works when the network does not, e.g. a trial kernel without a network.
 
-`ssh root@10.55.0.1`, or `ssh root@<hostname>.local` (mDNS from systemd-resolved, on the USB link
-and Wi-Fi).
+`ssh root@10.55.0.1`, or `ssh root@<mac>-<hostname>.local` (mDNS from systemd-resolved, on the USB link
+and Wi-Fi). `<mac>` is the last three bytes of the board's Wi-Fi MAC address (`257bfc-btbench`):
+every image has the same `/etc/hostname`, and `btbench-hostname.service` puts the MAC in front at
+boot, as a transient hostname, so that several boards on one network each have a name of their
+own. `BTBENCH_HOSTNAME_MAC = "0"` in the device conf keeps the plain name.
 
 `BTBENCH_GADGET=off`, or a board without a device controller, leaves the port alone: on the Zero W
 that keeps it a USB host, for a Bluetooth dongle, and the board is reachable over Wi-Fi only.

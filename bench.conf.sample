@@ -12,7 +12,8 @@ BOARD ?= rpi0w
 KERNEL ?= next
 
 # Where the board is reachable. 10.55.0.1 is the USB gadget link (data micro-USB port to the
-# PC); btbench.local works over Wi-Fi as well.
+# PC); <mac>-btbench.local (e.g. 257bfc-btbench.local: the board's own, see btbench-hostname)
+# works over Wi-Fi as well.
 TARGET ?= root@10.55.0.1
 
 # Upstream checkouts that `make src` makes git worktrees from (src/<comp>, branch "bench").

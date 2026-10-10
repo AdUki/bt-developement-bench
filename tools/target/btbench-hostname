@@ -1,0 +1,62 @@
+#!/bin/sh
+# btbench-hostname — give the board a name of its own: the device conf's hostname (/etc/hostname,
+# "btbench") with the board's MAC address in front, e.g. 257bfc-btbench. Every image carries the
+# same /etc/hostname, so two boards on one network would both answer btbench.local, and mDNS
+# (systemd-resolved) renames one of them unpredictably; with the MAC in front each has a stable
+# name: ssh root@257bfc-btbench.local. btbench-hostname.service runs it at every boot.
+#
+# The MAC is the Wi-Fi's (wlan0), or the first other interface with a burned-in address: the last
+# three bytes, since a Raspberry Pi's all start b8:27:eb or dc:a6:32 (the Pi Foundation's). It is a
+# transient hostname, the kernel's: the static one in /etc/hostname stays as the image has it (the
+# root filesystem is read-only), and systemd-resolved and networkd follow the change by themselves.
+# It runs alongside the network services, not before them (the Wi-Fi interface appears seconds
+# into the boot): for them it is a rename, which they follow.
+#
+# Settings (/etc/btbench/device.env): HOSTNAME_MAC=0 keeps the plain name.
+# Never fails the boot: without an address the name stays as it is, and that is logged.
+
+log() { echo "btbench-hostname: $*"; }
+
+HOSTNAME_MAC=1
+[ -r /etc/btbench/device.env ] && . /etc/btbench/device.env
+[ "${HOSTNAME_MAC:-1}" = 0 ] && exit 0
+
+base=$(cat /etc/hostname 2>/dev/null)
+[ -n "$base" ] || base=btbench
+
+# A burned-in (universally administered) address: bit 1 of the first byte clear. usb0's, the
+# gadget's, is made up at every boot.
+burned() {
+    a=$(cat "/sys/class/net/$1/address" 2>/dev/null) || return 1
+    [ -n "$a" ] && [ "$a" != 00:00:00:00:00:00 ] || return 1
+    [ $(( 0x${a%%:*} & 2 )) -eq 0 ] || return 1
+    echo "$a"
+}
+
+# The Wi-Fi driver (brcmfmac over SDIO) comes up some seconds into the boot: wait for it a little.
+mac=
+for i in $(seq 1 30); do
+    mac=$(burned wlan0) && break
+    for n in /sys/class/net/*; do
+        n=${n##*/}
+        case $n in lo | wlan0 | usb* | p2p*) continue ;; esac
+        mac=$(burned "$n") && break 2
+    done
+    sleep 1
+done
+if [ -z "$mac" ]; then
+    log "no interface with a burned-in MAC address: the name stays $(hostname)"
+    exit 0
+fi
+
+tag=$(echo "$mac" | cut -d: -f4-6 | tr -d : | tr 'A-F' 'a-f')
+case $base in "$tag"-*) name=$base ;; *) name=$tag-$base ;; esac
+[ "$(hostname)" = "$name" ] && exit 0
+# The kernel's hostname, written directly: `hostnamectl --transient` does nothing while a static
+# hostname is set (it says it did), and the static one cannot change on a read-only root.
+if echo "$name" > /proc/sys/kernel/hostname; then
+    log "hostname $name (from $mac)"
+else
+    log "could not set the hostname to $name"
+fi
+exit 0

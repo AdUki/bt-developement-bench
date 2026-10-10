@@ -1,7 +1,7 @@
 # System: the board's own plumbing scripts (tools/target/btbench-{wifi,gadget,bdaddr,data}, installed
 # by btbench-base). Included by the Makefile. See docs/system.md.
 
-SYSTEM_SCRIPTS := btbench-wifi btbench-gadget btbench-bdaddr btbench-data btbench-rw btbench-sshkeys
+SYSTEM_SCRIPTS := btbench-wifi btbench-gadget btbench-bdaddr btbench-data btbench-rw btbench-sshkeys btbench-hostname
 
 ## ─── system ──────────────────────────────────────────────────────────────────
 

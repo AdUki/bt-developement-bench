@@ -18,6 +18,8 @@ SRC_URI = " \
     file://btbench-wifi \
     file://btbench-rw \
     file://btbench-sshkeys \
+    file://btbench-hostname \
+    file://btbench-hostname.service \
     file://btbench-data.service \
     file://btbench-bdaddr.service \
     file://btbench-gadget.service \
@@ -63,6 +65,8 @@ BTBENCH_DTBS ??= ""
 BTBENCH_TRY_METHOD ??= "none"
 BTBENCH_GADGET_UDC ??= ""
 BTBENCH_BT_HCI ??= "hci0"
+# The board's MAC in front of its hostname (btbench-hostname): 257bfc-btbench. "0" keeps it plain.
+BTBENCH_HOSTNAME_MAC ??= "1"
 
 # What the scripts run. bash and jq: btbench-wifi. sfdisk, partx, findmnt, resize2fs: growing
 # /data. e2fsck: the fsck pass of /data's fstab entry. coreutils: timeout(1), which busybox is
@@ -95,6 +99,7 @@ SYSTEMD_SERVICE:${PN} = " \
     btbench-bdaddr.service \
     btbench-gadget.service \
     btbench-wifi.service \
+    btbench-hostname.service \
 "
 SYSTEMD_AUTO_ENABLE = "enable"
 
@@ -105,12 +110,12 @@ def btbench_shq(d, var):
 
 do_install() {
     install -d ${D}${bindir}
-    for s in btbench-data btbench-bdaddr btbench-gadget btbench-wifi btbench-rw btbench-sshkeys; do
+    for s in btbench-data btbench-bdaddr btbench-gadget btbench-wifi btbench-rw btbench-sshkeys btbench-hostname; do
         install -m 0755 ${WORKDIR}/$s ${D}${bindir}/
     done
 
     install -d ${D}${systemd_system_unitdir}
-    for u in btbench-data btbench-bdaddr btbench-gadget btbench-wifi; do
+    for u in btbench-data btbench-bdaddr btbench-gadget btbench-wifi btbench-hostname; do
         install -m 0644 ${WORKDIR}/$u.service ${D}${systemd_system_unitdir}/
     done
 
@@ -138,6 +143,7 @@ WIFI_COUNTRY=${@btbench_shq(d, 'BTBENCH_WIFI_COUNTRY')}
 GADGET=${@btbench_shq(d, 'BTBENCH_GADGET')}
 AUDIO_MODE=${@btbench_shq(d, 'BTBENCH_AUDIO_MODE')}
 HTTP_PORT=${@btbench_shq(d, 'BTBENCH_HTTP_PORT')}
+HOSTNAME_MAC=${@btbench_shq(d, 'BTBENCH_HOSTNAME_MAC')}
 EOF
     chmod 0644 ${D}${sysconfdir}/btbench/board.env ${D}${sysconfdir}/btbench/device.env
 
@@ -206,4 +212,5 @@ do_install[vardeps] += " \
     BTBENCH_BOARD BTBENCH_KERNEL BTBENCH_KARCH BTBENCH_KIMAGE BTBENCH_DTBS BTBENCH_TRY_METHOD \
     BTBENCH_GADGET_UDC BTBENCH_BT_HCI BTBENCH_HOSTNAME BTBENCH_AP_PSK BTBENCH_WIFI_COUNTRY \
     BTBENCH_GADGET BTBENCH_AUDIO_MODE BTBENCH_HTTP_PORT BTBENCH_WIFI_SSID BTBENCH_WIFI_PSK \
+    BTBENCH_HOSTNAME_MAC \
 "

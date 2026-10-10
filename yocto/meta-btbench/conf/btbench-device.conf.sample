@@ -9,8 +9,11 @@
 # =============================================================================
 
 # --- Identity ----------------------------------------------------------------
-# The board answers on <hostname>.local (mDNS, on the USB link and Wi-Fi).
+# The board answers on <mac>-<hostname>.local (mDNS, on the USB link and Wi-Fi): the last three
+# bytes of its MAC address in front, so that several boards on one network each have a name of
+# their own (btbench-hostname). BTBENCH_HOSTNAME_MAC = "0" answers on plain <hostname>.local.
 BTBENCH_HOSTNAME ?= "btbench"
+#BTBENCH_HOSTNAME_MAC = "0"
 
 # --- Login -------------------------------------------------------------------
 # Root password, in the clear (bitbake hashes it into /etc/shadow). Keep the board on the USB

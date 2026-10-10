@@ -1,0 +1,16 @@
+[Unit]
+Description=Put the board's MAC address in front of its hostname
+# Early and alongside the rest of the boot, not before it: the Wi-Fi interface whose address it
+# takes appears some seconds in, and nothing waits for the name (systemd-resolved's mDNS and
+# networkd's DHCP pick up a changed hostname by themselves).
+DefaultDependencies=no
+After=systemd-udev-trigger.service local-fs.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/btbench-hostname
+
+[Install]
+WantedBy=multi-user.target
