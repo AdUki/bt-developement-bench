@@ -380,7 +380,7 @@ canvas.graph.short { height: 110px; }
 .pl-progress i { display: block; height: 100%; background: var(--accent); }
 .pl-time { color: var(--muted); font-size: 0.78rem; display: flex; justify-content: space-between; }
 .pl-controls { margin-top: 0.4rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
-.pl-btn { width: 2.3rem; height: 2.1rem; padding: 0; display: inline-flex; align-items: center; justify-content: center; touch-action: none; user-select: none; }
+.pl-btn { width: 2.3rem; height: 2.1rem; padding: 0; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; touch-action: none; user-select: none; }
 .pl-btn svg { width: 16px; height: 16px; fill: currentColor; }
 .pl-btn.main { width: 2.7rem; height: 2.7rem; border-radius: 50%; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .pl-btn.main:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.08); }
@@ -605,7 +605,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-progress.live { background: repeating-linear-gradient(90deg, var(--line-soft) 0 8px, transparent 8px 12px); }
 .np-time { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-top: 0.25rem; min-height: 1.1em; }
 .np-ctl { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
-.np-btn { width: 3rem; height: 3rem; border-radius: 50%; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: var(--line); background: var(--panel); }
+.np-btn { width: 3rem; height: 3rem; border-radius: 10px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: var(--line); background: var(--panel); }
 .np-btn svg { width: 22px; height: 22px; fill: currentColor; }
 .np-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .np-btn.main { width: 3.6rem; height: 3.6rem; background: var(--accent); color: var(--on-accent); }
