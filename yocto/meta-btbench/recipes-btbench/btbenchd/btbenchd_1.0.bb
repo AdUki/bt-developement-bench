@@ -8,7 +8,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 # systemd for sd-bus and sd-journal (libsystemd is on the image anyway: systemd is the init).
 # md2html-native renders docs/api.md to www/api.html at build time (GET /api); only the HTML ships.
-DEPENDS = "systemd md2html-native"
+DEPENDS = "systemd zlib md2html-native"
 
 # The daemon is built from app/ of this repository (BTBENCH_ROOT, written into auto.conf by the
 # Makefile). Its parts are listed one by one rather than as file://app so that a host build left in
