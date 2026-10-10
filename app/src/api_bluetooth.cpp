@@ -5,6 +5,11 @@
 // the answer is the point.
 #include <systemd/sd-bus.h>
 
+#include <chrono>
+#include <functional>
+#include <mutex>
+#include <thread>
+
 #include "avdtp/probe.h"
 #include "bluez_model.h"
 #include "http_util.h"
@@ -65,6 +70,11 @@ void reply_error(httplib::Response& res, const BtCallResult& r) {
 // An AVRCP command goes to the phone and back; a phone with no app in front answers in well under
 // a second, or not at all.
 constexpr int kPlayerTimeoutMs = 5000;
+// Browsing waits longer than BlueZ's own 10 s browsing timeout. BlueZ sends one browsing PDU at a
+// time, and on a change to Now Playing it first asks for the folder's item count, which some phones
+// (an S25, seen) never answer, so the listing after it waits the full 10 s. Giving up sooner
+// leaves BlueZ still holding that listing, and every later request gets "busy".
+constexpr int kBrowseTimeoutMs = 15000;
 
 // A listing asks for the first hundred items. Without a range BlueZ asks for everything, and a
 // phone (a Samsung, seen) answers with its now-playing list over and over until the count is met.
@@ -72,6 +82,34 @@ const DDict kListRange{{"Start", DVar::u32(0)}, {"End", DVar::u32(99)}};
 
 bool media_object(const json& objs, const std::string& path, const char* iface) {
   return objs.contains(path) && objs[path].contains(iface);
+}
+
+}  // namespace
+
+namespace {
+
+// AVRCP browsing is one request at a time per player, through one "current folder": two overlapping
+// requests (a page's queue and its library, a second tab) either get "busy" back or interleave —
+// one moves the folder, the other then lists it — and items appear in the wrong list or vanish.
+// Every browsing sequence (change folder, list, read the name) runs under this lock, and a busy
+// answer is tried again a little later.
+std::mutex g_browse_m;
+
+bool busy(const BtCallResult& r) {
+  // BlueZ answers InProgress, or passes the kernel's EBUSY on as Failed "Device or resource busy".
+  return !r.ok && !r.timed_out &&
+         (r.error_name == "org.bluez.Error.InProgress" || r.error.find("busy") != std::string::npos);
+}
+
+BtCallResult browse_call(BtManager& bt, const std::string& path, const std::string& iface, const std::string& method,
+                         std::function<int(sd_bus_message*)> append, int timeout_ms) {
+  BtCallResult r;
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    r = bt.call(path, iface, method, append, timeout_ms);
+    if (!busy(r)) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(300 * (attempt + 1)));
+  }
+  return r;
 }
 
 }  // namespace
@@ -372,22 +410,23 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     if (!media_object(*d.bt.objects(), path, "org.bluez.MediaFolder1"))
       return send_error(res, 404, "no such player, or it is not browsable");
     const std::string folder = j.value("folder", std::string{});
+    std::lock_guard<std::mutex> lk(g_browse_m);
     if (!folder.empty()) {
-      const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "ChangeFolder", [folder](sd_bus_message* m) {
+      const BtCallResult r = browse_call(d.bt, path, "org.bluez.MediaFolder1", "ChangeFolder", [folder](sd_bus_message* m) {
         return sd_bus_message_append(m, "o", folder.c_str());
-      }, kPlayerTimeoutMs);
+      }, kBrowseTimeoutMs);
       if (!r.ok) return reply_error(res, r);
     }
-    const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
+    const BtCallResult r = browse_call(d.bt, path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
       return append_dict(m, kListRange);
-    }, kPlayerTimeoutMs);
+    }, kBrowseTimeoutMs);
     if (!r.ok) return reply_error(res, r);
     d.bt.touch();
     // The folder now listed: the player's MediaFolder1 Name (re-read: ChangeFolder just moved it).
     std::string name;
     const BtCallResult n = d.bt.call(path, "org.freedesktop.DBus.Properties", "Get", [](sd_bus_message* m) {
       return sd_bus_message_append(m, "ss", "org.bluez.MediaFolder1", "Name");
-    }, kPlayerTimeoutMs);
+    }, kBrowseTimeoutMs);
     if (n.ok && !n.reply.empty() && n.reply[0].is_string()) name = n.reply[0].get<std::string>();
     send_json(res, json{{"items", browse_items(r.reply)}, {"folder", name}});
   }));
@@ -399,19 +438,20 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     const std::string value = j.at("value").get<std::string>();
     if (!media_object(*d.bt.objects(), path, "org.bluez.MediaFolder1"))
       return send_error(res, 404, "no such player, or it is not browsable");
-    const BtCallResult r = d.bt.call(path, "org.bluez.MediaFolder1", "Search", [value](sd_bus_message* m) {
+    std::lock_guard<std::mutex> lk(g_browse_m);
+    const BtCallResult r = browse_call(d.bt, path, "org.bluez.MediaFolder1", "Search", [value](sd_bus_message* m) {
       int rc = sd_bus_message_append(m, "s", value.c_str());
       return rc >= 0 ? append_dict(m, DDict{}) : rc;
-    }, kPlayerTimeoutMs);
+    }, kBrowseTimeoutMs);
     if (!r.ok) return reply_error(res, r);
     const std::string folder = !r.reply.empty() && r.reply[0].is_string() ? r.reply[0].get<std::string>() : path;
     // The results are a folder of their own; some stacks list them through the player instead.
     BtCallResult l = d.bt.call(folder, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) {
       return append_dict(m, kListRange);
-    }, kPlayerTimeoutMs);
+    }, kBrowseTimeoutMs);
     if (!l.ok && folder != path)
       l = d.bt.call(path, "org.bluez.MediaFolder1", "ListItems", [](sd_bus_message* m) { return append_dict(m, kListRange); },
-                    kPlayerTimeoutMs);
+                    kBrowseTimeoutMs);
     if (!l.ok) return reply_error(res, l);
     d.bt.touch();
     send_json(res, json{{"items", browse_items(l.reply)}, {"folder", "search: " + value}, {"result", folder}});
