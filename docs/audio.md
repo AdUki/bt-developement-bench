@@ -173,11 +173,12 @@ as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
   a node `bluez_input.<addr>.…` once it plays; WirePlumber also links it to the default sink
   (the loopback card) as usual.
 - **Rates.** A stream has one rate. PipeWire resamples on both ends; the loopback takes any.
-- **Decoders.** `mpg123` is on the image (MP3: most internet radio). Everything else — AAC
-  streams, HLS, FLAC/WAV from a media server — needs `ffmpeg`, which OE flags `commercial`:
-  set `BTBENCH_FFMPEG = "1"` in `btbench-device.conf` (it accepts that flag for ffmpeg only) and
-  rebuild the image. A board flashed before mpg123 joined the image gets it without a reflash:
-  `make pkg ARGS=mpg123` (and `make pkg ARGS=ffmpeg` with the switch set).
+- **Decoders.** `mpg123` (MP3: most internet radio) and `ffmpeg` (everything else: AAC streams,
+  HLS, FLAC/WAV/M4A from a media server) are on the image. OE flags ffmpeg `commercial`; the
+  distro accepts that flag for ffmpeg alone while `BTBENCH_FFMPEG` is `"1"`, the default —
+  `BTBENCH_FFMPEG = "0"` in `btbench-device.conf` leaves it out, and then only MP3 plays (the
+  Listen page says so for anything else). A board flashed without them gets them without a
+  reflash: `make pkg ARGS=mpg123`, `make pkg ARGS=ffmpeg`.
 - **CPU.** The Zero W has one core: a decoder plus pw-cat into an SBC sink is the heaviest kind
   of stream, a generator into a sink the lightest. Watch the console's CPU readout (or Traffic →
   Graphs) while one runs. At most four streams run at once, and one that plays nowhere ends after

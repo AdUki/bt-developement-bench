@@ -452,7 +452,20 @@ function renderOutputs(ep) {
 }
 
 function refreshPlayerStreams() {
-  return api('/audio/streams').then(r => { pl.streams = r.streams.map(decorate); renderNowPlaying(); }).catch(() => {});
+  return api('/audio/streams').then(r => { pl.streams = r.streams.map(decorate); noteFailure(); renderNowPlaying(); }).catch(() => {});
+}
+
+// What this view started and the board could not play (a decoder missing, a server refusing):
+// said once, with the board's reason — otherwise the page would only fall back to "Nothing
+// playing" without a word.
+function noteFailure() {
+  const s = pl.streams.find(x => x.id === pl.boardId);
+  if (!s || s.state !== 'failed' || pl.failedShown === s.id) return;
+  pl.failedShown = s.id;
+  const why = /mpg123/.test(s.error) && /\.(flac|wav|m4a|aac|ogg|opus)\b/i.test((s.source.playlist[s.track] || {}).url || s.source.url)
+    ? 'the board has no decoder for this format (mpg123 plays MP3 only; other formats need ffmpeg in the image, BTBENCH_FFMPEG)'
+    : s.error.replace(/\[\/usr\/src\/debug\/[^\]]*\]\s*/g, '');
+  toast('Could not play “' + (s.source.title || 'this') + '”: ' + why);
 }
 
 // ---------------------------------------------------------------- wiring
@@ -553,6 +566,7 @@ registerTab('player', {
       if (!(document.activeElement && document.activeElement.id === 'np-vol')) renderNowPlaying();
     } else if (topic === 'audio.streams') {
       pl.streams = data.streams.map(decorate);
+      noteFailure();
       if (!(document.activeElement && document.activeElement.id === 'np-vol')) renderNowPlaying();
     }
   },
