@@ -16,6 +16,7 @@
 #include "btsnoop.h"
 #include "hci_monitor.h"
 #include "monitor_impl.h"
+#include "context.h"
 #include "packet_view.h"
 #include "packets.h"  // the test builders
 
@@ -166,6 +167,71 @@ void test_index() {
   if (disc != static_cast<size_t>(-1)) CHECK_EQ(idx.at(disc).handle, kHandle);
 }
 
+// A ring file that begins after the A2DP stream was set up: alone it knows the link only from its
+// data (no peer: that is in Connection Complete), and media only by its RTP header; with the
+// context the journal wrote beside it, the link is known as it was set up.
+void test_context() {
+  const auto pkts = a2dp_session();
+  size_t split = 0;
+  {
+    const std::string whole = tmp_path("ctx-whole.btsnoop");
+    write_file(whole, pkts);
+    PacketIndex idx;
+    std::string err;
+    std::lock_guard<std::mutex> lk(idx.mu);
+    CHECK(idx.open(whole, &err));
+    CHECK(idx.extend(INT64_MAX));
+    while (split < idx.size() && idx.at(split).proto != btb::hci::kProtoRtp) ++split;
+  }
+  CHECK(split > 0 && split < pkts.size());
+  btb::hci::ContextJournal j;
+  for (size_t i = 0; i < split; ++i) j.packet(pkts[i].ts, pkts[i].index, pkts[i].opcode, pkts[i].data.data(), pkts[i].data.size());
+  CHECK(j.size() > 0);
+  const std::vector<Pkt> rest(pkts.begin() + static_cast<long>(split), pkts.end());
+  const std::string later = tmp_path("ctx-later.btsnoop");
+  write_file(later, rest);
+
+  struct Seen {
+    std::string peer;
+    uint32_t tx_pkts = 0;
+    size_t rtp = 0;
+  };
+  auto look = [&]() {
+    Seen s;
+    PacketIndex idx;
+    std::string err;
+    std::lock_guard<std::mutex> lk(idx.mu);
+    CHECK(idx.open(later, &err));
+    CHECK(idx.extend(INT64_MAX));
+    for (size_t i = 0; i < idx.size(); ++i) s.rtp += idx.at(i).proto == btb::hci::kProtoRtp;
+    for (const auto& c : idx.conns()) {
+      if (c.handle == kHandle) {
+        s.peer = c.peer;
+        s.tx_pkts = c.tx_pkts;
+      }
+    }
+    return s;
+  };
+  CHECK_EQ(look().peer, "");
+  std::string err;
+  CHECK(j.write(later + ".ctx", &err));
+  const Seen with = look();
+  CHECK_EQ(with.peer, "AA:BB:CC:DD:EE:FF");
+  CHECK_EQ(with.rtp, 13u);
+  // The context is not the file's traffic: the link counts only what the file holds.
+  uint32_t want = 0;
+  for (const auto& p : rest) want += p.opcode == kMonAclTx;
+  CHECK_EQ(with.tx_pkts, want);
+
+  // The btmon view's input starts with that context.
+  PacketStore store(g_tmp);
+  PacketStore::BtmonInput in;
+  int status = 0;
+  CHECK(store.btmon_input("ctx-later.btsnoop", 1, &in, &status, &err));
+  CHECK_EQ(in.frames.size(), 1u);
+  CHECK(in.bytes.size() > j.snapshot().size());
+}
+
 void test_filter() {
   Filter f;
   std::string err;
@@ -217,6 +283,43 @@ void test_filter() {
   CHECK_EQ(count_matches(idx, "proto:avdtp !set_configuration"), 9u);
   CHECK_EQ(count_matches(idx, "\"read request\" handle:64"), 2u);  // the request and the error
   CHECK_EQ(count_matches(idx, "bean"), 1u);
+
+  // Either group: index terms on both sides, text on one, a group of two terms.
+  CHECK_EQ(count_matches(idx, "proto:rtp || proto:avdtp"), 24u);
+  CHECK_EQ(count_matches(idx, "proto:att || set_configuration"), 3u + 2u);
+  CHECK_EQ(count_matches(idx, "proto:rtp lat>100 || is:mark"), 3u + 1u);
+  // A peer: the packets of its link, and those naming it (its Connection Complete names it too,
+  // and carries its handle).
+  const size_t link = count_matches(idx, "handle:11");
+  CHECK_EQ(count_matches(idx, "addr:aa:bb:cc:dd:ee:ff"), count_matches(idx, "handle:11 || aa:bb:cc:dd:ee:ff"));
+  CHECK(count_matches(idx, "addr:AA:BB:CC") >= link);
+  CHECK_EQ(count_matches(idx, "addr:aa:bb:cc:dd:ee:ff type:acl"), count_matches(idx, "handle:11 type:acl"));
+  CHECK_EQ(count_matches(idx, "addr:11:22:33"), 0u);
+}
+
+void test_filter_syntax() {
+  Filter f;
+  std::string err;
+  CHECK(Filter::parse("proto:att || \"read request\" dir:tx", &f, &err));
+  CHECK_EQ(f.alts.size(), 2u);
+  CHECK(f.has_text);
+  CHECK_EQ(f.key, std::string("proto:att || \"read request\" dir:tx"));
+  // The key parses back to the same filter (it is what the client is given).
+  Filter g;
+  CHECK(Filter::parse(f.key, &g, &err));
+  CHECK_EQ(g.key, f.key);
+  CHECK(Filter::parse("\"||\"", &f, &err));  // quoted: text
+  CHECK(f.alts.empty());
+  CHECK_EQ(f.terms[0].kind, Filter::Term::kText);
+  CHECK(!Filter::parse("proto:att ||", &f, &err));
+  CHECK(!Filter::parse("addr:zz", &f, &err));
+  CHECK(!Filter::parse("addr:aa:", &f, &err));
+  CHECK(Filter::parse("addr:aa:bb:cc:dd:ee:ff", &f, &err));
+  CHECK_EQ(f.terms[0].kind, Filter::Term::kAddr);
+  // The graph's range covers either group.
+  CHECK(Filter::parse("t>=1 t<2 || t>=5 t<6", &f, &err));
+  CHECK_NEAR(f.t_lo, 1.0, 1e-9);
+  CHECK_NEAR(f.t_hi, 6.0, 1e-9);
 }
 
 void test_summaries_and_detail() {
@@ -520,7 +623,9 @@ int main() {
   g_tmp = tmp;
 
   test_index();
+  test_context();
   test_filter();
+  test_filter_syntax();
   test_summaries_and_detail();
   test_incremental();
   test_h4();

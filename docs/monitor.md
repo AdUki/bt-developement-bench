@@ -285,18 +285,22 @@ decodes it like a btmon capture, marks included. It starts from the moment of co
 - it keeps 8 files;
 - the newest file is the one being written.
 
-btbenchd does not write these files. It only manages them:
+btbenchd does not write these files. It manages them, and writes one small file beside each new
+one: its [context](#context), `<name>.ctx`.
 
 | Route | What it does |
 |---|---|
 | `GET /api/capture` | the unit state and the files, newest first. `active` marks the file btmon is writing: the newest one, while the unit runs |
 | `PUT /api/capture {"running":false}` | `systemctl stop` (or `start`) of the unit. Runs with fork/exec and a 15 s timeout, never through a shell |
 | `GET /api/capture/files/<name>` | downloads the file. If it is the active file, you get what was written so far; a cut-off last record reads as the end of the file |
-| `DELETE /api/capture/files/<name>` | deletes the file. Refused (409) for the active file |
+| `DELETE /api/capture/files/<name>` | deletes the file and its `.ctx`. Refused (409) for the active file |
 | `GET /api/capture/files/<name>/analyze` | the text output of `btmon -a`. 30 s timeout (504 with the partial output), output capped at 4 MiB |
 | `GET /api/capture/files/<name>/packets` | the packet list, filtered and paged: see [Packet view](#packet-view) |
 | `GET /api/capture/files/<name>/packets/<n>` | one packet decoded field by field, with its bytes |
 | `GET /api/capture/files/<name>/graph` | time series over the capture, for the graph strip |
+| `GET /api/capture/files/<name>/stats` | what a filter matches, counted by protocol, packet kind and link |
+| `GET /api/capture/files/<name>/packets/<n>/btmon` | btmon's own decode of one packet |
+| `GET /api/capture/files/<name>/export` | the packets a filter matches, as a btsnoop file |
 
 `<name>` must be a bare file name ending in `.btsnoop`: no slashes, no leading dot.
 
@@ -336,6 +340,50 @@ btmon is writing — it is **extended from where it stopped**, including a recor
 btmon the last time. At most 1 000 000 packets are indexed per file (32 MB); a ring file holds
 50 000–320 000.
 
+### Context
+
+Only the first file of the ring starts at the beginning. The others start mid-session: the phone
+connected, its AVRCP and A2DP channels opened, its GATT database was discovered, maybe hours and
+several files earlier. On its own such a file cannot say that CID 0x0076 is AVRCP browsing, which
+codec a stream carries, or which characteristic a handle is, and neither can btmon.
+
+So btbenchd's reader thread, which sees every packet anyway, keeps a **context journal**
+(`context.{h,cpp}`): the packets that explain later ones, for as long as they still apply.
+
+| Kept | Until |
+|---|---|
+| New/Open/Close Index, Index Info (the controllers) | Delete Index |
+| connection complete events: BR/EDR, SCO/eSCO, LE, CIS, BIG | the link's Disconnection Complete, or a new connection on its handle |
+| L2CAP signalling, fragments included (which PSM and mode a channel is) | the link goes; the newest 400 per link |
+| AVDTP signalling (which codec a stream carries) | the link goes; the newest 200 per link |
+| ATT discovery: Exchange MTU, Find Information, Read By (Group) Type, their errors (btmon's att.c names characteristics from them) | the link goes; the newest 1500 per link |
+
+The journal classifies packets with the indexer's `Classifier`, so it knows the channels the
+same way. It costs one classification per packet, and a few hundred KiB at most for a link that
+stays up for days. It runs only when the capture directory exists; btbenchd watches that directory
+with inotify.
+
+**When btmon starts a ring file**, btbenchd writes the journal beside it as `<name>.ctx`: a
+btsnoop file (datalink 2001), records in the order they happened, through a temporary file and a
+rename. Context files whose capture is gone are deleted at the next rotation.
+
+**When btbenchd starts** (a deploy or a restart, mid-session), the journal is seeded before the
+live stream is read. It replays the ring files, oldest first, from the newest file that has a
+context file (that file's context included) to the file being written. Normally that is one
+file, about 0.4 s on the Zero W. The first start on a ring without context files reads all of
+them: about 3 s for eight full files.
+
+**The index reads `<name>.ctx` first**, then resets the per-link counts, so a file's links count
+only its own traffic. Links known only from the context, with nothing in the file, are left out
+of the graph's list. The btmon view and an export with context put the same records first.
+
+Without a context file (a capture from elsewhere, a link older than every ring file), two
+protocols are still recognised by their payload. The channel is then remembered with its likely
+PSM:
+- A2DP media, by its RTP header;
+- AVRCP, by its AVCTP header (PID 0x110e or 0x110c), plain on the control channel, and behind
+  an ERTM control field on the browsing channel.
+
 ### Time budget and partial answers
 
 The board has three HTTP workers, so no request may hold one for seconds. Each request may spend
@@ -367,7 +415,8 @@ inside one budget.
 ### Filter syntax
 
 Terms are separated by spaces, and all of them must match. `!term` negates a term, and `|` means
-"or" inside a value.
+"or" inside a value. `||` on its own between groups of terms matches either group:
+`proto:att dir:tx || is:err`.
 
 | Term | Matches |
 |---|---|
@@ -383,14 +432,22 @@ Terms are separated by spaces, and all of them must match. `!term` negates a ter
 | `t>=12.5 t<30` | seconds since the first packet. The graph zooms to the range |
 | `n<=500` | the frame number |
 | `lat>20` | TX latency in ms. Packets without one match no `lat` term |
+| `addr:AA:BB:CC:DD:EE:FF` | a peer: the packets of its links (from their connection events or the file's context), and packets whose summary names it (advertising reports, connection events). Its first bytes are enough: `addr:0c:32:3a` |
 | any other word, `"a phrase"` | a case-insensitive substring of the summary |
 
 Numbers can be decimal or `0x` hex. A word with a colon that is not one of the fields above, like
-a BD_ADDR, is text. An unknown value (`type:foo`) or a bad number answers 400 with the reason.
+a bare BD_ADDR, is text. So is anything in quotes, `"proto:att"` or `"||"` included. An unknown
+value (`type:foo`), a bad number, a malformed address or a `||` with nothing on one side answers
+400 with the reason. The answer's `filter` is the filter as it was understood, and it parses back
+to the same filter.
 
-Structured terms are answered from the index. Text terms decode the summary of every packet that
-passed the structured terms, so `proto:att "write request"` is much faster than `"write request"`
-alone.
+Structured terms are answered from the index. Text terms (and `addr:`, for the summaries that name
+the peer) decode the summary of every packet that passed the structured terms, so
+`proto:att "write request"` is much faster than `"write request"` alone.
+
+In the console, a packet's detail lists its terms under the summary (`handle:12`, `addr:...`,
+`proto:avctp`, `cid:0x0076`, `opcode:0x0406`, ...). A click adds one to the filter, and a shift-click
+adds it negated. The statistics' protocols and links work the same way.
 
 ### What is decoded
 
@@ -407,7 +464,7 @@ Each packet has a **summary** (the list's one line, which the text filter search
 | SDP | PDU type, transaction, the UUIDs of a search pattern, record handles, error codes |
 | RFCOMM | frame type, DLCI, P/F, credits, multiplexer commands (PN, MSC, ...), and the data as text when it is text (the AT commands of HFP) |
 | AVDTP | signalling: signal, message type, SEIDs, the capability list with the codec decoded (the monitor's `decode_media_codec`), DISCOVER's SEPs, delay reports, rejects with their error. Media: the RTP header, and SBC's frame count and first frame header (recognised by its syncword) |
-| AVCTP / AVRCP | the AV/C frame type; PASS THROUGH operations; vendor-dependent PDUs by name (RegisterNotification's event, SetAbsoluteVolume's volume, ...); browsing PDUs by name |
+| AVCTP / AVRCP | the AV/C frame type; PASS THROUGH operations; vendor-dependent PDUs by name (RegisterNotification's event, SetAbsoluteVolume's volume, ...); browsing PDUs by name, behind the browsing channel's ERTM control field (I- and S-frames, SAR, SDU length, the FCS checked) |
 | SCO / ISO | handle, packet status; ISO sequence number, SDU length, timestamp |
 | Monitor notices | new index (bus, address, name), index info, system notes, user logging (`ident: message`), management channel open/close/commands/events |
 
@@ -459,6 +516,46 @@ the file (or not indexed yet: then the message says to try again).
   whole capture. Without `bucket_ms`, the width is the smallest of 1/2/5 × 10ⁿ ms (then 15 s, 30 s,
   minutes, hours) that keeps at most `points` buckets (default and maximum 2000). The console asks
   for one bucket per 2 px of its canvas.
+
+`GET /api/capture/files/<name>/stats?filter=`: the matches counted, from the index (no decoding
+beyond what the filter needs):
+
+```json
+{"filter": "", "total": {"pkts": 12627, "bytes": 5963679, "tx": 4050, "rx": 8566, "err": 1},
+ "marks": 0, "cont": 111, "span_s": 188.906,
+ "protos": [{"proto": "rtp", "pkts": 10014, "bytes": 5859942, "tx": 3738, "rx": 6276, "err": 0}],
+ "types": [{"type": "acl", "pkts": 10429, ...}],
+ "links": [{"index": 0, "handle": 12, "type": "acl", "peer": "0C:32:3A:D6:C3:44", "pkts": 6799, ...}],
+ "latency": {"n": 3943, "avg_ms": 268.022, "p50_ms": 259.5, "p95_ms": 916.458, "max_ms": 916.458},
+ "complete": true, "packets_in_file": 12627, ...}
+```
+
+Busiest first; `proto` is `"other"` for packets with none (notes, index records); `latency` is
+`null` without TX latencies. It has the same progress fields as the list.
+
+`GET /api/capture/files/<name>/packets/<n>/btmon`: **BlueZ's own decoder** for one packet. btbenchd
+writes a small btsnoop file to `/tmp` and runs `btmon -r` over it. The file holds:
+1. the file's context (`.ctx`);
+2. the context packets of the file before the frame (the same kinds the journal keeps; at most
+   4000, the newest);
+3. the frame, together with the other fragments of its L2CAP packet, since btmon decodes once
+   the last fragment is in.
+
+btmon runs with `-T -S -A -I -C 110 -c never`: dates; the SCO, A2DP and ISO data; a fixed width;
+no colour. A btmon without those options gets plain `-T`. The answer is
+`{"frames": [4711], "context": 26, "text": "...", "timed_out": false}`. `text` is btmon's output
+for those frames, with btmon's `#N` replaced by the capture's frame numbers: btmon counts only
+HCI packets. A btmon that cannot run answers 503.
+
+`GET /api/capture/files/<name>/export?filter=&context=1`: the matches as a btsnoop file of
+datalink 2001, whatever the source's datalink, named `<name>-filtered.btsnoop` (`-copy` without
+a filter); `X-Packets` is how many. With `context=1`, the file's context and the context packets
+among the matches come along, in order, so `btmon -r` and Wireshark decode the matches as they
+would in the whole capture. 409 while the filter is still being worked out (list until
+`complete` first).
+
+The detail (`packets/<n>`) also carries `opcode`, `evt`, `subevt` where they apply, and the link's
+`peer`: the terms the console offers.
 
 Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missing file or packet,
 415 for a file that is not a btsnoop capture.
@@ -594,7 +691,8 @@ was most of the cost (4.5 µs a packet before, 0.8 µs after).
 - **The packet view decodes one fragment at a time.** An L2CAP SDU split over several ACL packets
   shows its first fragment decoded (marked `[got/total]`) and the rest as continuations; only
   signalling is reassembled, for the channel tracking. A capture that starts with links already up
-  has no PSM for their channels (`proto:l2cap`), as in the live monitor. Latency filters on the
+  and no [context](#context) knows their channels only where the payload says (RTP, AVCTP); the
+  rest are `proto:l2cap`, as in the live monitor. Latency filters on the
   file being written can miss the last few TX packets: their NOCP was not in the file yet when
   that filter was first scanned.
 - **AVDTP media detection relies on seeing the channel open.**

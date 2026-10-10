@@ -10,6 +10,7 @@
 
 #include "btsnoop.h"
 #include "capture.h"
+#include "context.h"
 #include "decoder.h"
 #include "hci_monitor.h"
 #include "live.h"
@@ -25,6 +26,11 @@ struct Monitor::Impl {
   bool start_source();
   void stop();
   void run_live();
+  // The capture ring's directory, watched for new files (inotify) so each gets its context file
+  // (context.h). Without a directory to watch there is no ring, and the journal is not kept.
+  void watch_captures();
+  void on_capture_events();
+  void seed_journal();
   void run_replay();
   void query_devinfo(uint16_t index);
   void publish_pending(bool stats_closed);
@@ -53,6 +59,9 @@ struct Monitor::Impl {
   mutable std::mutex mu;
   mutable std::condition_variable done_cv;
   Decoder dec;
+  ContextJournal journal;
+  int ino_fd = -1;
+  int64_t ino_retry_us = 0;
   bool replay = false;
   bool replay_done = false;
   uint32_t kernel_drops = 0;

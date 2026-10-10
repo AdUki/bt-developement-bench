@@ -301,7 +301,10 @@ void LiveView::drain(Client& c, int64_t now_us, std::string* out) {
   for (size_t i = 0; i < ncand; ++i) {
     const Client::Cand& k = c.cands[i];
     dissect(k.e, k.bytes.data(), k.bytes.size(), false, &ds);
-    if (c.filter.has_text && !c.filter.match_text(lower(ds.summary))) continue;
+    if (c.filter.has_text &&
+        !c.filter.match_text(k.e, static_cast<double>(k.e.ts_us - t0) / 1e6, static_cast<uint32_t>(k.seq),
+                             lower(ds.summary)))
+      continue;
     starts.push_back(body.size());
     append_packet_line(&body, k.e, k.seq, k.e.ts_us - t0, ds.summary);
   }

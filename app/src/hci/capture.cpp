@@ -237,6 +237,83 @@ std::string drop_plot_errors(const std::string& out) {
   return kept;
 }
 
+namespace {
+
+bool header_line(const std::string& l) {
+  return l.size() >= 2 && l[1] == ' ' && std::strchr("<>=@*", l[0]) != nullptr;
+}
+
+// btmon's frame number on a header line: "#123" followed by a space; 0 if none.
+size_t frame_no(const std::string& l, size_t* at, size_t* len) {
+  for (size_t p = l.find(" #"); p != std::string::npos; p = l.find(" #", p + 1)) {
+    size_t q = p + 2;
+    while (q < l.size() && l[q] >= '0' && l[q] <= '9') ++q;
+    if (q == p + 2 || (q < l.size() && l[q] != ' ')) continue;
+    *at = p + 1;
+    *len = q - *at;
+    return std::strtoul(l.c_str() + p + 2, nullptr, 10);
+  }
+  return 0;
+}
+
+}  // namespace
+
+std::string btmon_pick(const std::string& out, const std::vector<uint32_t>& frames, size_t* found) {
+  // The records, as btmon printed them.
+  struct Rec {
+    std::vector<std::string> lines;
+  };
+  std::vector<Rec> recs;
+  size_t pos = 0;
+  while (pos < out.size()) {
+    size_t nl = out.find('\n', pos);
+    if (nl == std::string::npos) nl = out.size();
+    std::string l = out.substr(pos, nl - pos);
+    pos = nl + 1;
+    if (header_line(l)) {
+      recs.emplace_back();
+    } else if (recs.empty()) {
+      continue;  // anything btmon prints before the first record
+    }
+    recs.back().lines.push_back(std::move(l));
+  }
+  // The frames' records are the last ones: btmon prints every record it reads with exactly one
+  // header line. (Its "#N" counts only the HCI packets, so it cannot find them.)
+  const size_t from = recs.size() > frames.size() ? recs.size() - frames.size() : 0;
+  *found = recs.size() - from;
+  std::string text;
+  for (size_t k = 0; k < *found; ++k) {
+    Rec* r = &recs[from + k];
+    size_t at = 0, len = 0;
+    if (frame_no(r->lines[0], &at, &len)) {
+      // "#3" becomes "#4711", the frame's number in the capture (which counts every record, as
+      // Wireshark does), taking the room from the padding in front so the columns stay.
+      std::string& h = r->lines[0];
+      const std::string real = "#" + std::to_string(frames[k]);
+      h.replace(at, len, real);
+      size_t extra = real.size() > len ? real.size() - len : 0;
+      while (extra && at >= 2 && h[at - 1] == ' ' && h[at - 2] == ' ') {
+        h.erase(at - 1, 1);
+        --at;
+        --extra;
+      }
+    }
+    for (const auto& l : r->lines) text += l + "\n";
+  }
+  return text;
+}
+
+CommandResult Capture::read(const std::string& file) const {
+  // -T: date and time; -S/-A/-I: the SCO, A2DP and ISO data btmon otherwise only summarises;
+  // -C: a width, since this is no terminal; -c never: no colour codes. A btmon from before these
+  // options answers its usage instead: then plain -r.
+  CommandResult r = run_command({btmon_, "-r", file, "-T", "-S", "-A", "-I", "-C", "110", "-c", "never"},
+                                10000, 1024 * 1024);
+  if (r.started && r.exit_code != 0 && r.output.find("Usage") != std::string::npos)
+    r = run_command({btmon_, "-r", file, "-T"}, 10000, 1024 * 1024);
+  return r;
+}
+
 CommandResult Capture::analyze(const std::string& name) const {
   // btmon -a over a full 16 MiB ring file takes a few seconds on the Zero W; 30 s is generous.
   CommandResult r = run_command({btmon_, "-a", path(name)}, 30000, 4 * 1024 * 1024);

@@ -7,12 +7,15 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <map>
 
 #include "btsnoop.h"
 #include "capture.h"
@@ -34,6 +37,7 @@ int64_t mono_us() {
 constexpr size_t kRecHdr = 24;
 constexpr uint32_t kMaxRecord = 65536 + 16;  // what BtsnoopReader accepts; beyond is corruption
 constexpr size_t kReadChunk = 256 * 1024;
+constexpr size_t kMaxContextBytes = 4 * 1024 * 1024;  // a .ctx file is a few hundred KiB at most
 // A file far beyond the ring's 16 MiB (someone copied a long capture into /data/btsnoop) is
 // indexed up to here and reported as truncated: 32 MB of index is all the Zero W can spare.
 constexpr size_t kMaxEntries = 1000000;
@@ -236,38 +240,89 @@ std::vector<std::string> split(const std::string& s, char sep) {
   return out;
 }
 
-// Whitespace-separated, with "double quotes" around a phrase (the quotes are dropped).
-std::vector<std::string> tokenize(const std::string& src) {
-  std::vector<std::string> out;
-  std::string cur;
+// Whitespace-separated, with "double quotes" around a phrase (the quotes are dropped, and the
+// token remembers it had them: a quoted "||" is text).
+struct Token {
+  std::string s;
+  bool quoted = false;
+};
+std::vector<Token> tokenize(const std::string& src) {
+  std::vector<Token> out;
+  Token cur;
   bool quoted = false, any = false;
   for (char c : src) {
     if (c == '"') {
       quoted = !quoted;
+      cur.quoted = true;
       any = true;
       continue;
     }
     if (!quoted && (c == ' ' || c == '\t' || c == '\n' || c == '\r')) {
       if (any) out.push_back(cur);
-      cur.clear();
+      cur = Token{};
       any = false;
       continue;
     }
-    cur.push_back(c);
+    cur.s.push_back(c);
     any = true;
   }
   if (any) out.push_back(cur);
   return out;
 }
 
+// A BD_ADDR, or the start of one: hex pairs separated by colons ("0c:32:3a" or all six).
+bool addr_like(const std::string& v) {
+  if (v.empty() || v.size() > 17) return false;
+  for (size_t i = 0; i < v.size(); ++i) {
+    const char c = v[i];
+    if (i % 3 == 2 ? c != ':' : !std::isxdigit(static_cast<unsigned char>(c))) return false;
+  }
+  return v.size() % 3 != 0;  // not ending in a colon
+}
+
+bool parse_group(const std::vector<Token>& toks, Filter* out, std::string* err);
+
 }  // namespace
 
 bool Filter::parse(const std::string& src, Filter* out, std::string* err) {
   *out = Filter{};
+  // "||" (unquoted, on its own) splits the filter into groups.
+  std::vector<std::vector<Token>> groups(1);
+  for (Token& t : tokenize(src)) {
+    if (!t.quoted && t.s == "||") groups.emplace_back();
+    else groups.back().push_back(std::move(t));
+  }
+  if (groups.size() == 1) return parse_group(groups[0], out, err);
+  out->t_lo = 1e300;
+  out->t_hi = -1e300;
+  for (const auto& g : groups) {
+    Filter f;
+    if (g.empty()) {
+      *err = "'||' needs terms on both sides";
+      return false;
+    }
+    if (!parse_group(g, &f, err)) return false;
+    out->has_text = out->has_text || f.has_text;
+    // The graph zooms to the range either group allows.
+    out->t_lo = std::min(out->t_lo, f.t_lo);
+    out->t_hi = std::max(out->t_hi, f.t_hi);
+    out->key += (out->key.empty() ? "" : " || ") + f.key;
+    out->alts.push_back(std::move(f));
+  }
+  return true;
+}
+
+namespace {
+
+bool parse_group(const std::vector<Token>& toks, Filter* out, std::string* err) {
+  using Term = Filter::Term;
+  *out = Filter{};
   std::vector<std::string> norm;
-  for (std::string tok : tokenize(src)) {
+  for (const Token& token : toks) {
+    std::string tok = token.s;
     Term t;
-    std::string shown = tok;
+    // As typed, for the key; a phrase keeps its quotes so the key parses back to the same filter.
+    std::string shown = token.quoted ? "\"" + tok + "\"" : tok;
     if (!tok.empty() && tok[0] == '!') {
       t.neg = true;
       tok.erase(0, 1);
@@ -319,7 +374,7 @@ bool Filter::parse(const std::string& src, Filter* out, std::string* err) {
       } fields[] = {{"type", Term::kType},     {"dir", Term::kDir},       {"proto", Term::kProto},
                     {"handle", Term::kHandle}, {"cid", Term::kCid},       {"psm", Term::kPsm},
                     {"index", Term::kIndex},   {"opcode", Term::kOpcode}, {"evt", Term::kEvt},
-                    {"subevt", Term::kSub},    {"is", Term::kIs}};
+                    {"subevt", Term::kSub},    {"is", Term::kIs},         {"addr", Term::kAddr}};
       bool known = false;
       for (const auto& f : fields) {
         if (field == f.name) {
@@ -327,11 +382,18 @@ bool Filter::parse(const std::string& src, Filter* out, std::string* err) {
           known = true;
         }
       }
-      if (!known) {
+      if (token.quoted || !known) {
         // Anything else is text — including words with a colon, like a BD_ADDR.
         t.kind = Term::kText;
         t.text = lower(tok);
         out->has_text = true;
+      } else if (t.kind == Term::kAddr) {
+        if (!addr_like(value)) {
+          *err = "'" + shown + "': addr takes a BD_ADDR (AA:BB:CC:DD:EE:FF, or its first bytes)";
+          return false;
+        }
+        t.text = value;
+        out->has_text = true;  // summaries that name the peer (advertising, connection events)
       } else {
         if (value.empty()) {
           *err = "'" + shown + "' has no value";
@@ -401,19 +463,41 @@ bool Filter::parse(const std::string& src, Filter* out, std::string* err) {
   }
   // Index terms first, text last: the cheap test runs before a decode.
   std::stable_partition(out->terms.begin(), out->terms.end(),
-                        [](const Term& t) { return t.kind != Term::kText; });
+                        [](const Term& t) { return t.kind != Term::kText && t.kind != Term::kAddr; });
   for (size_t i = 0; i < norm.size(); ++i) out->key += (i ? " " : "") + norm[i];
   return true;
 }
 
+}  // namespace
+
+void Filter::resolve(const std::vector<ConnInfo>& conns) {
+  for (Filter& a : alts) a.resolve(conns);
+  for (Term& t : terms) {
+    if (t.kind != Term::kAddr) continue;
+    t.links.clear();
+    for (const ConnInfo& c : conns) {
+      if (!c.peer.empty() && lower(c.peer).compare(0, t.text.size(), t.text) == 0)
+        t.links.push_back(static_cast<uint32_t>(c.index) << 16 | c.handle);
+    }
+  }
+}
+
 bool Filter::match_index(const IndexEntry& e, double t, uint32_t n) const {
+  if (!alts.empty()) {
+    for (const Filter& a : alts) {
+      if (a.match_index(e, t, n)) return true;
+    }
+    return false;
+  }
   auto in = [](const std::vector<uint32_t>& v, uint32_t x) {
     return std::find(v.begin(), v.end(), x) != v.end();
   };
   for (const Term& term : terms) {
     bool m = false;
     switch (term.kind) {
-      case Term::kText: continue;
+      case Term::kText:
+      case Term::kAddr:
+        continue;
       case Term::kType: m = (term.values[0] >> pkt_type_of(e.mon)) & 1; break;
       case Term::kDir: m = e.flags & term.values[0]; break;
       case Term::kProto: m = (term.values[0] >> e.proto) & 1; break;
@@ -455,10 +539,24 @@ bool Filter::match_index(const IndexEntry& e, double t, uint32_t n) const {
   return true;
 }
 
-bool Filter::match_text(const std::string& s) const {
+bool Filter::match_text(const IndexEntry& e, double t, uint32_t n, const std::string& s) const {
+  if (!alts.empty()) {
+    for (const Filter& a : alts) {
+      if (a.match_index(e, t, n) && a.match_text(e, t, n, s)) return true;
+    }
+    return false;
+  }
   for (const Term& term : terms) {
-    if (term.kind != Term::kText) continue;
-    const bool m = s.find(term.text) != std::string::npos;
+    bool m;
+    if (term.kind == Term::kText) {
+      m = s.find(term.text) != std::string::npos;
+    } else if (term.kind == Term::kAddr) {
+      const uint32_t link = static_cast<uint32_t>(e.index == kNoIndex ? 0xffff : e.index) << 16 | e.handle;
+      m = (e.handle != kNoHandle && std::find(term.links.begin(), term.links.end(), link) != term.links.end()) ||
+          s.find(term.text) != std::string::npos;
+    } else {
+      continue;
+    }
     if (m == term.neg) return false;
   }
   return true;
@@ -695,6 +793,16 @@ void Classifier::seed(const std::vector<LinkSeed>& seeds) {
   }
 }
 
+void Classifier::reset_counts() {
+  for (ConnInfo& c : st_->conns) {
+    c.first_us = c.last_us = 0;
+    c.tx_bytes = c.rx_bytes = 0;
+    c.tx_pkts = c.rx_pkts = c.lat_n = 0;
+  }
+  // What the context sent was completed before the file began: its NOCPs are not in the file.
+  for (auto& l : st_->links) l->fifo.clear();
+}
+
 void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uint8_t* d,
                           size_t len, uint32_t me, IndexEntry* out) {
   State& tr = *st_;
@@ -748,6 +856,7 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
   auto data = [&](uint16_t handle, bool tx, uint32_t payload, const char* type) -> Link* {
     Link* l = link_for(handle, type);
     ConnInfo& ci = conn_info[l->info];
+    if (!ci.first_us) ci.first_us = e.ts_us;  // counting restarted (reset_counts)
     ci.last_us = e.ts_us;
     if (tx) {
       ci.tx_bytes += payload;
@@ -900,15 +1009,37 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
           }
         }
         // A channel whose setup we never saw (it was open before the capture or the daemon
-        // started): an A2DP media channel still says what it is in every packet — RTP version 2,
-        // no padding/extension/CSRCs, a dynamic payload type. Remembered as AVDTP media for this
-        // direction, so proto:rtp and the media decoding work on links opened earlier.
+        // started, and the file has no context): an A2DP media channel still says what it is in
+        // every packet — RTP version 2, no padding/extension/CSRCs, a dynamic payload type.
+        // Remembered as AVDTP media for this direction, so proto:rtp and the media decoding work
+        // on links opened earlier.
         const uint8_t* rq = p + 4;
+        uint16_t guess_psm = 0;
+        uint8_t guess = kProtoNone;
         if (!known && !l->le && n >= 4 + 12 && le16(p) >= 12 && rq[0] == 0x80 && (rq[1] & 0x7f) >= 96) {
+          guess_psm = kPsmAvdtp;
+          guess = kProtoRtp;
+        } else if (!known && !l->le && cid >= 0x0040 && n >= 4 + 3) {
+          // AVRCP the same way: an AVCTP header names its profile in every packet (PID 0x110e,
+          // A/V Remote Control; 0x110c on a target). Plain on the control channel; behind an ERTM
+          // I-frame's control field on the browsing channel, which is always ERTM.
+          auto avctp_at = [&](size_t at) {
+            return n >= 4 + at + 3 && (rq[at] & 0x0c) == 0 && rq[at + 1] == 0x11 &&
+                   (rq[at + 2] == 0x0e || rq[at + 2] == 0x0c);
+          };
+          if (avctp_at(0)) {
+            guess_psm = kPsmAvctp;
+            guess = kProtoAvctp;
+          } else if (!(rq[0] & 1) && (rq[1] & 0xc0) == 0 && avctp_at(2)) {
+            guess_psm = kPsmAvctpBrowsing;
+            guess = kProtoAvctp;
+          }
+        }
+        if (guess != kProtoNone) {
           State::Chan ch;
           (tx ? ch.rcid : ch.lcid) = cid;
-          ch.psm = kPsmAvdtp;
-          ch.proto = kProtoRtp;
+          ch.psm = guess_psm;
+          ch.proto = guess;
           ch.open = true;
           if (l->chans.size() < 32) l->chans.push_back(ch);
           e.psm = ch.psm;
@@ -1000,7 +1131,32 @@ bool PacketIndex::open(const std::string& path, std::string* err) {
     *err = "unsupported btsnoop datalink " + std::to_string(datalink_);
     return false;
   }
+  load_context(path + ".ctx");
   return true;
+}
+
+void PacketIndex::load_context(const std::string& path) {
+  FILE* f = std::fopen(path.c_str(), "rbe");
+  if (!f) return;
+  std::string all;
+  char buf[64 * 1024];
+  for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0 && all.size() < kMaxContextBytes;) all.append(buf, n);
+  std::fclose(f);
+  const auto* p = reinterpret_cast<const uint8_t*>(all.data());
+  if (all.size() < 16 || std::memcmp(p, "btsnoop\0", 8) != 0 || be32(p + 12) != kBtsnoopMonitor) return;
+  size_t at = 16;
+  while (at + kRecHdr <= all.size()) {
+    const uint32_t incl = be32(p + at + 4);
+    if (incl > kMaxRecord || at + kRecHdr + incl > all.size()) break;
+    const uint32_t flags = be32(p + at + 8);
+    const uint64_t raw_ts = (static_cast<uint64_t>(be32(p + at + 16)) << 32) | be32(p + at + 20);
+    IndexEntry e;
+    cls_.classify(static_cast<int64_t>(raw_ts) - kBtsnoopEpochDelta, static_cast<uint16_t>(flags >> 16),
+                  static_cast<uint16_t>(flags & 0xffff), p + at + kRecHdr, incl, 0xffffffff, &e);
+    at += kRecHdr + incl;
+  }
+  cls_.reset_counts();
+  ctx_records_ = all.substr(16, at - 16);
 }
 
 bool PacketIndex::still_valid() const {
@@ -1050,6 +1206,64 @@ std::string PacketIndex::summary(size_t i) {
   Dissection ds;
   dissect(entries_[i], d, len, false, &ds);
   return ds.summary;
+}
+
+ContextKind context_kind(const IndexEntry& e) {
+  switch (e.mon) {
+    case kMonNewIndex:
+    case kMonDelIndex:
+    case kMonOpenIndex:
+    case kMonCloseIndex:
+    case kMonIndexInfo:
+      return kCtxIndex;
+    case kMonEvent:
+      if (e.evt == 0x03 || e.evt == 0x05 || e.evt == 0x2c) return kCtxLink;
+      return e.evt == 0x3e && (e.sub == 0x01 || e.sub == 0x0a || e.sub == 0x29 || e.sub == 0x19 ||
+                               e.sub == 0x1b)
+                 ? kCtxLink
+                 : kCtxNone;
+    case kMonAclTx:
+    case kMonAclRx:
+      if (e.proto == kProtoL2cap && (e.cid == 1 || e.cid == 5)) return kCtxSig;
+      if (e.proto == kProtoAvdtp) return kCtxAvdtp;
+      if (e.proto == kProtoAtt && !(e.flags & kFlagCont)) return kCtxAtt;
+      return kCtxNone;
+    default:
+      return kCtxNone;
+  }
+}
+
+bool att_discovery(const uint8_t* d, size_t len) {
+  if (len < 9) return false;
+  const uint8_t op = d[8];  // after the ACL (4) and L2CAP (4) headers
+  return (op >= 0x01 && op <= 0x05) || op == 0x08 || op == 0x09 || op == 0x10 || op == 0x11;
+}
+
+bool PacketIndex::append_record(size_t i, std::string* out) {
+  size_t len = 0;
+  const uint8_t* d = read(i, &len);
+  if (!d) return false;
+  const IndexEntry& e = entries_[i];
+  // Datalink 2001 carries the controller index and the monitor opcode in the flags; an H4 file's
+  // packets become controller 0's, the notes without a controller the monitor's 0xffff.
+  const uint32_t index = e.index == kNoIndex ? 0xffff : e.index;
+  const uint64_t ts = static_cast<uint64_t>(e.ts_us + kBtsnoopEpochDelta);
+  uint8_t rec[kRecHdr];
+  auto put = [&rec](size_t at, uint32_t v) {
+    rec[at] = static_cast<uint8_t>(v >> 24);
+    rec[at + 1] = static_cast<uint8_t>(v >> 16);
+    rec[at + 2] = static_cast<uint8_t>(v >> 8);
+    rec[at + 3] = static_cast<uint8_t>(v);
+  };
+  put(0, static_cast<uint32_t>(len));
+  put(4, static_cast<uint32_t>(len));
+  put(8, index << 16 | e.mon);
+  put(12, 0);
+  put(16, static_cast<uint32_t>(ts >> 32));
+  put(20, static_cast<uint32_t>(ts));
+  out->append(reinterpret_cast<const char*>(rec), sizeof rec);
+  out->append(reinterpret_cast<const char*>(d), len);
+  return true;
 }
 
 bool PacketIndex::extend(int64_t deadline_us) {
@@ -1114,6 +1328,9 @@ PacketIndex::Query* PacketIndex::query(const Filter& f, int64_t deadline_us) {
     queries_.splice(queries_.begin(), queries_, it);
   }
   Query& q = queries_.front();
+  // The links an addr: term means grow as the file is indexed; looked up again each time.
+  q.filter.resolve(cls_.conns());
+  const Filter& flt = q.filter;
   const int64_t t0 = t0_us();
   const size_t start = q.scanned;
   size_t decoded = 0;
@@ -1121,13 +1338,14 @@ PacketIndex::Query* PacketIndex::query(const Filter& f, int64_t deadline_us) {
   for (; i < entries_.size(); ++i) {
     // Text terms decode: check the clock every few packets, but always make some progress so a
     // client polling with a tiny budget still gets to the end.
-    if (f.has_text && (decoded & 31) == 31 && i - start > 512 && mono_us() > deadline_us) break;
+    if (flt.has_text && (decoded & 31) == 31 && i - start > 512 && mono_us() > deadline_us) break;
     const IndexEntry& e = entries_[i];
     const double t = static_cast<double>(e.ts_us - t0) / 1e6;
-    if (!f.match_index(e, t, static_cast<uint32_t>(i + 1))) continue;
-    if (f.has_text) {
+    const uint32_t n = static_cast<uint32_t>(i + 1);
+    if (!flt.match_index(e, t, n)) continue;
+    if (flt.has_text) {
       ++decoded;
-      if (!f.match_text(lower(summary(i)))) continue;
+      if (!flt.match_text(e, t, n, lower(summary(i)))) continue;
     }
     q.matches.push_back(static_cast<uint32_t>(i));
   }
@@ -1222,7 +1440,7 @@ json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t
     std::snprintf(lb, sizeof(lb), "%.3f ms", e.lat_us / 1000.0);
     fc.push_back({{"name", "TX latency (HCI → NOCP)"}, {"value", lb}});
   }
-  if (e.psm) fc.push_back({{"name", "Channel PSM (from its setup)"}, {"value", std::to_string(e.psm)}});
+  if (e.psm) fc.push_back({{"name", "Channel PSM"}, {"value", std::to_string(e.psm)}});
   json fields = json::array();
   fields.push_back(std::move(frame));
   for (auto& x : ds.fields) fields.push_back(std::move(x));
@@ -1235,6 +1453,10 @@ json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t
     hex.push_back(digits[d[i] & 15]);
   }
   json out = packet_json(e, n, t, ds.summary);
+  // What the filter can name besides the list's columns (the console offers them as terms).
+  if (e.opcode) out["opcode"] = e.opcode;
+  if (e.mon == kMonEvent) out["evt"] = e.evt;
+  if (e.mon == kMonEvent && e.evt == kEvtLeMeta) out["subevt"] = e.sub;
   out["fields"] = std::move(fields);
   out["hex"] = std::move(hex);
   return out;
@@ -1340,6 +1562,215 @@ bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* st
   *out = packet_detail_json(e, n, t, bytes.data(), bytes.size(),
                             {json{{"name", "Since first packet"}, {"value", std::to_string(t) + " s"}}});
   (*out)["packets_in_file"] = idx->size();
+  // The link's peer, when its connection (or the file's context) said.
+  for (const ConnInfo& c : idx->conns()) {
+    if (e.handle != kNoHandle && c.index == e.index && c.handle == e.handle && !c.peer.empty()) (*out)["peer"] = c.peer;
+  }
+  return true;
+}
+
+namespace {
+
+// A btsnoop header for datalink 2001.
+std::string monitor_header() {
+  static const uint8_t hdr[16] = {'b', 't', 's', 'n', 'o', 'o', 'p', 0, 0, 0, 0, 1, 0, 0, 0x07, 0xd1};
+  return std::string(reinterpret_cast<const char*>(hdr), sizeof hdr);
+}
+
+// Whether btmon needs entry i to decode what comes after it.
+bool btmon_context(PacketIndex& idx, size_t i) {
+  const ContextKind k = context_kind(idx.at(i));
+  if (k != kCtxAtt) return k != kCtxNone;
+  size_t len = 0;
+  const uint8_t* d = idx.read(i, &len);
+  return d && att_discovery(d, len);
+}
+
+}  // namespace
+
+bool PacketStore::stats(const std::string& name, const std::string& filter, json* out, int* status,
+                        std::string* err) {
+  Filter f;
+  if (!Filter::parse(filter, &f, err)) {
+    *status = 400;
+    return false;
+  }
+  std::shared_ptr<PacketIndex> idx = get(name, status, err);
+  if (!idx) return false;
+  std::lock_guard<std::mutex> lk(idx->mu);
+  const int64_t deadline = mono_us() + int64_t{budget_ms_} * 1000;
+  idx->extend(deadline);
+  PacketIndex::Query* q = idx->query(f, deadline);
+
+  struct Count {
+    uint64_t pkts = 0, bytes = 0, tx = 0, rx = 0, err = 0;
+    void add(const IndexEntry& e) {
+      ++pkts;
+      bytes += e.len;
+      tx += (e.flags & kFlagTx) != 0;
+      rx += (e.flags & kFlagRx) != 0;
+      err += (e.flags & kFlagErr) != 0;
+    }
+    json js() const {
+      return json{{"pkts", pkts}, {"bytes", bytes}, {"tx", tx}, {"rx", rx}, {"err", err}};
+    }
+  };
+  Count all, by_proto[kProtoCount], by_type[kTypeOther + 1];
+  std::map<uint32_t, Count> by_link;
+  uint64_t marks = 0, cont = 0;
+  LatencyHist lat;
+  int64_t first = 0, last = 0;
+  for (uint32_t i : q->matches) {
+    const IndexEntry& e = idx->at(i);
+    all.add(e);
+    by_proto[e.proto < kProtoCount ? e.proto : 0].add(e);
+    by_type[std::min<uint8_t>(pkt_type_of(e.mon), kTypeOther)].add(e);
+    if (e.handle != kNoHandle && e.index != kNoIndex) by_link[static_cast<uint32_t>(e.index) << 16 | e.handle].add(e);
+    marks += (e.flags & kFlagMark) != 0;
+    cont += (e.flags & kFlagCont) != 0;
+    if (e.lat_us != kNoLat) lat.add_us(e.lat_us);
+    if (!first || e.ts_us < first) first = e.ts_us;
+    last = std::max(last, e.ts_us);
+  }
+  json protos = json::array(), types = json::array(), links = json::array();
+  for (int p = 0; p < kProtoCount; ++p) {
+    if (!by_proto[p].pkts) continue;
+    json j = by_proto[p].js();
+    j["proto"] = p ? json(proto_name(static_cast<uint8_t>(p))) : json("other");
+    protos.push_back(std::move(j));
+  }
+  for (int t = 0; t <= kTypeOther; ++t) {
+    if (!by_type[t].pkts) continue;
+    json j = by_type[t].js();
+    j["type"] = pkt_type_name(static_cast<uint8_t>(t));
+    types.push_back(std::move(j));
+  }
+  for (const auto& [k, c] : by_link) {
+    json j = c.js();
+    j["index"] = k >> 16;
+    j["handle"] = k & 0xffff;
+    for (const ConnInfo& ci : idx->conns()) {
+      if (ci.index == (k >> 16) && ci.handle == (k & 0xffff)) {
+        j["type"] = ci.type;
+        j["peer"] = ci.peer.empty() ? json(nullptr) : json(ci.peer);
+      }
+    }
+    links.push_back(std::move(j));
+  }
+  auto busiest = [](const json& a, const json& b) { return a["pkts"].get<uint64_t>() > b["pkts"].get<uint64_t>(); };
+  std::sort(protos.begin(), protos.end(), busiest);
+  std::sort(types.begin(), types.end(), busiest);
+  std::sort(links.begin(), links.end(), busiest);
+  json l = nullptr;
+  if (lat.count()) {
+    l = json{{"n", lat.count()}, {"avg_ms", round3(lat.avg_ms())}, {"p50_ms", round3(lat.percentile_ms(0.5))},
+             {"p95_ms", round3(lat.percentile_ms(0.95))}, {"max_ms", round3(lat.max_ms())}};
+  }
+  const double span = q->matches.empty() ? 0.0 : static_cast<double>(last - first) / 1e6;
+  *out = json{{"name", name}, {"filter", f.key}, {"total", all.js()}, {"marks", marks}, {"cont", cont},
+              {"span_s", round3(span)}, {"protos", std::move(protos)}, {"types", std::move(types)},
+              {"links", std::move(links)}, {"latency", std::move(l)}};
+  progress(*idx, q, out);
+  return true;
+}
+
+bool PacketStore::export_filtered(const std::string& name, const std::string& filter, bool context,
+                                  std::string* out, size_t* count, int* status, std::string* err) {
+  Filter f;
+  if (!Filter::parse(filter, &f, err)) {
+    *status = 400;
+    return false;
+  }
+  std::shared_ptr<PacketIndex> idx = get(name, status, err);
+  if (!idx) return false;
+  std::lock_guard<std::mutex> lk(idx->mu);
+  const int64_t deadline = mono_us() + int64_t{budget_ms_} * 1000;
+  idx->extend(deadline);
+  PacketIndex::Query* q = idx->query(f, deadline);
+  if (!idx->at_end() || q->scanned < idx->size()) {
+    *status = 409;
+    *err = "the filter is still being worked out over the file; try again when the list is complete";
+    return false;
+  }
+  *out = monitor_header();
+  out->reserve(out->size() + q->matches.size() * 64);
+  *count = 0;
+  if (!context) {
+    for (uint32_t i : q->matches) {
+      if (idx->append_record(i, out)) ++*count;
+    }
+    return true;
+  }
+  *out += idx->context_records();
+  size_t m = 0;
+  for (size_t i = 0; i < idx->size(); ++i) {
+    const bool match = m < q->matches.size() && q->matches[m] == i;
+    if (match) ++m;
+    if (!match && !btmon_context(*idx, i)) continue;
+    if (idx->append_record(i, out) && match) ++*count;
+  }
+  return true;
+}
+
+bool PacketStore::btmon_input(const std::string& name, uint32_t n, BtmonInput* out, int* status,
+                              std::string* err) {
+  std::shared_ptr<PacketIndex> idx = get(name, status, err);
+  if (!idx) return false;
+  std::lock_guard<std::mutex> lk(idx->mu);
+  const int64_t deadline = mono_us() + int64_t{budget_ms_} * 1000;
+  if (n > idx->size()) idx->extend(deadline);
+  if (n < 1 || n > idx->size()) {
+    *status = 404;
+    *err = n > idx->size() && !idx->at_end() ? "not indexed yet, try again" : "no such packet";
+    return false;
+  }
+  // The frame's L2CAP packet: btmon decodes it once the last fragment is in, so the start
+  // fragment and every continuation of that handle go in, in order.
+  size_t first = n - 1, last = n - 1;
+  const IndexEntry& e = idx->at(n - 1);
+  std::vector<uint32_t> frames;
+  const bool acl = e.mon == kMonAclTx || e.mon == kMonAclRx;
+  auto same_link = [&](const IndexEntry& o) { return o.mon == e.mon && o.index == e.index && o.handle == e.handle; };
+  if (acl) {
+    if (e.flags & kFlagCont) {
+      for (size_t j = first; j-- > 0 && first - j < 64;) {
+        if (!same_link(idx->at(j))) continue;
+        first = j;
+        if (!(idx->at(j).flags & kFlagCont)) break;
+      }
+    }
+    for (size_t j = n; j < idx->size() && j - last < 64; ++j) {
+      if (!same_link(idx->at(j))) continue;
+      if (!(idx->at(j).flags & kFlagCont)) break;
+      last = j;
+    }
+  }
+  for (size_t j = first; j <= last; ++j) {
+    if (j == n - 1 || !acl || same_link(idx->at(j))) frames.push_back(static_cast<uint32_t>(j));
+  }
+  // The context, newest first while collecting (the most recent state matters most), capped.
+  std::vector<uint32_t> ctx;
+  for (size_t j = first; j-- > 0 && ctx.size() < kMaxContext;) {
+    if (btmon_context(*idx, j)) ctx.push_back(static_cast<uint32_t>(j));
+  }
+  std::reverse(ctx.begin(), ctx.end());
+  out->bytes = monitor_header();
+  // The file's own context (what was open when it began) comes before what is in the file.
+  out->bytes += idx->context_records();
+  out->context = 0;
+  for (uint32_t j : ctx) {
+    if (idx->append_record(j, &out->bytes)) ++out->context;
+  }
+  out->frames.clear();
+  for (uint32_t j : frames) {
+    if (!idx->append_record(j, &out->bytes)) continue;
+    out->frames.push_back(j + 1);
+  }
+  if (out->frames.empty()) {
+    *status = 500;
+    *err = "cannot read the packet";
+    return false;
+  }
   return true;
 }
 
@@ -1395,7 +1826,10 @@ bool PacketStore::graph(const std::string& name, const GraphParams& p, json* out
 
   // The connections, busiest first; and the one whose throughput and latency are graphed.
   std::vector<const ConnInfo*> cs;
-  for (const auto& c : idx->conns()) cs.push_back(&c);
+  // A link known only from the file's context, with nothing in the file, is left out.
+  for (const auto& c : idx->conns()) {
+    if (c.first_us) cs.push_back(&c);
+  }
   std::sort(cs.begin(), cs.end(), [](const auto* a, const auto* b) {
     return a->tx_bytes + a->rx_bytes > b->tx_bytes + b->rx_bytes;
   });

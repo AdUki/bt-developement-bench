@@ -65,6 +65,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   - `/data/btbench/wifi/` — wpa_supplicant networks.
   - `/data/bluetooth/` — persisted `/var/lib/bluetooth` (bonds survive reflashes of the rootfs? no: of deploys and kernel swaps; a reflash rewrites /data too).
   - `/data/btsnoop/` — the always-on btmon ring (`hci-<YYYYmmdd-HHMMSS>.btsnoop`, newest is being written).
+    btbenchd writes `<name>.ctx` beside each new file: the context it began with (the links,
+    L2CAP/AVDTP signalling and ATT discovery still in force), btsnoop datalink 2001.
 - `/boot` — the FAT boot partition, mounted read-write.
 - `/run/btbench/` — runtime state (`wifi.json`, `wifi-scan.json`).
 - Network: USB gadget `usb0` = `10.55.0.1/24` (DHCP server for the PC), Wi-Fi AP `10.42.0.1/24`,
@@ -148,6 +150,9 @@ Routes:
   - `GET /api/capture/files/<name>/packets?filter=&start=0&count=200` (or `at_t=SECONDS` / `at_n=FRAME`) — `{"total","start","complete","next","scanned","packets_in_file","indexed_bytes","file_size","datalink","t0_ms","filter","packets":[{"n","ts_ms","t","index","dir":"tx|rx|","type":"cmd|evt|acl|sco|iso|index|log|mgmt","proto":"att|..."|null,"handle","cid","psm","len","lat_ms","summary","err"?,"mark"?,"cont"?}]}`
   - `GET /api/capture/files/<name>/packets/<n>` — one packet as above plus `"fields":[{"name","value","off","len","children":[...]}]` and `"hex"`
   - `GET /api/capture/files/<name>/graph?filter=&bucket_ms=&points=&from=&to=&conn=INDEX:HANDLE` — `{"from","to","bucket_ms","buckets","matches","complete","filtered":{"pkts":[],"tx_bytes":[],"rx_bytes":[]},"conns":[{"index","handle","type","peer","tx_bytes","rx_bytes",...}],"conn":{"index","handle","tx_bps":[],"rx_bps":[],"lat_p50":[],"lat_p95":[],"lat_max":[]}|null}`
+  - `GET /api/capture/files/<name>/stats?filter=` — `{"total":{"pkts","bytes","tx","rx","err"},"marks","cont","span_s","protos":[{"proto",...}],"types":[{"type",...}],"links":[{"index","handle","type","peer",...}],"latency":{...}|null,"complete",...}`
+  - `GET /api/capture/files/<name>/packets/<n>/btmon` — `{"frames":[n,...],"context":N,"text":"..."}` (btmon -r over the frame and its context; 503 without btmon)
+  - `GET /api/capture/files/<name>/export?filter=&context=0|1` — btsnoop (datalink 2001) of the matches; header `X-Packets`; 409 until the filter is complete
 - WebSocket topics: `hci.stats` (the stats object, 1 Hz while subscribed), `hci.event` (one event).
 
 ### btbench-btsnoop.service (audio + BlueZ area)

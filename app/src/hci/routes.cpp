@@ -3,8 +3,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <httplib.h>
 #include <memory>
 #include <spdlog/spdlog.h>
@@ -252,6 +254,68 @@ void register_routes(httplib::Server& svr, Monitor& mon) {
             send_json(res, out);
           });
 
+  // btmon's own decode of one frame: btmon -r over the frame and the context it needs.
+  svr.Get(R"(/api/capture/files/([^/]+)/packets/(\d+)/btmon)",
+          [packets, cap](const httplib::Request& req, httplib::Response& res) {
+            const unsigned long n = std::strtoul(req.matches[2].str().c_str(), nullptr, 10);
+            PacketStore::BtmonInput in;
+            int status = 500;
+            std::string err;
+            if (n == 0 || n > 0xffffffffUL ||
+                !packets->btmon_input(req.matches[1], static_cast<uint32_t>(n), &in, &status, &err)) {
+              return send_error(res, n == 0 ? 404 : status, n == 0 ? "no such packet" : err);
+            }
+            // A private file in /tmp (tmpfs on the board): a few hundred KiB at most.
+            char path[] = "/tmp/btbench-btmon-XXXXXX";
+            const int fd = mkstemp(path);
+            if (fd < 0) return send_error(res, 500, std::string("mkstemp: ") + std::strerror(errno));
+            const bool wrote = write(fd, in.bytes.data(), in.bytes.size()) == static_cast<ssize_t>(in.bytes.size());
+            close(fd);
+            CommandResult r;
+            if (wrote) r = cap->read(path);
+            unlink(path);
+            if (!wrote) return send_error(res, 500, "cannot write the btmon input");
+            if (!r.started || (r.exit_code == 127 && r.output.empty())) {
+              return send_error(res, 503, r.error.empty() ? "btmon not available" : r.error);
+            }
+            size_t found = 0;
+            const std::string text = btmon_pick(r.output, in.frames, &found);
+            if (!found) return send_error(res, 500, "btmon printed nothing for the frame: " + r.output.substr(0, 300));
+            send_json(res, json{{"frames", in.frames}, {"context", in.context}, {"text", text},
+                                {"timed_out", r.timed_out}});
+          });
+
+  svr.Get(R"(/api/capture/files/([^/]+)/stats)",
+          [packets](const httplib::Request& req, httplib::Response& res) {
+            json out;
+            int status = 500;
+            std::string err;
+            if (!packets->stats(req.matches[1], req.get_param_value("filter"), &out, &status, &err)) {
+              return send_error(res, status, err);
+            }
+            send_json(res, out);
+          });
+
+  // The packets a filter matches, as a capture of their own.
+  svr.Get(R"(/api/capture/files/([^/]+)/export)",
+          [packets](const httplib::Request& req, httplib::Response& res) {
+            const std::string name = req.matches[1];
+            const std::string filter = req.get_param_value("filter");
+            auto body = std::make_shared<std::string>();
+            size_t count = 0;
+            int status = 500;
+            std::string err;
+            const bool context = req.get_param_value("context") == "1";
+            if (!packets->export_filtered(name, filter, context, body.get(), &count, &status, &err)) {
+              return send_error(res, status, err);
+            }
+            // hci-20261010-060340.btsnoop → hci-20261010-060340-filtered.btsnoop
+            std::string out = name.substr(0, name.size() - 8) + (filter.empty() ? "-copy" : "-filtered") + ".btsnoop";
+            res.set_header("Content-Disposition", "attachment; filename=\"" + out + "\"");
+            res.set_header("X-Packets", std::to_string(count));
+            res.set_content(std::move(*body), "application/octet-stream");
+          });
+
   svr.Get(R"(/api/capture/files/([^/]+)/graph)",
           [packets](const httplib::Request& req, httplib::Response& res) {
             PacketStore::GraphParams p;
@@ -342,6 +406,7 @@ void register_routes(httplib::Server& svr, Monitor& mon) {
                if (unlink(cap->path(name).c_str()) != 0) {
                  return send_error(res, 500, std::string("unlink: ") + std::strerror(errno));
                }
+               unlink((cap->path(name) + ".ctx").c_str());  // its context, if it has one
                send_json(res, json{{"ok", true}});
              });
 }

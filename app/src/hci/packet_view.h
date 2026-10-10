@@ -98,22 +98,28 @@ static_assert(sizeof(IndexEntry) == 32, "the index is sized for the Zero W");
 
 // ---- Filter ----
 
-// Space-separated terms, all of which must match; "!term" negates one. Field terms answer from
-// the index; any other word (or "quoted phrase") is a case-insensitive substring of the summary.
-// The syntax is in docs/monitor.md.
+struct ConnInfo;
+
+// Space-separated terms, all of which must match; "!term" negates one; "||" between groups of
+// terms matches either group. Field terms answer from the index; any other word (or "quoted
+// phrase") is a case-insensitive substring of the summary. The syntax is in docs/monitor.md.
 struct Filter {
   struct Term {
     enum Kind {
       kType, kDir, kProto, kHandle, kCid, kPsm, kIndex, kOpcode, kEvt, kSub, kIs, kCmp, kText,
+      kAddr,  // a peer: its links' packets (resolve()), and summaries that name it
     } kind = kText;
     bool neg = false;
     std::vector<uint32_t> values;  // set membership ('|' in a value); bits for kType/kProto/kIs
     char field = 0;                // kCmp: 'l' len, 't' time, 'n' frame number, 'L' latency
     int op = 0;                    // kCmp: '<' '>' 'l' (<=) 'g' (>=) '='
     double num = 0;
-    std::string text;  // kText, lower case
+    std::string text;  // kText, kAddr: lower case
+    std::vector<uint32_t> links;  // kAddr: index << 16 | handle of the links to that peer
   };
   std::vector<Term> terms;
+  // "a || b": the groups, each a Filter of its own (terms is then empty).
+  std::vector<Filter> alts;
   bool has_text = false;
   // The time range the non-negated t terms allow, in seconds since the first packet (the graph
   // zooms to it).
@@ -122,10 +128,14 @@ struct Filter {
 
   // false and *err on a malformed term (unknown is: value, bad number, empty value).
   static bool parse(const std::string& src, Filter* out, std::string* err);
-  // The index-only part. t is seconds since the first packet, n the 1-based frame number.
+  // The index-only part: false if the packet cannot match, whatever its summary says. t is
+  // seconds since the first packet, n the 1-based frame number.
   bool match_index(const IndexEntry& e, double t, uint32_t n) const;
-  // The text part, given the summary in lower case.
-  bool match_text(const std::string& lower_summary) const;
+  // The whole filter, given the summary in lower case (needed only when has_text), for a packet
+  // that passed match_index.
+  bool match_text(const IndexEntry& e, double t, uint32_t n, const std::string& lower_summary) const;
+  // Points the addr: terms at the links to their peers, from the connections seen so far.
+  void resolve(const std::vector<ConnInfo>& conns);
 };
 
 // ---- Decoding one packet ----
@@ -154,6 +164,27 @@ nlohmann::json packet_json(const IndexEntry& e, uint64_t n, double t, const std:
 // nodes are put into it after the time (what this view numbers or measures from).
 nlohmann::json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d,
                                   size_t len, const std::vector<nlohmann::json>& frame_extra);
+
+// ---- Context: the packets that explain later ones ----
+
+// What btmon and the indexer need to have seen to make sense of a packet that comes later: the
+// controllers, the links' connection events (type and peer), L2CAP signalling (which PSM and mode
+// a channel is), AVDTP signalling (which codec a stream carries) and ATT discovery (from which
+// btmon's att.c names the characteristic a later value is about). A capture file holds what
+// happened in it; the ring's files after the first start with everything already open, so each
+// gets the context of the moment it began beside it (ContextJournal, `<file>.ctx`).
+enum ContextKind : uint8_t {
+  kCtxNone,
+  kCtxIndex,  // New/Delete/Open/Close Index, Index Info
+  kCtxLink,   // connection complete (BR/EDR, SCO, LE, CIS, BIG) and disconnection complete
+  kCtxSig,    // L2CAP signalling, fragments included
+  kCtxAvdtp,  // AVDTP signalling
+  kCtxAtt,    // an ATT start fragment: context only if att_discovery() says so
+};
+ContextKind context_kind(const IndexEntry& e);
+// Exchange MTU, Find Information, Read By Type and Read By Group Type, requests and responses,
+// and Error Response. d/len: the ACL packet as the monitor carries it.
+bool att_discovery(const uint8_t* d, size_t len);
 
 // ---- Classifying packets ----
 
@@ -191,6 +222,9 @@ class Classifier {
 
   // Forgets everything, then knows these links and channels (the live Decoder's view).
   void seed(const std::vector<LinkSeed>& links);
+  // Zeroes the per-connection counts, keeping the links and channels: after classifying a file's
+  // context, which happened before the file and is not its traffic.
+  void reset_counts();
 
   const std::vector<ConnInfo>& conns() const;
 
@@ -212,7 +246,11 @@ class PacketIndex {
   // Everything below is called with mu held.
   std::mutex mu;
 
+  // Reads path + ".ctx" first, when there is one (ContextJournal): the links and channels open
+  // when the file began.
   bool open(const std::string& path, std::string* err);
+  // That context file's records (a btsnoop file without its header); empty if there is none.
+  const std::string& context_records() const { return ctx_records_; }
   // Re-checks the file: false if it is gone or was replaced/truncated (the caller then drops
   // this index and builds a new one). A file that grew is simply indexed further next time.
   bool still_valid() const;
@@ -234,6 +272,10 @@ class PacketIndex {
   // The summary of entry i (decodes it).
   std::string summary(size_t i);
 
+  // Entry i as a btsnoop record of datalink 2001 (whatever this file's datalink), appended to
+  // *out. false if the packet cannot be read.
+  bool append_record(size_t i, std::string* out);
+
   // A filter's matches over the indexed part, cached per filter string, and extended until the
   // deadline (text terms decode, so they may not finish in one request).
   struct Query {
@@ -249,8 +291,10 @@ class PacketIndex {
 
  private:
   bool fill(uint64_t off, size_t n);  // makes [off, off+n) available in buf_
+  void load_context(const std::string& path);
 
   std::string path_;
+  std::string ctx_records_;
   int fd_ = -1;
   uint64_t ino_ = 0, dev_ = 0;
   uint32_t datalink_ = 0;
@@ -305,6 +349,32 @@ class PacketStore {
   };
   bool graph(const std::string& name, const GraphParams& p, nlohmann::json* out, int* status,
              std::string* err);
+
+  // Statistics of what a filter matches (docs/monitor.md "Statistics"): packets and bytes per
+  // protocol, per packet kind and per link, errors, marks, TX latency; from the index alone.
+  bool stats(const std::string& name, const std::string& filter, nlohmann::json* out, int* status,
+             std::string* err);
+
+  // The packets a filter matches, as a btsnoop file of datalink 2001 in *out (btmon -r and
+  // Wireshark read it). 409 while the filter is not worked out to the end of the file yet: the
+  // client lists until "complete" first. *count is the number of matches in it. With context,
+  // the packets btmon needs to decode them (the file's .ctx, then the context packets of the
+  // file among the matches, as btmon_input picks them) are in it too, in order.
+  bool export_filtered(const std::string& name, const std::string& filter, bool context,
+                       std::string* out, size_t* count, int* status, std::string* err);
+
+  // What `btmon -r` needs to decode frame n the way it would in the whole file, as a small
+  // btsnoop file: first the context (the controllers, the links' connection events, L2CAP
+  // signalling, AVDTP signalling and ATT discovery — the state btmon keeps to name channels,
+  // codecs and characteristics), then the frame with the other fragments of its L2CAP packet.
+  struct BtmonInput {
+    std::string bytes;            // the file
+    size_t context = 0;           // records before the frames
+    std::vector<uint32_t> frames;  // the frame numbers of the records after them, in order
+  };
+  static constexpr size_t kMaxContext = 4000;
+  bool btmon_input(const std::string& name, uint32_t n, BtmonInput* out, int* status,
+                   std::string* err);
 
  private:
   std::string dir_;

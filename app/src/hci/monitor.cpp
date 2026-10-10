@@ -1,10 +1,13 @@
 #include <fcntl.h>
 #include <poll.h>
+#include <dirent.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -111,7 +114,7 @@ void Monitor::Impl::stop() {
   if (thread.joinable()) thread.join();
   feed->close_all();
   live->close_all();
-  for (int* fd : {&mon_fd, &wake_fd[0], &wake_fd[1]}) {
+  for (int* fd : {&mon_fd, &wake_fd[0], &wake_fd[1], &ino_fd}) {
     if (*fd >= 0) close(*fd);
     *fd = -1;
   }
@@ -159,6 +162,7 @@ bool Monitor::Impl::start_source() {
     return false;
   }
   spdlog::info("HCI monitor: reading the kernel's HCI monitor channel");
+  watch_captures();
   thread = std::thread([this] { run_live(); });
   return true;
 }
@@ -215,7 +219,90 @@ void Monitor::Impl::query_devinfo(uint16_t index) {
   close(fd);
 }
 
+void Monitor::Impl::watch_captures() {
+  if (ino_fd >= 0 || opts.capture_dir.empty()) return;
+  const int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  if (fd < 0) return;
+  // btmon creates the file when it starts on it; IN_MOVED_TO covers a ring written elsewhere and
+  // moved in.
+  if (inotify_add_watch(fd, opts.capture_dir.c_str(), IN_CREATE | IN_MOVED_TO) < 0) {
+    close(fd);
+    return;
+  }
+  ino_fd = fd;
+  spdlog::info("HCI monitor: keeping the context of {} (a .ctx file beside each new capture)", opts.capture_dir);
+}
+
+void Monitor::Impl::on_capture_events() {
+  alignas(inotify_event) char buf[4096];
+  bool wrote = false;
+  for (;;) {
+    const ssize_t n = read(ino_fd, buf, sizeof buf);
+    if (n <= 0) break;
+    for (ssize_t at = 0; at < n;) {
+      const auto* ev = reinterpret_cast<const inotify_event*>(buf + at);
+      at += static_cast<ssize_t>(sizeof(inotify_event) + ev->len);
+      if (!ev->len || !Capture::valid_name(ev->name)) continue;
+      const std::string path = opts.capture_dir + "/" + ev->name + ".ctx";
+      std::string err;
+      size_t recs = 0;
+      bool ok;
+      {
+        std::lock_guard<std::mutex> lk(mu);
+        recs = journal.size();
+        ok = journal.write(path, &err);
+      }
+      if (ok) spdlog::info("HCI monitor: {} begins with {} context packets", ev->name, recs);
+      else spdlog::warn("HCI monitor: context for {}: {}", ev->name, err);
+      wrote = true;
+    }
+  }
+  if (!wrote) return;
+  // The ring deletes its oldest files; their context files go with them.
+  DIR* d = opendir(opts.capture_dir.c_str());
+  if (!d) return;
+  std::vector<std::string> orphans;
+  while (dirent* de = readdir(d)) {
+    const std::string name = de->d_name;
+    if (name.size() <= 4 || name.compare(name.size() - 4, 4, ".ctx") != 0) continue;
+    const std::string base = opts.capture_dir + "/" + name.substr(0, name.size() - 4);
+    if (access(base.c_str(), F_OK) != 0) orphans.push_back(opts.capture_dir + "/" + name);
+  }
+  closedir(d);
+  for (const auto& o : orphans) unlink(o.c_str());
+}
+
+// The daemon (re)started mid-session: what is open now happened in the ring files btmon wrote,
+// back to the newest one that has a context file (from then on every file has one; before the
+// first, a phone connected an hour ago is three files back). Replayed into the journal oldest
+// first, before the live stream, on this thread (the journal is only ever touched from it), so
+// the next ring file's context is complete. Once per start: about 0.4 s per full ring file on
+// the Zero W, and normally one file.
+void Monitor::Impl::seed_journal() {
+  DIR* d = opendir(opts.capture_dir.c_str());
+  if (!d) return;
+  std::vector<std::string> files;
+  while (dirent* de = readdir(d)) {
+    if (Capture::valid_name(de->d_name)) files.push_back(de->d_name);
+  }
+  closedir(d);
+  if (files.empty()) return;
+  std::sort(files.rbegin(), files.rend());  // hci-YYYYmmdd-HHMMSS: newest first
+  size_t from = 0;
+  while (from + 1 < files.size() && access((opts.capture_dir + "/" + files[from] + ".ctx").c_str(), F_OK) != 0) ++from;
+  const int64_t t0 = mono_us();
+  size_t n = 0;
+  for (size_t i = from + 1; i-- > 0;) {
+    const std::string path = opts.capture_dir + "/" + files[i];
+    if (i == from) n += journal.replay(path + ".ctx");
+    n += journal.replay(path);
+  }
+  spdlog::info("HCI monitor: context from {} file(s) since {} ({} packets, {} kept, {} ms)", from + 1, files[from], n,
+               journal.size(), (mono_us() - t0) / 1000);
+}
+
 void Monitor::Impl::run_live() {
+  if (ino_fd >= 0) seed_journal();
   std::vector<uint8_t> buf(kMonHdrSize + 65536);
   alignas(cmsghdr) char ctrl[CMSG_SPACE(sizeof(timeval)) + CMSG_SPACE(sizeof(uint32_t)) + 64];
   std::vector<uint16_t> new_indexes;
@@ -224,13 +311,19 @@ void Monitor::Impl::run_live() {
     const int64_t now = realtime_us();
     // Wake just after the next whole second, so windows close on time with no traffic.
     const int timeout_ms = static_cast<int>((kWindowUs - now % kWindowUs) / 1000) + 2;
-    pollfd p[2] = {{mon_fd, POLLIN, 0}, {wake_fd[0], POLLIN, 0}};
-    const int rc = poll(p, 2, timeout_ms);
+    // No capture directory at start (the ring's service creates it): look again now and then.
+    if (ino_fd < 0 && now > ino_retry_us) {
+      watch_captures();
+      ino_retry_us = now + 30 * 1000000LL;
+    }
+    pollfd p[3] = {{mon_fd, POLLIN, 0}, {wake_fd[0], POLLIN, 0}, {ino_fd, POLLIN, 0}};
+    const int rc = poll(p, 3, timeout_ms);
     if (rc < 0 && errno != EINTR) {
       spdlog::error("HCI monitor: poll: {}", std::strerror(errno));
       break;
     }
     if (rc > 0 && (p[1].revents & POLLIN)) break;
+    if (rc > 0 && ino_fd >= 0 && (p[2].revents & POLLIN)) on_capture_events();
     if (rc > 0 && (p[0].revents & (POLLERR | POLLHUP))) {
       spdlog::error("HCI monitor: socket error, reader stops");
       break;
@@ -272,6 +365,7 @@ void Monitor::Impl::run_live() {
         const uint8_t* data = buf.data() + kMonHdrSize;
         feed_live(ts, index, opcode, data, len);
         dec.packet(ts, index, opcode, data, len);
+        if (ino_fd >= 0) journal.packet(ts, index, opcode, data, len);
         if (feed->active()) feed->push(ts, index, opcode, data, len);
         if (opcode == kMonNewIndex || opcode == kMonOpenIndex) new_indexes.push_back(index);
       }

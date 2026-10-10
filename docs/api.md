@@ -500,9 +500,12 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 | `PUT /api/capture` `{"running": false}` | stop or start `btbench-btsnoop.service` |
 | `GET` / `DELETE /api/capture/files/{name}` | download or delete one file |
 | `GET /api/capture/files/{name}/analyze` | `btmon -a` of it, as text |
-| `GET /api/capture/files/{name}/packets?filter=&start=0&count=200` | its packets, filtered and paged: `{total, start, complete, next, packets_in_file, packets: [{n, t, ts_ms, dir, type, proto, handle, cid, psm, len, lat_ms, summary}]}`. `at_t=SECONDS` or `at_n=FRAME` start the page there. Filter terms: `type:`, `dir:`, `proto:`, `handle:`, `cid:`, `psm:`, `index:`, `opcode:`, `evt:`, `subevt:`, `is:err\|mark\|cont\|lat`, `len>N`, `lat>MS`, `t>=S t<S`, `n<=N`, `!term`, `a\|b`; other words search the summaries |
+| `GET /api/capture/files/{name}/packets?filter=&start=0&count=200` | its packets, filtered and paged: `{total, start, complete, next, packets_in_file, packets: [{n, t, ts_ms, dir, type, proto, handle, cid, psm, len, lat_ms, summary}]}`. `at_t=SECONDS` or `at_n=FRAME` start the page there. Filter terms: `type:`, `dir:`, `proto:`, `handle:`, `cid:`, `psm:`, `index:`, `opcode:`, `evt:`, `subevt:`, `is:err\|mark\|cont\|lat`, `len>N`, `lat>MS`, `t>=S t<S`, `n<=N`, `addr:BDADDR`, `!term`, `a\|b`, `a b \|\| c` (either group); other words search the summaries |
 | `GET /api/capture/files/{name}/packets/{n}` | one packet decoded: the same object plus `fields` (a tree of `{name, value, off, len, children}`) and `hex` |
 | `GET /api/capture/files/{name}/graph?filter=&bucket_ms=&points=&conn=INDEX:HANDLE` | per time bucket, the filtered packets and bytes, and one link's TX/RX bit/s and TX latency p50/p95/max; the list of links |
+| `GET /api/capture/files/{name}/stats?filter=` | what the filter matches, counted: `{total: {pkts, bytes, tx, rx, err}, marks, cont, span_s, protos: [{proto, ...}], types: [{type, ...}], links: [{index, handle, type, peer, ...}], latency: {n, avg_ms, p50_ms, p95_ms, max_ms}, complete}` |
+| `GET /api/capture/files/{name}/packets/{n}/btmon` | BlueZ's decoder for that packet: `btmon -r` on the board over it and the packets it depends on: `{frames, context, text}` |
+| `GET /api/capture/files/{name}/export?filter=&context=1` | the matching packets as a btsnoop file (datalink 2001); `context=1` adds what btmon needs to decode them. 409 until the filter has run over the whole file |
 
 The packet routes work against a time budget (400 ms a request on the board): an answer with
 `"complete": false` is partial (a big file still being indexed, or a text filter still searching),

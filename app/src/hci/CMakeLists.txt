@@ -13,6 +13,7 @@ add_library(btb_hci STATIC
   btsnoop.cpp
   capture.cpp
   codec.cpp
+  context.cpp
   decoder.cpp
   dissect.cpp
   live.cpp
