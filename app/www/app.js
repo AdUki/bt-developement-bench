@@ -203,6 +203,13 @@ function renderNav() {
   setHTML($('views'), area.views.length > 1 ? area.views.map(v =>
     `<a href="#${viewKey(v)}" class="view" data-view="${viewKey(v)}">${esc(v.label)}</a>`).join('') : '');
   $('views').querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.dataset.view === here));
+  // On a phone the bar scrolls: System's eight views do not fit, so bring the one shown into sight
+  // (the bar only; scrollIntoView would move the page too).
+  const bar = $('views'), cur = bar.querySelector('.view.active');
+  if (cur && bar.scrollWidth > bar.clientWidth) {
+    const l = cur.offsetLeft - bar.offsetLeft, r = l + cur.offsetWidth;
+    if (l < bar.scrollLeft || r > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = l - (bar.clientWidth - cur.offsetWidth) / 2;
+  }
   lsSet('btbench.area.' + area.id, here);
 }
 
