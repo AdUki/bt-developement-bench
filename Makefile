@@ -39,10 +39,7 @@ include boards/$(BOARD).mk
 BOARD_MK   := boards/$(BOARD).mk
 BOARD_CONF := $(YOCTO)/conf/boards/$(BOARD).conf
 
-# Dev trees: worktrees of the upstream checkouts (make src), or whatever *_SRC points at.
-PIPEWIRE_UPSTREAM    ?= $(HOME)/projects/pipewire
-WIREPLUMBER_UPSTREAM ?= $(HOME)/projects/wireplumber
-LINUX_UPSTREAM       ?= $(HOME)/projects/linux
+# Dev trees: the submodules in src/ (make src), or whatever *_SRC points at.
 BLUEZ_SRC       ?= $(ROOT)/src/bluez
 PIPEWIRE_SRC    ?= $(ROOT)/src/pipewire
 WIREPLUMBER_SRC ?= $(ROOT)/src/wireplumber

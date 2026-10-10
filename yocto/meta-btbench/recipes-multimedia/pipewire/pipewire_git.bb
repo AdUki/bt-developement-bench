@@ -18,10 +18,11 @@ LIC_FILES_CHKSUM = " \
 
 DEPENDS = "dbus ncurses"
 
-# nobranch: the pin may be a release tag (on a stable branch) or any master commit, whichever
-# `make bump-versions` found in src/pipewire.
+# From the bench's fork (BTBENCH_PIPEWIRE_GIT, versions.conf; src/pipewire is the same repository
+# as a submodule, docs/dev.md "The forks"). nobranch: the pin may be a release tag, a master
+# commit or one of the bench's on top, whichever `make bump-versions` found in src/pipewire.
 SRC_URI = " \
-    git://gitlab.freedesktop.org/pipewire/pipewire.git;protocol=https;nobranch=1 \
+    ${BTBENCH_PIPEWIRE_GIT};nobranch=1 \
     file://50-btbench.conf \
 "
 SRCREV = "${BTBENCH_PIPEWIRE_SRCREV}"

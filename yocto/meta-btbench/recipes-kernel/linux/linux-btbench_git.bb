@@ -25,14 +25,13 @@ FILESEXTRAPATHS:prepend := "${@os.path.dirname(d.getVar('BTBENCH_DTS_EXTRA')) + 
 
 BTBENCH_DTS_EXTRA_FILE = "${@os.path.basename(d.getVar('BTBENCH_DTS_EXTRA') or '')}"
 
-# The patches are fixes the bench needs and bluetooth-next does not have yet, each meant for
-# upstream; drop one once the pinned revision contains it.
-# - dwc2 NAK on OUT endpoints: without it the USB gadget's network dies at nearly every boot. The
-#   PC (ModemManager) writes to the ACM port before a getty has opened ttyGS0, and that packet
-#   blocks the receive FIFO the NCM endpoint shares with it.
+# From the bench's fork (BTBENCH_LINUX_GIT, versions.conf; src/linux is the same repository as a
+# submodule): bluetooth-next at the pin, and on its branch bench the fixes the bench needs that
+# bluetooth-next does not have yet, as commits rather than patches here (docs/dev.md "The forks"),
+# such as the dwc2 gadget NAKing OUT endpoints until a request is queued (without it the USB
+# gadget's network dies at nearly every boot). nobranch: the pin is any commit of the fork.
 SRC_URI = " \
-    git://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git;protocol=https;branch=master \
-    file://0001-usb-dwc2-gadget-NAK-OUT-endpoints-until-a-request-is.patch \
+    ${BTBENCH_LINUX_GIT};nobranch=1 \
     file://btbench.cfg \
     file://bt-debug.cfg \
     file://mkdtb \

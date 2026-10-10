@@ -20,3 +20,16 @@
 	path = src/bluez
 	url = https://github.com/AdUki/bluez.git
 	branch = bench
+[submodule "src/pipewire"]
+	path = src/pipewire
+	url = https://github.com/AdUki/pipewire.git
+	branch = bench
+[submodule "src/wireplumber"]
+	path = src/wireplumber
+	url = https://github.com/AdUki/wireplumber.git
+	branch = bench
+[submodule "src/linux"]
+	path = src/linux
+	url = https://github.com/AdUki/linux.git
+	branch = bench
+	shallow = true

@@ -11,9 +11,11 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=17d1fe479cdec331eecbc65d26bc7e77"
 
 DEPENDS = "glib-2.0 glib-2.0-native lua pipewire"
 
-# nobranch: the pin may sit on the 0.5 stable branch or on master.
+# From the bench's fork (BTBENCH_WIREPLUMBER_GIT, versions.conf; src/wireplumber is the same
+# repository as a submodule, docs/dev.md "The forks"). nobranch: the pin may sit on the 0.5 stable
+# branch, on master or on the bench's commits on top.
 SRC_URI = " \
-    git://gitlab.freedesktop.org/pipewire/wireplumber.git;protocol=https;nobranch=1 \
+    ${BTBENCH_WIREPLUMBER_GIT};nobranch=1 \
     file://50-btbench.conf \
     file://10-btbench-state.conf \
 "

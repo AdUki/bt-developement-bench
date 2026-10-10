@@ -45,7 +45,7 @@ xdg-open http://10.55.0.1        # the web console
 
 ```bash
 make sdk                         # once per image: the cross toolchain + sysroot
-make src                         # src/{bluez,pipewire,wireplumber,linux}: worktrees of ~/projects/*
+make src                         # src/{bluez,pipewire,wireplumber,linux}: the submodules (the bench's forks)
 make bluez && make deploy-bluez  # build with the image's options, rsync, restart bluetooth
 make pipewire wireplumber && make deploy
 make linux && make linux-test    # boot the new kernel once; make linux-commit to keep it
@@ -71,7 +71,7 @@ make clangd                      # compile_commands.json is already in every src
 
 ```
 Makefile, mk/*.mk         every target (yocto, system, dev, kernel, app)
-bench.conf.sample         per-machine defaults (BOARD, KERNEL, TARGET, *_UPSTREAM)
+bench.conf.sample         per-machine defaults (BOARD, KERNEL, TARGET, *_SRC)
 boards/                   board descriptions + device-tree additions
 yocto/conf/               bblayers/local templates, versions.conf, per-board bitbake settings
 yocto/meta-btbench/       the layer

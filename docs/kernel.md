@@ -12,7 +12,7 @@ panics, hangs or loses its network, the next reset brings the good kernel back o
 
 | `KERNEL=` | source | image recipe | dev tree | defconfig (rpi0w) | device tree (rpi0w) |
 |---|---|---|---|---|---|
-| `next` (default) | bluetooth-next `master` | `linux-btbench` | `src/linux` | `bcm2835_defconfig` | `broadcom/bcm2835-rpi-zero-w.dtb` + `boards/dts/rpi0w-btbench.dtsi` |
+| `next` (default) | bluetooth-next `master`, from the bench's fork with its fixes | `linux-btbench` | `src/linux` | `bcm2835_defconfig` | `broadcom/bcm2835-rpi-zero-w.dtb` + `boards/dts/rpi0w-btbench.dtsi` |
 | `rpi` | raspberrypi/linux `rpi-6.12.y` | `linux-raspberrypi` (meta-raspberrypi) | `src/linux-rpi` | `bcmrpi_defconfig` | `broadcom/bcm2708-rpi-zero-w.dtb` |
 
 **Why bluetooth-next.** This is where the Bluetooth stack you develop against lives. The image's
@@ -96,20 +96,18 @@ packages the machine config already pulls in cover them all, so the bench adds n
 ## The dev loop
 
 ```bash
-make src-linux            # once: src/linux, a worktree of ~/projects/linux on bluetooth-next
+make src-linux            # once: src/linux, the submodule (bluetooth-next and the bench's fixes)
 make sdk                  # once per image: the cross compiler comes from the image's SDK
 make linux                # build: build/rpi0w/linux-next, installed into build/rpi0w/stage/linux-next
 make linux-test           # copy it to the test slot, boot it once, report what came up
 make linux-commit         # keep it
 ```
 
-**`make src-linux`.** This adds a worktree of `LINUX_UPSTREAM` (default `~/projects/linux`) at
-`src/linux`, on a branch `bench` that starts at the image's pinned revision (like the other src
-trees, so the first deploy changes nothing but what you commit on top) and tracks
-`bluetooth-next/master`. An existing `bench` branch is reused as it is. If that repository has no
-`bluetooth-next` remote, `src-linux` shows the two git commands and asks before running them.
-If there is no repository at `LINUX_UPSTREAM`, it makes a blobless clone of bluetooth-next
-instead. `compile_commands.json` and `.clangd` are added to the repository's `info/exclude`.
+**`make src-linux`.** `src/linux` is a submodule of the repository, the bench's fork
+(`github.com/AdUki/linux`) on its branch `bench`: bluetooth-next at the image's pin plus the
+bench's fixes as commits (the dwc2 gadget one). `make src-linux` checks it out, shallow (one
+commit, not the history), at the commit the repository records, which is the image's kernel. A
+tree already there is left alone. See docs/dev.md "The forks" for changes, pushing and bumping.
 
 **`make src-linux-rpi`.** A blobless clone of raspberrypi/linux at the revision the image's
 `linux-raspberrypi` recipe uses (read with `bitbake -e`).

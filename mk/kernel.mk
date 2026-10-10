@@ -1,7 +1,7 @@
 # Kernel: dev trees, cross builds with the image's SDK, trial boots on the board. Included by the
 # Makefile. The how and why are in docs/kernel.md.
 #
-#   make src-linux                       src/linux: bluetooth-next, a worktree of LINUX_UPSTREAM
+#   make src-linux                       src/linux: the submodule, bluetooth-next and the bench's fixes
 #   make linux                           build it (KERNEL=rpi: src/linux-rpi, make src-linux-rpi)
 #   make linux-test                      put it on the board as the test kernel and boot it once
 #   make linux-commit / linux-rollback   keep it as the good kernel / go back to the previous one
@@ -11,7 +11,6 @@
 # environment script exports. Its host programs (kconfig, dtc, sign-file) are built with this
 # PC's compiler, bison, flex, openssl and libelf headers.
 
-BLUETOOTH_NEXT_URL := https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git
 LINUX_RPI_URL      := https://github.com/raspberrypi/linux.git
 
 # The tree, build dir and install tree of the selected KERNEL.
@@ -74,42 +73,8 @@ CLANGD_TREES += $(LINUX_TREE):$(KOUT)
 ## ─── kernel ──────────────────────────────────────────────────────────────────
 
 .PHONY: src-linux
-src-linux: ## src/linux: worktree of LINUX_UPSTREAM at the image's bluetooth-next revision (asks before adding the remote)
-	@set -e; \
-	if [ -e $(LINUX_SRC) ]; then echo "$(LINUX_SRC) exists."; exit 0; fi; \
-	if git -C $(LINUX_UPSTREAM) rev-parse --git-dir >/dev/null 2>&1; then \
-	  if ! git -C $(LINUX_UPSTREAM) remote get-url bluetooth-next >/dev/null 2>&1; then \
-	    echo -e "$(BOLD)$(LINUX_UPSTREAM)$(OFF) has no bluetooth-next remote. src/linux is a worktree of it on the"; \
-	    echo -e "image's bluetooth-next revision, so the remote has to be added to that repository:\n"; \
-	    echo -e "  git -C $(LINUX_UPSTREAM) remote add bluetooth-next $(BLUETOOTH_NEXT_URL)"; \
-	    echo -e "  git -C $(LINUX_UPSTREAM) fetch bluetooth-next\n"; \
-	    ans=""; [ -t 0 ] && read -r -p "Add it and fetch now? [y/N] " ans; \
-	    case "$$ans" in \
-	      [yY]*) git -C $(LINUX_UPSTREAM) remote add bluetooth-next $(BLUETOOTH_NEXT_URL) ;; \
-	      *) echo "Not changed. Add the remote yourself, or set LINUX_UPSTREAM to a tree that has it"; \
-	         echo "(or to a path that does not exist, for a fresh clone)."; exit 1 ;; \
-	    esac; \
-	  fi; \
-	  echo "Fetching bluetooth-next into $(LINUX_UPSTREAM)..."; \
-	  git -C $(LINUX_UPSTREAM) fetch bluetooth-next; \
-	  mkdir -p $(dir $(LINUX_SRC)); \
-	  base=bluetooth-next/master; \
-	  if [ -n "$(LINUX_PINNED)" ] && git -C $(LINUX_UPSTREAM) cat-file -e "$(LINUX_PINNED)^{commit}" 2>/dev/null; then \
-	    base=$(LINUX_PINNED); fi; \
-	  if git -C $(LINUX_UPSTREAM) show-ref --verify -q refs/heads/bench; then \
-	    echo "Reusing the existing branch bench of $(LINUX_UPSTREAM)."; \
-	    git -C $(LINUX_UPSTREAM) worktree add $(LINUX_SRC) bench; \
-	  else \
-	    git -C $(LINUX_UPSTREAM) worktree add $(LINUX_SRC) -b bench $$base; \
-	    git -C $(LINUX_SRC) branch -q --set-upstream-to=bluetooth-next/master; \
-	  fi; \
-	else \
-	  echo "No git tree at $(LINUX_UPSTREAM): cloning bluetooth-next (blobless) into $(LINUX_SRC)."; \
-	  git clone --filter=blob:none -b master $(BLUETOOTH_NEXT_URL) $(LINUX_SRC); \
-	  git -C $(LINUX_SRC) checkout -q -b bench $(or $(LINUX_PINNED),master); \
-	fi
-	@$(call src_exclude,$(LINUX_SRC))
-	@echo -e "$(BOLD)$(LINUX_SRC)$(OFF) on $$(git -C $(LINUX_SRC) log -1 --format='%h %s')"
+src-linux: ## src/linux: the kernel submodule (the bench's fork: bluetooth-next and its fixes, branch bench)
+	@$(call src_submodule,linux,$(LINUX_SRC))
 
 # The build's compile_commands.json and .clangd are symlinked into the tree; keep them out of
 # git status (info/exclude is shared by all worktrees of a repository).

@@ -13,6 +13,9 @@
 /sdk/
 /src/*
 !/src/bluez
+!/src/pipewire
+!/src/wireplumber
+!/src/linux
 /build/
 
 # btbenchd host build

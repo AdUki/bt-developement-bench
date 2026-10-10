@@ -18,58 +18,58 @@ The targets live in `mk/dev.mk`. `make` with no target lists them all.
 
 ## Dev trees: `make src`
 
-**BlueZ** is in the repository: `src/bluez` is a submodule, the bench's fork
-(`github.com/AdUki/bluez`) on its branch `bench`, at the commit the image is built from. A clone
-gets it with `git submodule update --init` (or `make src-bluez`, which also puts it on the branch
-`bench`); see "The forks" below.
+The four components the bench develops are in the repository, as submodules in `src/`:
 
-`make src-pipewire` (`-wireplumber`; `make src` does all of them plus `src-bluez` and `src-linux`)
-makes `src/<comp>` a **git worktree** of your own checkout (`PIPEWIRE_UPSTREAM`, by default
-`~/projects/pipewire`). The worktree is on a branch `bench`, which starts at the revision the image
-was built from (`BTBENCH_PIPEWIRE_SRCREV` in `yocto/conf/versions.conf`).
+| tree | the bench's fork | its upstream |
+|---|---|---|
+| `src/bluez` | `github.com/AdUki/bluez` | bluez.git |
+| `src/pipewire` | `github.com/AdUki/pipewire` | gitlab.freedesktop.org pipewire |
+| `src/wireplumber` | `github.com/AdUki/wireplumber` | gitlab.freedesktop.org wireplumber |
+| `src/linux` | `github.com/AdUki/linux` (a GitHub fork of torvalds/linux) | bluetooth-next |
 
-- **Why a worktree.** It shares your checkout's objects, so your branches and remotes are all
-  there. It keeps the cross build's files out of your checkout. A tree that is configured
-  in-tree (it has `config.status`, as `~/projects/bluez` usually has) breaks the out-of-tree
-  build, so `make bluez` refuses one.
-- **Why the pinned revision.** The first `make deploy-bluez` then replaces the board's BlueZ
-  with the same code built your way, and every difference after that is your change.
-  Cherry-pick or rebase onto `bench` to bring your work in.
-- **Missing commit.** If your checkout does not have the pinned commit, it is fetched from
-  upstream. This fetches objects only: no branch or tag of yours moves.
-- **Existing `bench` branch.** It is reused as it is.
-- **No checkout at all.** Upstream is cloned into `src/<comp>` instead.
-- **Existing `src/<comp>`.** It is used as it is, whatever made it. To use a tree somewhere
-  else, set `BLUEZ_SRC=~/projects/bluez-topic` (in `bench.conf` or on the command line).
-- **Excludes.** `compile_commands.json` and `.clangd` are added to the checkout's
-  `.git/info/exclude`, so they never show up in `git status`.
+Each is on its fork's branch `bench`, at the commit the image is built from: the code you edit,
+build (`make bluez`, `make pipewire`, `make wireplumber`, `make linux`) and deploy is the code
+the image has, and a change is a commit, not a patch in the Yocto layer.
 
-Only `make src*` touches your checkouts: it adds a worktree, the `bench` branch, the fetched
-objects and the two exclude lines.
+`make src` (or `make src-bluez`, `-pipewire`, `-wireplumber`, `-linux`) checks out the ones a
+clone does not have yet, at the recorded commit, on a branch `bench` that pushes to the fork's
+(`git submodule update --init` does the same, but leaves them on a detached HEAD). A tree that is
+already there is left alone, whatever it holds. `src/linux` is a shallow submodule: the clone
+gets the one commit it needs, not the kernel's history (`git -C src/linux fetch --unshallow` when
+you want it). To build a tree somewhere else, set `BLUEZ_SRC=~/projects/bluez-topic` (in
+`bench.conf` or on the command line). `compile_commands.json` and `.clangd` go to the tree's
+`info/exclude`, so they never show up in `git status`.
+
+A tree configured in-tree (it has a `config.status`) breaks the out-of-tree build, so `make bluez`
+refuses one.
 
 ### The forks
 
-BlueZ comes from the bench's fork, `github.com/AdUki/bluez` (`BTBENCH_BLUEZ_GIT` in
-`yocto/conf/versions.conf`): upstream's `master`, and a branch `bench` with the bench's own
-commits on top (AVRCP browsing in the target role). `src/bluez` is that fork as a submodule, so
-the code the image builds is in this repository, ready to edit, build (`make bluez`) and deploy.
-Its remote `origin` is the fork; add upstream for rebasing
-(`git -C src/bluez remote add upstream https://git.kernel.org/pub/scm/bluetooth/bluez.git`).
+Every fork has upstream's `master` (bluetooth-next's for the kernel, under the upstream remote)
+and a branch `bench`: the image's pin and the bench's commits on top (BlueZ: AVRCP browsing in the
+target role and its fixes; the kernel: the dwc2 gadget fix). The recipes fetch from the forks
+(`BTBENCH_<COMP>_GIT` in `yocto/conf/versions.conf`) at `BTBENCH_<COMP>_SRCREV`, which is the
+submodule's commit: the same commit recorded twice, by git for the tree and by bitbake for the
+image.
+
+In a tree, `origin` is the fork; add the upstream for rebasing, e.g.
+`git -C src/bluez remote add upstream https://git.kernel.org/pub/scm/bluetooth/bluez.git` (or
+`https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git` for the kernel,
+`https://gitlab.freedesktop.org/pipewire/{pipewire,wireplumber}.git`).
 
 A change goes in as a commit on `bench`, pushed to the fork, then pinned:
 
 ```bash
 git -C src/bluez push origin bench
-make bump-versions                     # BTBENCH_BLUEZ_SRCREV = src/bluez's HEAD
+make bump-versions                     # BTBENCH_*_SRCREV = each tree's HEAD
 git add src/bluez yocto/conf/versions.conf && git commit -s -m "BlueZ: ..."
 ```
 
-The submodule's commit and `BTBENCH_BLUEZ_SRCREV` are the same commit, recorded twice: git for
-the tree, bitbake for the image. `make bump-versions` pins only a commit some remote has (it
-leaves out commits not pushed yet, and says so), since bitbake fetches from the fork. To follow
-upstream, rebase `bench` onto upstream's `master` and push it (`--force-with-lease`), along with
-`master`. PipeWire, WirePlumber and the kernel still come from upstream: they carry no commits of
-the bench's.
+`make bump-versions` pins only a commit some remote has (it leaves out commits not pushed yet,
+and says so), since bitbake fetches from the fork. To follow upstream, rebase `bench` onto the
+upstream's new revision and push it (`--force-with-lease`). The kernel's `bench` sits on
+bluetooth-next, which the fork does not track by itself: push the base along with it (it is in
+`bench`'s history, so pushing `bench` does).
 
 ## Building: `make bluez`, `make pipewire`, `make wireplumber`
 

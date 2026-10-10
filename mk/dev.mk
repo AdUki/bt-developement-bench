@@ -10,9 +10,6 @@
 
 VERSIONS_CONF ?= $(ROOT)/$(YOCTO)/conf/versions.conf
 
-BLUEZ_URL       := https://github.com/AdUki/bluez.git
-PIPEWIRE_URL    := https://gitlab.freedesktop.org/pipewire/pipewire.git
-WIREPLUMBER_URL := https://gitlab.freedesktop.org/pipewire/wireplumber.git
 
 BLUEZ_B       := $(BUILD_DIR)/bluez
 PIPEWIRE_B    := $(BUILD_DIR)/pipewire
@@ -30,45 +27,29 @@ RESTART ?= 1
 
 # ─── src trees ───────────────────────────────────────────────────────────────
 
-# $(call src_tree,<name>,<upstream checkout>,<src dir>,<url>,<pinned sha>)
+# $(call src_submodule,<name>,<src dir>)
 #
-# A git worktree of your own checkout, on a branch "bench" that starts at the revision the image
-# was built from (versions.conf): the first deploy then replaces the board's build with the same
-# code, and everything after that is your change. Worktrees share the checkout's objects and
-# keep the cross build's artefacts out of it (a checkout configured in-tree breaks the
-# out-of-tree build anyway). The pinned commit is fetched into the checkout if it lacks it
-# (objects only: no branch or tag of yours moves; a server that refuses fetching a commit by
-# its id is asked for all its branches and tags into a scratch namespace, removed right after). An existing "bench" branch is reused as it is.
-# No checkout at all: a fresh clone. A src dir that already exists is used as it is, whatever
-# made it. The generated compile_commands.json and .clangd are added to the checkout's
-# info/exclude (shared by all its worktrees), so they never show up in git status.
-# mk/kernel.mk can use this for src-linux as well.
-define src_tree
-set -e; name="$(1)"; up="$(2)"; src="$(3)"; url="$(4)"; sha="$(5)"; \
-[ -n "$$sha" ] || { echo "No pinned revision for $$name in $(VERSIONS_CONF)."; exit 1; }; \
-if [ -e "$$src" ]; then \
-  echo -e "$(BOLD)$$src$(OFF) exists, used as it is $(DIM)($$(git -C "$$src" log -1 --format='%h %s' 2>/dev/null || echo 'not a git tree'))$(OFF)"; \
-elif git -C "$$up" rev-parse --git-dir >/dev/null 2>&1; then \
-  if ! git -C "$$up" cat-file -e "$$sha^{commit}" 2>/dev/null; then \
-    echo "Fetching $$sha from $$url into $$up (objects only, no ref moves)"; \
-    git -C "$$up" fetch -q --no-tags "$$url" "$$sha" 2>/dev/null || \
-      { git -C "$$up" fetch -q --no-tags "$$url" '+refs/heads/*:refs/bench-fetch/h/*' '+refs/tags/*:refs/bench-fetch/t/*'; \
-        git -C "$$up" for-each-ref --format='delete %(refname)' refs/bench-fetch | git -C "$$up" update-ref --stdin; }; \
-    git -C "$$up" cat-file -e "$$sha^{commit}" 2>/dev/null || { echo "$$sha is not in $$url."; exit 1; }; \
-  fi; \
-  mkdir -p "$$(dirname "$$src")"; \
-  if git -C "$$up" show-ref -q --verify refs/heads/bench; then \
-    echo -e "$(BOLD)$$src$(OFF): worktree of $$up on its existing branch bench"; \
-    git -C "$$up" worktree add -q "$$src" bench; \
-  else \
-    echo -e "$(BOLD)$$src$(OFF): worktree of $$up, new branch bench at $$(git -C "$$up" log -1 --format='%h %s' $$sha)"; \
-    git -C "$$up" worktree add -q -b bench "$$src" "$$sha"; \
-  fi; \
+# The dev trees are submodules of this repository (.gitmodules): the bench's forks on GitHub,
+# whose branch bench is what the image is built from (docs/dev.md "The forks"). A tree not checked
+# out yet is (at the commit the repository records, on a branch bench that pushes to the fork's);
+# one that is is left alone, whatever it holds, so `make src` never moves your work. A src dir
+# other than src/<name> (BLUEZ_SRC=~/projects/bluez-topic, say) is used as it is. The generated
+# compile_commands.json and .clangd go to the tree's info/exclude, so they never show up in git
+# status.
+define src_submodule
+set -e; name="$(1)"; src="$(2)"; \
+if [ "$$src" != "$(ROOT)/src/$$name" ]; then \
+  [ -d "$$src" ] || { echo "No tree at $$src ($(shell echo $(1) | tr a-z A-Z)_SRC)."; exit 1; }; \
+  echo -e "$(BOLD)$$src$(OFF) used as it is"; \
+elif [ -e "$$src/.git" ]; then \
+  echo -e "$(BOLD)src/$$name$(OFF) is there, left as it is $(DIM)($$(git -C "$$src" log -1 --format='%h %s'))$(OFF)"; \
 else \
-  echo -e "No checkout at $$up: cloning $$url into $(BOLD)$$src$(OFF)"; \
-  git clone -q "$$url" "$$src"; \
-  git -C "$$src" cat-file -e "$$sha^{commit}" 2>/dev/null || git -C "$$src" fetch -q --no-tags origin "$$sha"; \
-  git -C "$$src" checkout -q -b bench "$$sha"; \
+  echo -e "$(BOLD)src/$$name$(OFF): checking out the submodule"; \
+  git -C $(ROOT) submodule update --init "src/$$name"; \
+  git -C "$$src" checkout -q -B bench; \
+  git -C "$$src" config branch.bench.remote origin; \
+  git -C "$$src" config branch.bench.merge refs/heads/bench; \
+  echo -e "$(BOLD)src/$$name$(OFF): $$(git -C "$$src" log -1 --format='%h %s')"; \
 fi; \
 if gd=$$(git -C "$$src" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then \
   mkdir -p "$$gd/info"; \
@@ -79,23 +60,16 @@ fi
 endef
 
 .PHONY: src src-bluez src-pipewire src-wireplumber
-src: src-bluez src-pipewire src-wireplumber src-linux ## Create the dev trees in src/ (BlueZ's submodule; worktrees at the image's revisions)
+src: src-bluez src-pipewire src-wireplumber src-linux ## Check out the dev trees in src/ (submodules: the bench's forks, branch bench)
 
-# src/bluez is a submodule of this repository: the bench's fork, branch bench (docs/dev.md "The
-# forks"), checked out at the commit the repository records. A BLUEZ_SRC elsewhere is used as it
-# is (a worktree of your own, say).
 src-bluez: ## src/bluez: the BlueZ submodule (the bench's fork, branch bench)
-	@set -e; if [ "$(BLUEZ_SRC)" = "$(ROOT)/src/bluez" ]; then \
-	  git -C $(ROOT) submodule update --init src/bluez; \
-	  git -C $(ROOT)/src/bluez switch -q bench 2>/dev/null || git -C $(ROOT)/src/bluez switch -q -c bench --track origin/bench; \
-	  echo -e "$(BOLD)src/bluez$(OFF): $$(git -C $(ROOT)/src/bluez log -1 --format='%h %s')"; \
-	else [ -d "$(BLUEZ_SRC)" ] && echo -e "$(BOLD)$(BLUEZ_SRC)$(OFF) used as it is" || { echo "No tree at $(BLUEZ_SRC)"; exit 1; }; fi
+	@$(call src_submodule,bluez,$(BLUEZ_SRC))
 
-src-pipewire: ## src/pipewire: worktree of PIPEWIRE_UPSTREAM, branch bench
-	@$(call src_tree,pipewire,$(PIPEWIRE_UPSTREAM),$(PIPEWIRE_SRC),$(PIPEWIRE_URL),$(call pinned,PIPEWIRE))
+src-pipewire: ## src/pipewire: the PipeWire submodule (the bench's fork, branch bench)
+	@$(call src_submodule,pipewire,$(PIPEWIRE_SRC))
 
-src-wireplumber: ## src/wireplumber: worktree of WIREPLUMBER_UPSTREAM, branch bench
-	@$(call src_tree,wireplumber,$(WIREPLUMBER_UPSTREAM),$(WIREPLUMBER_SRC),$(WIREPLUMBER_URL),$(call pinned,WIREPLUMBER))
+src-wireplumber: ## src/wireplumber: the WirePlumber submodule (the bench's fork, branch bench)
+	@$(call src_submodule,wireplumber,$(WIREPLUMBER_SRC))
 
 # ─── configure options from the image's recipes ──────────────────────────────
 
