@@ -16,3 +16,7 @@
 	path = app/third_party/cli11
 	url = https://github.com/CLIUtils/CLI11
 	shallow = true
+[submodule "src/bluez"]
+	path = src/bluez
+	url = https://github.com/AdUki/bluez.git
+	branch = bench

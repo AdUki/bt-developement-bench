@@ -10,7 +10,7 @@
 
 VERSIONS_CONF ?= $(ROOT)/$(YOCTO)/conf/versions.conf
 
-BLUEZ_URL       := https://git.kernel.org/pub/scm/bluetooth/bluez.git
+BLUEZ_URL       := https://github.com/AdUki/bluez.git
 PIPEWIRE_URL    := https://gitlab.freedesktop.org/pipewire/pipewire.git
 WIREPLUMBER_URL := https://gitlab.freedesktop.org/pipewire/wireplumber.git
 
@@ -79,10 +79,17 @@ fi
 endef
 
 .PHONY: src src-bluez src-pipewire src-wireplumber
-src: src-bluez src-pipewire src-wireplumber src-linux ## Create the dev trees in src/ (worktrees at the image's revisions)
+src: src-bluez src-pipewire src-wireplumber src-linux ## Create the dev trees in src/ (BlueZ's submodule; worktrees at the image's revisions)
 
-src-bluez: ## src/bluez: worktree of BLUEZ_UPSTREAM, branch bench
-	@$(call src_tree,bluez,$(BLUEZ_UPSTREAM),$(BLUEZ_SRC),$(BLUEZ_URL),$(call pinned,BLUEZ))
+# src/bluez is a submodule of this repository: the bench's fork, branch bench (docs/dev.md "The
+# forks"), checked out at the commit the repository records. A BLUEZ_SRC elsewhere is used as it
+# is (a worktree of your own, say).
+src-bluez: ## src/bluez: the BlueZ submodule (the bench's fork, branch bench)
+	@set -e; if [ "$(BLUEZ_SRC)" = "$(ROOT)/src/bluez" ]; then \
+	  git -C $(ROOT) submodule update --init src/bluez; \
+	  git -C $(ROOT)/src/bluez switch -q bench 2>/dev/null || git -C $(ROOT)/src/bluez switch -q -c bench --track origin/bench; \
+	  echo -e "$(BOLD)src/bluez$(OFF): $$(git -C $(ROOT)/src/bluez log -1 --format='%h %s')"; \
+	else [ -d "$(BLUEZ_SRC)" ] && echo -e "$(BOLD)$(BLUEZ_SRC)$(OFF) used as it is" || { echo "No tree at $(BLUEZ_SRC)"; exit 1; }; fi
 
 src-pipewire: ## src/pipewire: worktree of PIPEWIRE_UPSTREAM, branch bench
 	@$(call src_tree,pipewire,$(PIPEWIRE_UPSTREAM),$(PIPEWIRE_SRC),$(PIPEWIRE_URL),$(call pinned,PIPEWIRE))
@@ -274,9 +281,15 @@ bump-versions: ## Pin versions.conf to the HEADs of src/{bluez,pipewire,wireplum
 	  n=$${c%%:*}; d=$${c#*:}; \
 	  if ! git -C "$$d" rev-parse --git-dir >/dev/null 2>&1; then echo -e "$(DIM)$$n: no tree at $$d, left as is$(OFF)"; continue; fi; \
 	  rev=$$(git -C "$$d" rev-parse HEAD); \
-	  if tag=$$(git -C "$$d" describe --tags --exact-match --match '[0-9]*' --match 'v[0-9]*' 2>/dev/null); then \
+	  local_n=$$(git -C "$$d" rev-list --count HEAD --not --remotes 2>/dev/null || echo 0); \
+	  if [ "$$local_n" -gt 0 ] && [ "$$local_n" -lt "$$(git -C "$$d" rev-list --count HEAD)" ]; then \
+	    rev=$$(git -C "$$d" rev-parse "$$(git -C "$$d" rev-list --reverse HEAD --not --remotes | head -n 1)^"); \
+	    echo -e "$(DIM)$$n: $$local_n commit(s) not pushed anywhere, pinning the one below them: bitbake can"; \
+	    echo -e "  fetch only what a remote has (push bench to the fork, docs/dev.md \"The forks\")$(OFF)"; \
+	  fi; \
+	  if tag=$$(git -C "$$d" describe --tags --exact-match --match '[0-9]*' --match 'v[0-9]*' "$$rev" 2>/dev/null); then \
 	    pv=$${tag#v}; \
-	  elif tag=$$(git -C "$$d" describe --tags --abbrev=0 --match '[0-9]*' --match 'v[0-9]*' 2>/dev/null); then \
+	  elif tag=$$(git -C "$$d" describe --tags --abbrev=0 --match '[0-9]*' --match 'v[0-9]*' "$$rev" 2>/dev/null); then \
 	    pv="$${tag#v}+git"; \
 	  else \
 	    echo "$$n: no release tag below HEAD in $$d (shallow clone?); fetch the tags first."; exit 1; \

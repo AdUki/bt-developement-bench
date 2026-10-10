@@ -40,7 +40,6 @@ BOARD_MK   := boards/$(BOARD).mk
 BOARD_CONF := $(YOCTO)/conf/boards/$(BOARD).conf
 
 # Dev trees: worktrees of the upstream checkouts (make src), or whatever *_SRC points at.
-BLUEZ_UPSTREAM       ?= $(HOME)/projects/bluez
 PIPEWIRE_UPSTREAM    ?= $(HOME)/projects/pipewire
 WIREPLUMBER_UPSTREAM ?= $(HOME)/projects/wireplumber
 LINUX_UPSTREAM       ?= $(HOME)/projects/linux

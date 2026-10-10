@@ -17,8 +17,8 @@ KERNEL ?= next
 TARGET ?= root@10.55.0.1
 
 # Upstream checkouts that `make src` makes git worktrees from (src/<comp>, branch "bench").
-# A missing one is cloned fresh instead.
-BLUEZ_UPSTREAM       ?= $(HOME)/projects/bluez
+# A missing one is cloned fresh instead. BlueZ is not among them: src/bluez is a submodule of this
+# repository (the bench's fork, docs/dev.md "The forks").
 PIPEWIRE_UPSTREAM    ?= $(HOME)/projects/pipewire
 WIREPLUMBER_UPSTREAM ?= $(HOME)/projects/wireplumber
 LINUX_UPSTREAM       ?= $(HOME)/projects/linux

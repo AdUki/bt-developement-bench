@@ -1,4 +1,4 @@
-# BlueZ from bluez.git at the revision pinned in yocto/conf/versions.conf, the same line the dev
+# BlueZ from the bench's fork of bluez.git at the revision pinned in yocto/conf/versions.conf, the same line the dev
 # tree in src/bluez follows (make bump-versions moves the pin to its HEAD). poky's bluez5.inc does
 # the packaging; this recipe swaps the release tarball for git and builds everything a BlueZ
 # developer reaches for on the board: the testers, the emulator, the deprecated hci* tools, the
@@ -9,10 +9,13 @@ require recipes-connectivity/bluez5/bluez5.inc
 # recipe, not this one.
 FILESEXTRAPATHS:prepend := "${COREBASE}/meta/recipes-connectivity/bluez5/bluez5:"
 
-# nobranch: the pin is any commit of bluez.git, so `make bump-versions` can take whatever the
-# dev tree sits on (master, a tag, a commit picked from a reviewed series) as long as it is
-# upstream. poky's 5.72 patches are all upstream by now and are not carried over.
-SRC_URI = "git://git.kernel.org/pub/scm/bluetooth/bluez.git;protocol=https;nobranch=1 \
+# From the bench's fork of bluez.git (BTBENCH_BLUEZ_GIT, versions.conf): upstream's master plus
+# a branch bench with the bench's own commits on top of the pin, which src/bluez pushes to
+# (docs/dev.md "The forks"): AVRCP browsing in the target role, so a car or a speaker can browse
+# the board's player (docs/audio.md "The board's player"). nobranch: the pin is any commit of the
+# fork, upstream's or the bench's, so `make bump-versions` can take whatever the dev tree sits on
+# once it is pushed. poky's 5.72 patches are all upstream by now and are not carried over.
+SRC_URI = "${BTBENCH_BLUEZ_GIT};nobranch=1 \
            file://init \
            file://run-ptest \
            file://10-btbench.conf \
