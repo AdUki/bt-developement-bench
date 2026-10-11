@@ -30,14 +30,16 @@ whatever `src/linux` holds into the image without changing the pin, use
 `bt-debug.cfg` (Bluetooth logging switched on at runtime: debugfs, dynamic debug, the Bluetooth
 debugfs, printk timestamps, a 256 KiB log buffer; see "Kernel Bluetooth logs"). The same
 fragments are used by `linux-btbench` (`BTBENCH_KERNEL_FRAGMENTS`), the `linux-raspberrypi`
-bbappend and `make linux`. `btbench.cfg` switches on:
+bbappend and `make linux`, followed by the board's own fragment, `boards/<board>.cfg`
+(`KFRAGMENT_BOARD`; `boards/rpi.cfg` for both Raspberry Pis: their watchdog, the undervoltage
+alarm, no HDMI audio). `btbench.cfg` switches on:
 
 - **Bluetooth.** Built as modules, so a rebuilt `bluetooth.ko` can be reloaded without a reboot.
   It covers hci_uart over serdev with the Broadcom protocol (the onboard BCM43430A1), btusb for
   dongles, vhci for btvirt and the BlueZ testers, `BT_DEBUGFS`, and the MSFT and AOSP extensions.
 - **Tracing.** Dynamic debug, ftrace (function and graph tracers), kprobe and uprobe events.
-- **Recovery.** `IKCONFIG_PROC`, `PANIC_TIMEOUT=10`, `BCM2835_WDT` built in, pstore/ramoops, and
-  the raspberrypi-hwmon undervoltage alarm.
+- **Recovery.** `IKCONFIG_PROC`, `PANIC_TIMEOUT=10`, the watchdog core (the SoC's driver, built
+  in, is in the board fragment), pstore/ramoops.
 - **USB gadget.** dwc2 in dual-role mode with configfs NCM, ECM and ACM, all built in.
 - **Wi-Fi.** brcmfmac and cfg80211, both as modules.
 - **Audio.** snd-aloop and snd-usb-audio.
@@ -252,3 +254,53 @@ A broken *good* kernel can only come from `commit` or `rollback`. To recover:
    `bcm2835-rpi-zero-w.dtb` on the boot partition.
 
 Or reflash the image (`make flash`).
+
+## Khadas VIM3L (`BOARD=vim3l`)
+
+A second SoC family: Amlogic S905D3 (four Cortex-A55, arm64, 2 GB), on meta-meson's
+`khadas-vim3l` machine. Only `KERNEL=next`. It has not been booted by the bench yet.
+
+| | |
+|---|---|
+| defconfig | arm64 `defconfig` + `boards/vim3l.cfg` (every other SoC family off, the Amlogic watchdog and PWMs built in, no HDMI sound card) |
+| device tree | `amlogic/meson-sm1-khadas-vim3l.dtb`, mainline as it is: the USB-C port is already a peripheral |
+| Bluetooth | BCM4359 (AP6398S) on UART_A with RTS/CTS, `brcm,bcm43438-bt`, hci_uart over serdev |
+| Wi-Fi | the same module on SDIO, brcmfmac |
+| gadget | dwc2, `ff400000.usb`, on the USB-C port that also powers the board |
+| console | UART_AO on the 40-pin header: pin 17 GND, 18 RX, 19 TX, 115200 8N1 (`ttyAML0`) |
+
+**Firmware.** Neither the Wi-Fi firmware nor the Bluetooth patch is in linux-firmware.
+`btbench-firmware-vim3l` installs them from LibreELEC's collection: brcmfmac asks for
+`brcm/brcmfmac4359-sdio.khadas,vim3l.{bin,txt}`, btbcm for `brcm/BCM4359C0.khadas,vim3l.hcd` and
+then `brcm/BCM4359C0.hcd`.
+
+**The boot chain.** The SoC's ROM loads Amlogic's signed BL2 and BL3x, which start mainline
+U-Boot (2024.01, `khadas-vim3l_defconfig`). meta-meson's `amlogic-boot-fip` packs them into
+`u-boot.bin.sd.bin`, which its image class writes into the card's first megabyte, around the
+partition table (`wic/btbench-meson.wks`; the boot partition starts at 4 MB). U-Boot's distro
+boot finds `boot.scr` on the FAT partition. There is no firmware to set a device tree and command
+line, so the script (`dynamic-layers/meson/recipes-bsp/btbench-boot-scr/files/boot.cmd.in`) loads
+`Image` and `meson-sm1-khadas-vim3l.dtb` itself and sets the command line from the board conf
+(`BTBENCH_CMDLINE`). U-Boot writes the board's serial number (from the eFuse MAC) into the tree it
+boots.
+
+**Booting from the SD card.** The ROM tries the SPI flash (when the board's MCU says to), then
+the eMMC, and only then the SD card. A VIM3L that has a boot loader in either runs that one first,
+and it has to find the card's `boot.scr` by itself, and then kernel trials do not work (its
+environment is not the card's `uboot.env`). The serial console says which one runs: the bench's
+announces `U-Boot 2024.01 ... khadas-vim3l`. To have the ROM reach the card, set the boot mode to
+eMMC (Khadas' OOWOW menu, or `kbi bootmode w emmc` in Khadas' U-Boot) and erase the eMMC's boot
+loader (`dd if=/dev/zero of=/dev/mmcblkN bs=1M count=4` from a running system, N being the eMMC).
+
+**Kernel trials** work as on the Raspberry Pis (`TRY_METHOD=uboot-oneshot`): the bench's U-Boot
+config keeps the environment in `/boot/uboot.env` (`dynamic-layers/meson/recipes-bsp/u-boot/`;
+U-Boot numbers the SD card mmc 1), and `boot.scr` clears `bench_try` before it boots the test
+slot. Two differences:
+
+- **No watchdog in U-Boot.** It has no driver for the SoC's watchdog, so a test kernel that hangs
+  before the kernel's own driver and systemd take the watchdog over is not reset: power-cycle the
+  board. The next boot runs the good kernel.
+- **No pstore.** The board has no ramoops region in its device tree yet.
+
+The good slot is `/boot/Image` and `/boot/meson-sm1-khadas-vim3l.dtb`.
+

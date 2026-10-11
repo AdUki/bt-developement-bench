@@ -32,6 +32,7 @@ IMAGE_INSTALL = " \
     btbench-base \
     btbenchd \
     ${BTBENCH_MACHINE_FIRMWARE} \
+    ${BTBENCH_BOARD_FIRMWARE} \
     ${CORE_IMAGE_EXTRA_INSTALL} \
 "
 
@@ -41,6 +42,8 @@ IMAGE_INSTALL = " \
 # would go missing with no error at build time, and Wi-Fi and Bluetooth fail at runtime. Take the
 # machine's own list and install it outright.
 BTBENCH_MACHINE_FIRMWARE = "${@' '.join(p for p in (d.getVar('MACHINE_EXTRA_RRECOMMENDS') or '').split() if p.startswith(('linux-firmware', 'bluez-firmware')))}"
+# A board whose firmware the BSP does not have names the bench's package for it in its board conf.
+BTBENCH_BOARD_FIRMWARE ??= ""
 
 IMAGE_LINGUAS = ""
 

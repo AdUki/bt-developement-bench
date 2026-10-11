@@ -21,8 +21,10 @@ KSTAGE     := $(STAGE)/linux-$(KERNEL)
 # trees, mk/dev.mk), so a first deploy changes nothing but what you then commit on top.
 LINUX_PINNED := $(call pinned,LINUX)
 # The fragments the image's kernels are configured with, too (linux-btbench's
-# BTBENCH_KERNEL_FRAGMENTS): what the bench needs, and Bluetooth logging switched on at runtime.
-KFRAGMENT  := $(addprefix $(ROOT)/$(YOCTO)/meta-btbench/recipes-kernel/linux/files/,btbench.cfg bt-debug.cfg)
+# BTBENCH_KERNEL_FRAGMENTS): what the bench needs, Bluetooth logging switched on at runtime, and
+# the board's own (boards/<board>.cfg).
+KFRAGMENT  := $(addprefix $(ROOT)/$(YOCTO)/meta-btbench/recipes-kernel/linux/files/,btbench.cfg bt-debug.cfg) \
+              $(if $(KFRAGMENT_BOARD),$(ROOT)/$(KFRAGMENT_BOARD))
 KDEFCONFIG := $(DEFCONFIG_$(KERNEL))
 KDTB       := $(firstword $(DTBS_$(KERNEL)))
 KDTS_EXTRA := $(if $(DTS_EXTRA_$(KERNEL)),$(ROOT)/$(DTS_EXTRA_$(KERNEL)))
@@ -99,12 +101,12 @@ src-linux-rpi: $(BUILD_CONF) ## src/linux-rpi: raspberrypi/linux at linux-raspbe
 	@echo -e "$(BOLD)$(LINUX_RPI_SRC)$(OFF) on $$(git -C $(LINUX_RPI_SRC) log -1 --format='%h %s')"
 
 .PHONY: linux-defconfig
-linux-defconfig: check-sdk ## (Re)generate the kernel .config: board defconfig + btbench.cfg + bt-debug.cfg
+linux-defconfig: check-sdk ## (Re)generate the kernel .config: board defconfig + btbench.cfg + bt-debug.cfg + board's
 	@set -e; $(kmake_setup); \
 	mkdir -p $(KOUT); \
 	if [ -f $(KOUT)/.config ]; then cp $(KOUT)/.config $(KOUT)/.config.btbench-old; \
 	  echo "Previous config saved as $(KOUT)/.config.btbench-old"; fi; \
-	echo -e "$(BOLD)Config$(OFF) $(KDEFCONFIG) + btbench.cfg + bt-debug.cfg $(DIM)→ $(KOUT)/.config$(OFF)"; \
+	echo -e "$(BOLD)Config$(OFF) $(KDEFCONFIG) + $(notdir $(KFRAGMENT)) $(DIM)→ $(KOUT)/.config$(OFF)"; \
 	kmake -s $(KDEFCONFIG); \
 	"$(LINUX_TREE)/scripts/kconfig/merge_config.sh" -m -O $(KOUT) $(KOUT)/.config $(KFRAGMENT) >/dev/null; \
 	kmake -s olddefconfig; \

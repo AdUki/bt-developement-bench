@@ -1,0 +1,18 @@
+# Amlogic SD card (BOARD=vim3l): boot loader + boot (FAT) + root (ext4) + data (ext4).
+#
+#   (1 MB) Amlogic's BL2/BL3x and U-Boot (u-boot.bin.sd.bin), where the SoC's ROM reads them: the
+#          first 440 bytes of the first sector and from the second sector on. meta-meson's
+#          image_types_meson writes them after wic made the image, around the partition table.
+#   boot   256 MB at 4 MB. U-Boot's boot.scr and uboot.env, the good kernel (Image) and its dtb,
+#          and room for the kernel trial flow's /boot/bench/test and /boot/bench/prev.
+#   root   The rootfs, with IMAGE_ROOTFS_EXTRA_SPACE (btbench-image.bb) free for deploys.
+#   data   The bench's state (docs/system.md), grown to the end of the card at first boot.
+#
+# The rest is as in btbench-rpi.wks: no fstab update (base-files mounts by label), and the disk
+# identifier written by btbench-image.bb, so the root is PARTUUID=b7be4c4e-02.
+
+part /boot --source bootimg-partition --ondisk mmcblk0 --fstype=vfat --label boot --active --align 4096 --size 256
+part /     --source rootfs            --ondisk mmcblk0 --fstype=ext4 --label root --align 4096
+part /data                            --ondisk mmcblk0 --fstype=ext4 --label data --align 4096 --size 64
+
+bootloader --ptable msdos

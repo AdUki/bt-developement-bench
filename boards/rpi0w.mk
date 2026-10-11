@@ -26,6 +26,9 @@ DEFCONFIG_rpi  := bcmrpi_defconfig
 DTBS_rpi       := broadcom/bcm2708-rpi-zero-w.dtb
 DTS_EXTRA_rpi  :=
 
+# The board's kernel fragment, merged after btbench.cfg and bt-debug.cfg into either kernel.
+KFRAGMENT_BOARD := boards/rpi.cfg
+
 # Kernel trials (make linux-test): U-Boot boots the test slot once, then the good one again.
 # (tryboot needs the downstream kernel to pass the firmware's reboot flag; mainline does not.)
 TRY_METHOD  := uboot-oneshot

@@ -269,6 +269,12 @@ $(LAYERS)/meta-raspberrypi:
 	@echo "Cloning meta-raspberrypi ($(BRANCH))..."
 	@git clone -q --depth 1 -b $(BRANCH) https://git.yoctoproject.org/meta-raspberrypi $@
 
+# The Amlogic BSP (BOARD=vim3l): machine configs, mainline U-Boot with Amlogic's boot blobs
+# (amlogic-boot-fip) and the image class that writes them in front of the first partition.
+$(LAYERS)/meta-meson:
+	@echo "Cloning meta-meson ($(BRANCH))..."
+	@git clone -q --depth 1 -b $(BRANCH) https://github.com/superna9999/meta-meson.git $@
+
 $(YB)/conf/bblayers.conf: $(LAYERS)/poky $(LAYERS)/meta-openembedded $(BSP_LAYERS) \
                           $(YOCTO)/conf/bblayers.conf.sample $(BOARD_MK)
 	@mkdir -p $(YB)/conf
@@ -302,6 +308,7 @@ auto-conf: $(YB)/conf/bblayers.conf
 	   echo 'BTBENCH_KDEFCONFIG = "$(DEFCONFIG_$(KERNEL))"'; \
 	   echo 'BTBENCH_DTBS = "$(DTBS_$(KERNEL))"'; \
 	   echo 'BTBENCH_DTS_EXTRA = "$(if $(DTS_EXTRA_$(KERNEL)),$(ROOT)/$(DTS_EXTRA_$(KERNEL)))"'; \
+	   echo 'BTBENCH_KFRAGMENT_BOARD = "$(if $(KFRAGMENT_BOARD),$(ROOT)/$(KFRAGMENT_BOARD))"'; \
 	   echo 'BTBENCH_TRY_METHOD = "$(TRY_METHOD)"'; \
 	   echo 'BTBENCH_GADGET_UDC = "$(GADGET_UDC)"'; \
 	   echo 'BTBENCH_BT_HCI = "$(BT_HCI)"'; \

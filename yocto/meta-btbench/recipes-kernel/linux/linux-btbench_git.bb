@@ -22,8 +22,10 @@ inherit kernel
 # the kernel's device tree.
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:${BTBENCH_ROOT}/tools/dev:"
 FILESEXTRAPATHS:prepend := "${@os.path.dirname(d.getVar('BTBENCH_DTS_EXTRA')) + ':' if d.getVar('BTBENCH_DTS_EXTRA') else ''}"
+FILESEXTRAPATHS:prepend := "${@os.path.dirname(d.getVar('BTBENCH_KFRAGMENT_BOARD')) + ':' if d.getVar('BTBENCH_KFRAGMENT_BOARD') else ''}"
 
 BTBENCH_DTS_EXTRA_FILE = "${@os.path.basename(d.getVar('BTBENCH_DTS_EXTRA') or '')}"
+BTBENCH_KFRAGMENT_BOARD_FILE = "${@os.path.basename(d.getVar('BTBENCH_KFRAGMENT_BOARD') or '')}"
 
 # From the bench's fork (BTBENCH_LINUX_GIT, versions.conf; src/linux is the same repository as a
 # submodule): bluetooth-next at the pin, and on its branch bench the fixes the bench needs that
@@ -36,18 +38,21 @@ SRC_URI = " \
     file://bt-debug.cfg \
     file://mkdtb \
     ${@'file://${BTBENCH_DTS_EXTRA_FILE}' if d.getVar('BTBENCH_DTS_EXTRA') else ''} \
+    ${@'file://${BTBENCH_KFRAGMENT_BOARD_FILE}' if d.getVar('BTBENCH_KFRAGMENT_BOARD') else ''} \
 "
 # The bench's fragments, merged in this order over the board's defconfig: btbench.cfg (what the
-# bench needs) and bt-debug.cfg (Bluetooth logging switched on at runtime).
-BTBENCH_KERNEL_FRAGMENTS = "btbench.cfg bt-debug.cfg"
+# bench needs), bt-debug.cfg (Bluetooth logging switched on at runtime) and the board's own
+# (boards/<board>.cfg, KFRAGMENT_BOARD in boards/<board>.mk).
+BTBENCH_KERNEL_FRAGMENTS = "btbench.cfg bt-debug.cfg ${BTBENCH_KFRAGMENT_BOARD_FILE}"
 
 SRCREV = "${BTBENCH_LINUX_SRCREV}"
 PV = "${BTBENCH_LINUX_PV}"
 S = "${WORKDIR}/git"
 
-# Every Raspberry Pi the bench knows. Another SoC family adds its machine override here (and a
-# board conf that selects linux-btbench as virtual/kernel).
-COMPATIBLE_MACHINE = "^rpi$"
+# Every Raspberry Pi and every 64-bit Amlogic machine (meta-meson's meson64all) the bench knows.
+# Another SoC family adds its machine override here (and a board conf that selects linux-btbench
+# as virtual/kernel).
+COMPATIBLE_MACHINE = "^(rpi|meson64all)$"
 
 # With SRC=local (externalsrc) ${S} is your src/linux: externalsrc's oe-workdir/oe-logs links are
 # not put into it, and nothing below writes there either.

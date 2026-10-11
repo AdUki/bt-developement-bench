@@ -29,13 +29,15 @@ BOARDS := $(patsubst boards/%.mk,%,$(wildcard boards/*.mk))
 ifeq ($(filter $(BOARD),$(BOARDS)),)
   $(error BOARD=$(BOARD) is not one of: $(BOARDS))
 endif
-ifeq ($(filter $(KERNEL),next rpi),)
-  $(error KERNEL=$(KERNEL) is not one of: next rpi)
-endif
 
 YOCTO  := yocto
 LAYERS := $(YOCTO)/layers
 include boards/$(BOARD).mk
+# The kernels a board can run (boards/<board>.mk KERNELS): KERNEL=rpi only on a Raspberry Pi.
+KERNELS ?= next rpi
+ifeq ($(filter $(KERNEL),$(KERNELS)),)
+  $(error KERNEL=$(KERNEL) is not one of BOARD=$(BOARD)'s: $(KERNELS))
+endif
 BOARD_MK   := boards/$(BOARD).mk
 BOARD_CONF := $(YOCTO)/conf/boards/$(BOARD).conf
 
@@ -95,5 +97,5 @@ help:
 	@awk 'BEGIN {FS = ":.*## "} \
 	     /^## ─/ { gsub(/## /,""); printf "\n\033[2m%s\033[0m\n", $$0; next } \
 	     /^[a-zA-Z0-9_%-]+:.*?## / { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-	@echo -e "\n$(DIM)Flags:  BOARD=$(BOARDS)  KERNEL=next|rpi  SRC=local (image from src/)  RESTART=0 (deploy)$(OFF)"
+	@echo -e "\n$(DIM)Flags:  BOARD=$(BOARDS)  KERNEL=$(KERNELS)  SRC=local (image from src/)  RESTART=0 (deploy)$(OFF)"
 	@echo -e "$(DIM)Vars:   TARGET=root@host  DISK=/dev/...  ARGS=\"...\" (bitbake)  bench.conf for defaults$(OFF)\n"

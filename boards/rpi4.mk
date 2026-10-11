@@ -18,6 +18,9 @@ DEFCONFIG_rpi  := bcm2711_defconfig
 DTBS_rpi       := broadcom/bcm2711-rpi-4-b.dtb
 DTS_EXTRA_rpi  :=
 
+# The board's kernel fragment, merged after btbench.cfg and bt-debug.cfg into either kernel.
+KFRAGMENT_BOARD := boards/rpi.cfg
+
 # The Pi 4 firmware documents tryboot; it needs the downstream kernel to pass the reboot flag,
 # so a mainline kernel on this board would use uboot-oneshot like the Zero W.
 TRY_METHOD  := $(if $(filter rpi,$(KERNEL)),tryboot,uboot-oneshot)

@@ -1,0 +1,50 @@
+# btbench boot script for U-Boot's distro boot (Amlogic boards): the good kernel from the boot
+# partition, or once, after `btbench-kernel try`, the test kernel in bench/test/.
+#
+# `btbench-kernel try` sets bench_try=1 in uboot.env (fw_setenv) and reboots. This script clears
+# it and saves the environment *before* it loads the test kernel, so whatever that kernel does
+# (panic, hang, no network), the next reset boots the good kernel: a panic reboots by itself
+# (panic=10), anything else needs a power cycle (U-Boot has no driver for the SoC watchdog here).
+#
+# There is no firmware here to load a device tree and a command line, as on the Raspberry Pis:
+# the script loads both slots' kernel and dtb itself and sets the command line. The test slot
+# adds panic=10, btbench.slot=test and whatever is in the env variable bench_bootargs
+# (fw_setenv bench_bootargs "dyndbg=..."). U-Boot puts the board's serial number (serial#, from
+# the eFuse MAC) into either tree when it boots it.
+
+# distro boot sets these for the partition it found this script on; run by hand, the SD card.
+if test -z "${devtype}"; then setenv devtype mmc; fi
+if test -z "${devnum}"; then setenv devnum 1; fi
+if test -z "${distro_bootpart}"; then setenv distro_bootpart 1; fi
+setenv bench_dev "${devnum}:${distro_bootpart}"
+setenv bench_args "@@CMDLINE@@"
+
+if test "${bench_try}" = "1"; then
+	setenv bench_try 0
+	# Never boot the test kernel without having made sure the next boot will not.
+	if saveenv; then
+		echo "btbench: trial boot of bench/test/ (this boot only)"
+		if load ${devtype} ${bench_dev} ${kernel_addr_r} bench/test/@@KERNEL_IMAGETYPE@@; then
+			if test -e ${devtype} ${bench_dev} bench/test/board.dtb; then
+				load ${devtype} ${bench_dev} ${fdt_addr_r} bench/test/board.dtb
+			else
+				load ${devtype} ${bench_dev} ${fdt_addr_r} @@DTB@@
+			fi
+			setenv bootargs "${bench_args} panic=10 btbench.slot=test ${bench_bootargs}"
+			booti ${kernel_addr_r} - ${fdt_addr_r}
+			echo "btbench: the test kernel did not start; booting the good one"
+		else
+			echo "btbench: no bench/test/@@KERNEL_IMAGETYPE@@; booting the good kernel"
+		fi
+	else
+		echo "btbench: could not save the environment; not booting the test kernel"
+	fi
+fi
+
+# A first boot writes uboot.env, which `btbench-kernel try` needs to find before it can arm a
+# trial.
+if test ! -e ${devtype} ${bench_dev} uboot.env; then saveenv; fi
+load ${devtype} ${bench_dev} ${kernel_addr_r} @@KERNEL_IMAGETYPE@@
+load ${devtype} ${bench_dev} ${fdt_addr_r} @@DTB@@
+setenv bootargs "${bench_args}"
+booti ${kernel_addr_r} - ${fdt_addr_r}

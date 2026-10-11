@@ -9,7 +9,7 @@ first when an interface moves.
 |---|---|
 | system | `yocto/meta-btbench/recipes-core/{images,btbench-base,base-files}/`, `recipes-core/packagegroups/packagegroup-btbench-tools.bb`, `yocto/meta-btbench/wic/`, `tools/target/{btbench-wifi,btbench-gadget,btbench-bdaddr,btbench-data}`, `mk/system.mk`, `docs/system.md` |
 | audio + BlueZ | `recipes-connectivity/bluez5/`, `recipes-multimedia/{pipewire,wireplumber,libfreeaptx,ldacbt,btbench-audio,packagegroups}/`, `tools/target/{btbench-audio,btbench-btsnoop}`, `tools/dev/{bbvars,clangd-gen}`, `mk/dev.mk`, `docs/{audio,dev}.md` |
-| kernel | `recipes-kernel/`, `dynamic-layers/raspberrypi/recipes-{kernel,bsp}/`, `boards/dts/`, `tools/dev/mkdtb`, `tools/target/btbench-kernel`, `tools/target/btbench-btdebug`, `mk/kernel.mk`, `docs/kernel.md` |
+| kernel | `recipes-kernel/`, `dynamic-layers/raspberrypi/recipes-{kernel,bsp}/`, `dynamic-layers/meson/recipes-bsp/`, `boards/dts/`, `boards/*.cfg`, `tools/dev/mkdtb`, `tools/target/btbench-kernel`, `tools/target/btbench-btdebug`, `mk/kernel.mk`, `docs/kernel.md` |
 | btbenchd | `app/` (except `app/src/hci/`, `app/tests/hci/`), `recipes-btbench/`, `tools/bench`, `tools/fake-bluez/`, `mk/app.mk`, `docs/{api,web}.md` |
 | HCI monitor | `app/src/hci/`, `app/tests/hci/`, `docs/monitor.md` |
 
@@ -24,8 +24,13 @@ libubootenv-bin), `btbench-base` (system), `btbenchd` (btbenchd).
 
 `BTBENCH_BOARD`, `BTBENCH_KERNEL` (next|rpi), `BTBENCH_KARCH`, `BTBENCH_KIMAGE`,
 `BTBENCH_KDEFCONFIG`, `BTBENCH_DTBS`, `BTBENCH_DTS_EXTRA` (absolute path or empty),
+`BTBENCH_KFRAGMENT_BOARD` (the board's kernel fragment, `boards/<board>.cfg`: absolute path or empty),
 `BTBENCH_TRY_METHOD`, `BTBENCH_GADGET_UDC`, `BTBENCH_BT_HCI`, `BTBENCH_ROOT` (the repo checkout),
 `BTBENCH_{BLUEZ,PIPEWIRE,WIREPLUMBER,LINUX}_{SRCREV,PV}` (yocto/conf/versions.conf).
+
+Board conf (`yocto/conf/boards/<board>.conf`): `BTBENCH_WKS` (the card layout in `wic/`),
+`BTBENCH_BOARD_FIRMWARE` (packages the image installs for the board's radios when the BSP has
+none), `BTBENCH_CMDLINE` (the kernel command line, where U-Boot's boot.scr sets it: Amlogic).
 
 Device: `BTBENCH_HOSTNAME`, `BTBENCH_ROOT_PASSWORD`, `BTBENCH_SSH_PUBKEY` (path on the build
 host), `BTBENCH_WIFI_{SSID,PSK,COUNTRY}`, `BTBENCH_AP_PSK`, `BTBENCH_GADGET` (ecm|ncm|off),

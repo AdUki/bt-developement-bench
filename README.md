@@ -2,8 +2,9 @@
 
 A Bluetooth development bench on a Yocto (scarthgap) image: a board you push BlueZ, PipeWire,
 WirePlumber and kernel builds to in seconds, with a web console and a CLI to drive Bluetooth and
-watch the HCI traffic live. Built for a Raspberry Pi Zero W; other boards are a `boards/<name>.mk`
-plus a `yocto/conf/boards/<name>.conf` away.
+watch the HCI traffic live. Built for a Raspberry Pi Zero W, with a Khadas VIM3L (`BOARD=vim3l`,
+Amlogic S905D3, docs/kernel.md) and a Raspberry Pi 4 (`BOARD=rpi4`) next to it; other boards are a
+`boards/<name>.mk` plus a `yocto/conf/boards/<name>.conf` away.
 
 - **BlueZ** from git (pinned in `yocto/conf/versions.conf`), with every tool and test script.
 - **Audio stack switchable on the board:** PipeWire + WirePlumber, or bluetoothd alone
