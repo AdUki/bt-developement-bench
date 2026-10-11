@@ -32,14 +32,17 @@ questions from a terminal.
 
 ## Areas and views
 
-**Listen** — the console as a music player, for using the board rather than testing it. *Now
-playing* shows whichever source plays: a connected phone (its AVRCP player — track, cover art,
-progress, previous / play–pause / next / stop, the link's volume) or the board itself (a radio
-station, or tracks from a UPnP media server). Chips switch between them when there are several.
-*Up next* is the phone's now-playing list, or the board's queue; a click plays that track. The
-*Library* has the phone's own folders and search (for a browsable player), the radio stations,
-and the media servers on the LAN: a station plays on its own, a track plays with the rest of its
-folder after it as the queue, and **+** adds a track to the end of the queue. The board plays to
+**Listen** — the console as a music player, for using the board rather than testing it. Two
+views. *Now playing* shows whichever source plays: a connected phone (its AVRCP player — track,
+cover art, progress, previous / play / pause / next / stop, repeat and shuffle when the player has
+them, the link's volume) or the board itself (a radio station, or tracks from a UPnP media server
+with their artist, album and length, and repeat and shuffle for a playlist). Chips switch between
+them when there are several. *Up next* is the phone's now-playing list, or the board's queue; a
+click plays that track. *Library*, a page of its own so long folders get the screen, has the
+phone's own folders and search (for a browsable player), the radio stations, and the media servers
+on the LAN: a station plays on its own, a track plays with the rest of its folder after it as the
+queue, and **+** adds a track to the end of the queue. A bar at the bottom of the library keeps the
+track playing, play/pause and next in reach. The board plays to
 the output chosen in *Play to* — this browser, or a speaker the board has — and keeps playing its
 queue with the page closed. The volume slider sets what a person means: the Bluetooth speaker's
 own volume when the link has one, else the stream's level, or this browser's.
@@ -95,9 +98,9 @@ both ways (duplex), receive, or HFP with CVSD/mSBC; the link renegotiates on a c
 artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
 its cover art (AVRCP 1.6, pulled over BIP) when the phone offers it, previous / rewind /
 play–pause / stop / fast forward / next (the seeks run while the button is
-held), the transport's absolute volume, *Listen here* (hear what the phone sends the board, in
-this browser) and, folded under one disclosure, repeat and shuffle when the player offers them and,
-for a browsable player, a browser: the now-playing list, its files (folders open, back),
+held), repeat (off, all, one) and shuffle buttons when the player offers them, the transport's
+absolute volume, *Listen here* (hear what the phone sends the board, in this browser) and, folded
+under one disclosure for a browsable player, a browser: the now-playing list, its files (folders open, back),
 search, and *play* or *add* (to now playing) per item. Under the phones, *This board's player*: what
 a car or speaker the board plays to sees (its track, play state and the adapters it is offered on),
 its controls, *Offer it* (on or off), and folded, its library (open a folder, *play* or *add*) and

@@ -30,6 +30,7 @@
 <main>
   <!-- ======================================================== Listen (the player) -->
   <section id="player" class="panel">
+    <div class="pane" data-pane="now">
     <div class="np card" id="np">
       <div class="np-art" id="np-art"></div>
       <div class="np-main">
@@ -48,16 +49,23 @@
         </div>
       </div>
     </div>
-    <div class="np-cols">
-      <div class="card">
-        <div class="card-head"><h3>Up next</h3><span id="np-q-note" class="small muted"></span></div>
-        <div id="np-queue" class="tracklist"></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h3>Library</h3><div class="segs" id="np-lib-tabs"></div></div>
+    <div class="card">
+      <div class="card-head"><h3>Up next</h3><span id="np-q-note" class="small muted"></span></div>
+      <div id="np-queue" class="tracklist"></div>
+    </div>
+    </div>
+    <!-- The library on a page of its own: long folders get the screen, and the bar at the bottom
+         keeps what plays in reach while browsing. -->
+    <div class="pane" data-pane="library">
+      <div class="card np-libcard">
+        <div class="card-head"><div class="segs" id="np-lib-tabs"></div></div>
         <div class="row" id="np-search-row" hidden><input type="search" id="np-search" class="grow" placeholder="Search the phone"></div>
         <div id="np-crumbs" class="small crumbs"></div>
         <div id="np-lib" class="tracklist"></div>
+      </div>
+      <div class="np-mini card" id="np-mini" hidden>
+        <a href="#player/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
+        <div class="np-mini-ctl" id="np-mini-ctl"></div>
       </div>
     </div>
   </section>

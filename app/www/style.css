@@ -411,6 +411,11 @@ canvas.graph.short { height: 110px; }
 .pl-btn svg { width: 16px; height: 16px; fill: currentColor; }
 .pl-btn.main { width: 2.7rem; height: 2.7rem; border-radius: 50%; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .pl-btn.main:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.08); }
+/* Repeat and shuffle: outlined icons; lit while on, with a 1 for repeating one track. */
+.pl-btn.mode, .np-btn.mode { position: relative; color: var(--muted); }
+.pl-btn.mode svg, .np-btn.mode svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.pl-btn.mode.on, .np-btn.mode.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.mode-one { position: absolute; right: 3px; bottom: 1px; font-size: 0.6rem; line-height: 1; font-weight: 700; }
 .pl-controls .spacer { flex: 1; }
 .pl-vol-row { margin-top: 0.4rem; }
 .pl-more { margin-top: 0.6rem; }
@@ -665,7 +670,9 @@ td.acts > * { margin-right: 0.25rem; }
 /* A radio has no end: the bar is a quiet stripe, not an empty progress. */
 .np-progress.live { background: repeating-linear-gradient(90deg, var(--line-soft) 0 8px, transparent 8px 12px); }
 .np-time { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-top: 0.25rem; min-height: 1.1em; }
-.np-ctl { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; }
+.np-ctl { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem; }
+.np-row { display: flex; align-items: center; gap: 0.6rem; }
+.np-row:empty { display: none; }
 .np-btn { width: 3rem; height: 3rem; border-radius: 10px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: var(--line); background: var(--panel); }
 .np-btn svg { width: 22px; height: 22px; fill: currentColor; }
 .np-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
@@ -674,13 +681,24 @@ td.acts > * { margin-right: 0.25rem; }
 .np-btn.main:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
 .np-btn.minor svg { width: 16px; height: 16px; }
 .np-ctl .pill { margin-left: 0.4rem; }
+.np-btn.mode { width: 2.6rem; height: 2.6rem; }
+.np-btn.mode svg { width: 19px; height: 19px; }
 .np-foot { display: flex; align-items: center; gap: 0.6rem 1.4rem; flex-wrap: wrap; margin-top: 0.9rem; }
 .np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 200px; max-width: 320px; }
 .np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .np-vol input { flex: 1; }
 .np-out { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; min-width: 0; }
 .np-out select { max-width: 260px; }
-.np-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0 0.8rem; }
+/* The library's page: its list grows with the page instead of scrolling in a box, and the bar
+   with what plays stays at the bottom of the screen. */
+.np-libcard #np-lib { max-height: none; }
+.np-libcard .card-head { justify-content: flex-start; }
+.np-mini { position: sticky; bottom: 0.6rem; z-index: 5; display: flex; align-items: center; gap: 0.8rem; padding: 0.55rem 0.7rem; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18); }
+.np-mini-t { flex: 1; min-width: 0; display: flex; flex-direction: column; color: inherit; text-decoration: none; }
+.np-mini-t b, .np-mini-t span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-mini-ctl { display: flex; gap: 0.4rem; flex: none; }
+.np-mini-ctl .np-btn { width: 2.5rem; height: 2.5rem; }
+.np-mini-ctl .np-btn svg { width: 18px; height: 18px; }
 
 .tracklist { max-height: 26rem; overflow: auto; margin: 0 -0.4rem; }
 .tr { display: flex; align-items: center; gap: 0.7rem; padding: 0.45rem 0.4rem; border-radius: 6px; cursor: pointer; }
@@ -756,10 +774,10 @@ td.acts > * { margin-right: 0.25rem; }
   .np { grid-template-columns: 1fr; justify-items: center; text-align: center; padding: 1rem; }
   .np-art { width: min(72vw, 280px); height: min(72vw, 280px); }
   .np-main { width: 100%; }
-  .np-src, .np-ctl, .np-foot { justify-content: center; }
+  .np-src, .np-row, .np-foot { justify-content: center; }
+  .np-ctl { align-items: center; }
   .np-time { text-align: left; }
   .np-vol { max-width: none; }
-  .np-cols { grid-template-columns: 1fr; }
   .rm-layout { grid-template-columns: 1fr; justify-items: center; }
   .rm-layout .remote { width: min(100%, 320px); }
   .rm-side { width: 100%; }

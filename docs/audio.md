@@ -231,10 +231,14 @@ has a play state and nothing else.
   default sink when it is a Bluetooth one, else the first Bluetooth sink, else the default sink.
   The folder the entry is in (or the folder played) becomes the now playing list; next and
   previous go round it, and a track that ends (the sweep, a station that drops) is followed by
-  the next. Pause and stop end the stream; play starts the track again. A speaker that drops and comes back
+  the next (repeat one: by itself; repeat all: round again; shuffle: by any other). Pause and stop end the stream; play starts the track again. A speaker that drops and comes back
   gets the music back: while the player plays to something else it looks for a Bluetooth sink
   every 5 s and moves its stream there. A station's ICY title
-  becomes the track's title, the station its album.
+  becomes the track's title (its "Artist - " part the artist), the station its album.
+- **Other streams.** Playing nothing itself, the player tells the remote about the newest stream
+  that plays to a Bluetooth sink (the console's Listen, a radio, a media server's folder): its
+  track with the artist, album and length the media server gave, the position, and the stream's
+  repeat and shuffle, which the remote can change. The remote's buttons act on that stream.
 - **Browsing.** The remote can browse the library, the now playing list and search results
   (names, by every word), play an entry and add one to the now playing list. Upstream BlueZ
   rejects these commands in the target role; the bench's fork answers them (the image's BlueZ,

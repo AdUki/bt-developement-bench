@@ -484,12 +484,6 @@ function notePlayers(players) {
   }
 }
 
-function selectHTML(cls, path, cur, options) {
-  if (cur == null) return '';
-  return `<select class="${cls}" data-path="${esc(path)}">${options.map(o =>
-    `<option${o === cur ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
-}
-
 // Transport icons, drawn rather than emoji: emoji render in colour and at different sizes on
 // every phone.
 const PL_ICON = {
@@ -503,8 +497,9 @@ const devName = addr => {
   return d ? d.alias : addr;
 };
 
-// A player as a now-playing screen: cover, track, the transport row and the volume. Repeat,
-// shuffle and the browser are a click away (kept open across the rebuilds every update causes).
+// A player as a now-playing screen: cover, track, the transport row (with repeat and shuffle when
+// the player has them) and the volume. The browser is a click away (kept open across the rebuilds
+// every update causes).
 function playerCard(p, transports) {
   const t = p.track || {};
   const tr = p.transport && transports.find(x => x.path === p.transport);
@@ -516,7 +511,7 @@ function playerCard(p, transports) {
   const art = p.obex_port != null && t.img_handle
     ? `<img alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}" onerror="coverRetry(this)">`
     : (p.obex_port != null ? coverConnect(p) : '') + NOTE_SVG;
-  const extras = p.repeat != null || p.shuffle != null || p.browsable;
+  const extras = p.browsable;
   au.plOpen = au.plOpen || {};
   return `<div class="card player" data-path="${esc(p.path)}">
     <div class="pl-art">${art}</div>
@@ -531,18 +526,15 @@ function playerCard(p, transports) {
       ${btn('previous', 'Previous')}${btn('rewind', 'Rewind (hold)')}
       ${btn('play', 'Play')}${btn('pause', 'Pause')}
       ${btn('fast-forward', 'Fast forward (hold)')}${btn('next', 'Next')}${btn('stop', 'Stop')}
+      ${modeButtons('pl-btn', btRepeat(p.repeat), p.shuffle == null ? null : p.shuffle !== 'off', `data-path="${esc(p.path)}"`)}
       <span class="spacer"></span>
       <button class="small-btn pl-listen" data-address="${esc(p.address)}" title="Hear what this device sends the board">Listen here</button>
     </div>
     ${tr && tr.volume != null ? `<label class="row small pl-vol-row"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${tr.volume}" data-path="${esc(tr.path)}" class="grow pl-vol">
       <span class="mono">${tr.volume}</span></label>` : ''}
     ${extras ? `<details class="more-fields pl-more" data-path="${esc(p.path)}"${au.plOpen[p.path] ? ' open' : ''}>
-      <summary>${p.browsable ? 'Browse, repeat and shuffle' : 'Repeat and shuffle'}</summary>
-      <div class="row small" style="margin-top:.5rem">
-        ${p.repeat != null ? `<label class="row">Repeat ${selectHTML('pl-repeat', p.path, p.repeat, ['off', 'singletrack', 'alltracks', 'group'])}</label>` : ''}
-        ${p.shuffle != null ? `<label class="row">Shuffle ${selectHTML('pl-shuffle', p.path, p.shuffle, ['off', 'alltracks', 'group'])}</label>` : ''}
-      </div>
-      ${p.browsable ? browserHTML(p) : ''}
+      <summary>Browse</summary>
+      ${browserHTML(p)}
     </details>` : ''}
   </div>`;
 }
@@ -642,11 +634,12 @@ function localPlayerCard(s) {
     <div class="head"><span class="pl-who">This board's player · what a car or speaker sees</span>
       ${pill(s.enabled ? s.status : 'off', playing ? 'good' : s.status === 'paused' ? 'warn' : '')}</div>
     <div class="pl-title">${esc(t.Title || 'Nothing playing')}</div>
-    <div class="small">${esc([t.Album, num].filter(Boolean).join(' · '))}</div>
+    <div class="small">${esc([t.Artist, t.Album, num].filter(Boolean).join(' · '))}</div>
     <div class="small muted">${s.enabled ? (reg ? 'Offered on ' + esc(reg) : 'Waiting for BlueZ') : 'Not offered to devices'}${s.sink ? ' · plays to ' + esc(s.sink) : ''}</div>
     ${s.error ? `<div class="small bad">${esc(s.error)}</div>` : ''}
     <div class="pl-controls">
       ${btn('previous', 'Previous')}${btn('play', 'Play')}${btn('pause', 'Pause')}${btn('next', 'Next')}${btn('stop', 'Stop')}
+      ${s.repeat != null ? modeButtons('pl-btn lp-mode', boardRepeat(s.repeat), !!s.shuffle) : ''}
       <span class="spacer"></span>
       <label class="row small"><input type="checkbox" id="lp-enabled"${s.enabled ? ' checked' : ''}> Offer it</label>
     </div>
@@ -859,6 +852,11 @@ function setupAudio() {
     if (!b) return;
     const id = b.dataset.id != null ? Number(b.dataset.id) : null;
     if (b.classList.contains('lp-a')) localPlayerPost({action: b.dataset.a});
+    else if (b.classList.contains('lp-mode')) {
+      const s = au.local;
+      put('/media/local-player', b.dataset.mode === 'repeat' ? {repeat: boardRepeatValue(nextRepeat(boardRepeat(s.repeat)))} : {shuffle: !s.shuffle})
+        .then(n => { au.local = n; setHTML(lp, localPlayerCard(n)); }).catch(fail);
+    }
     else if (b.classList.contains('lp-play')) localPlayerPost({play: id});
     else if (b.classList.contains('lp-add')) localPlayerPost({enqueue: id});
     else if (b.classList.contains('lp-open')) { au.lpFolder = id; setHTML(lp, localPlayerCard(au.local)); }
@@ -875,14 +873,16 @@ function setupAudio() {
   pl.addEventListener('toggle', e => {
     if (e.target.classList.contains('pl-more')) au.plOpen[e.target.dataset.path] = e.target.open;
   }, true);
-  pl.onchange = e => {
-    volume(e);
-    const s = e.target.closest('select[data-path]');
-    if (s) put('/media/players', {path: s.dataset.path, [s.classList.contains('pl-repeat') ? 'repeat' : 'shuffle']: s.value}).catch(fail);
-  };
+  pl.onchange = volume;
   pl.onclick = e => {
     const b = e.target.closest('.pl-btn');
-    if (b && b.dataset.a !== 'fast-forward' && b.dataset.a !== 'rewind') playerAction(b.dataset.path, b.dataset.a);
+    const p = b && b.dataset.mode && au.media && au.media.players.find(x => x.path === b.dataset.path);
+    if (p) {
+      put('/media/players', Object.assign({path: p.path}, b.dataset.mode === 'repeat'
+        ? {repeat: btRepeatValue(nextRepeat(btRepeat(p.repeat)))} : {shuffle: p.shuffle === 'off' ? 'alltracks' : 'off'})).catch(fail);
+    } else if (b && b.dataset.a && b.dataset.a !== 'fast-forward' && b.dataset.a !== 'rewind') {
+      playerAction(b.dataset.path, b.dataset.a);
+    }
     const ls = e.target.closest('.pl-listen');
     if (ls) listenToDevice(ls.dataset.address);
     const nav = e.target.closest('.pl-nav, .pl-open');

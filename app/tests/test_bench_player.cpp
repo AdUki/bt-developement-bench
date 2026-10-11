@@ -108,19 +108,34 @@ void test_stream_track() {
   const json radio{{"source", {{"type", "url"}, {"title", "Radio FM"}, {"playlist", json::array({{{"url", "u"}, {"title", ""}}})}}},
                    {"meta", {{"name", "FM"}, {"title", "Artist - Song"}}}, {"track", 0}};
   json md = stream_track(radio);
-  CHECK_EQ(md.value("Title", ""), std::string("Artist - Song"));
+  CHECK_EQ(md.value("Title", ""), std::string("Song"));
+  CHECK_EQ(md.value("Artist", ""), std::string("Artist"));
   CHECK_EQ(md.value("Album", ""), std::string("Radio FM"));
   CHECK(!md.contains("Number"));
-  const json folder{{"source", {{"type", "url"}, {"title", "Album"}, {"playlist", json::array({{{"title", "One"}}, {{"title", "Two"}}})}}},
-                    {"track", 1}};
+  CHECK(!md.contains("Duration"));
+  // A title without the " - " is all title.
+  json plain = radio;
+  plain["meta"]["title"] = "Jingle-Time";
+  CHECK_EQ(stream_track(plain).value("Title", ""), std::string("Jingle-Time"));
+  CHECK(!stream_track(plain).contains("Artist"));
+  // A media server's folder: each track as the server described it; the stream's title is the
+  // first track's ("One and 1 more" from the console), never the album.
+  const json folder{{"source", {{"type", "url"}, {"title", "One"},
+                                {"playlist", json::array({{{"title", "One"}},
+                                                          {{"title", "Two"}, {"artist", "Band"}, {"album", "LP"}, {"duration_ms", 183000}}})}}},
+                    {"label", "One and 1 more"}, {"track", 1}};
   md = stream_track(folder);
   CHECK_EQ(md.value("Title", ""), std::string("Two"));
+  CHECK_EQ(md.value("Artist", ""), std::string("Band"));
+  CHECK_EQ(md.value("Album", ""), std::string("LP"));
+  CHECK_EQ(md.value("Duration", 0u), 183000u);
   CHECK_EQ(md.value("Number", 0u), 2u);
   CHECK_EQ(md.value("NumberOfTracks", 0u), 2u);
   // A sweep's label keeps its own arrow; only where it goes is cut.
   md = stream_track(json{{"source", {{"type", "sweep"}}}, {"label", "sweep 20 Hz → 20 kHz → bluez_output.x"}});
   CHECK_EQ(md.value("Title", ""), std::string("Sweep 20 Hz → 20 kHz"));
-  CHECK_EQ(stream_track(json{{"sink", nullptr}}).value("Artist", ""), std::string("btbench"));
+  // btbench is the player's name, never a track's artist.
+  CHECK(!stream_track(json{{"sink", nullptr}}).contains("Artist"));
 }
 
 void test_stream_to_bluetooth() {

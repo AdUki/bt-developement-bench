@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -44,9 +45,36 @@ struct Tools {
   nlohmann::json to_json() const;
 };
 
+// A track of a URL stream's playlist. What a media server said about it besides its URL rides
+// along for the remotes (the board's player tells AVRCP the artist, album and length).
 struct PlaylistItem {
   std::string url;
   std::string title;
+  std::string artist, album;
+  uint32_t duration_ms = 0;  // 0: unknown
+};
+
+// The order a URL stream's playlist plays in: as listed, or shuffled (each track once, the one
+// playing first); and what comes next at a track's end or on next/previous, with repeat off, of
+// the one track, or of all. Pure: the pump asks it, the tests drive it with a fixed seed.
+class PlayOrder {
+ public:
+  explicit PlayOrder(uint32_t seed = 1) : rng_(seed) {}
+  // Starts over with `n` tracks, `current` playing.
+  void reset(int n, int current, bool shuffle);
+  // Tracks appended up to `n`: at the end as listed, at random places after the current shuffled.
+  void grow(int n, bool shuffle);
+  // The track after the current one, made current: at its end (`asked` false) or on next. -1 at
+  // the end of the list with repeat off (on next: the current track again).
+  int next(const std::string& repeat, bool asked, bool shuffle);
+  int previous(const std::string& repeat);
+  void go(int track);  // a track picked by its number
+  const std::vector<int>& order() const { return order_; }
+
+ private:
+  std::vector<int> order_;
+  size_t at_ = 0;
+  std::mt19937 rng_;
 };
 
 struct SourceSpec {
@@ -66,6 +94,8 @@ struct SourceSpec {
   // url: the tracks to play one after another (UPnP files, a list of URLs); the first is `url`.
   // One item for a radio. It can grow while the stream runs (PUT {"enqueue": [...]}).
   std::vector<PlaylistItem> playlist;
+  std::string repeat_mode = "off";  // off | track | all ("repeat" in the JSON; a sweep's is a bool)
+  bool shuffle = false;
   // capture: an endpoint id (GET /api/audio/endpoints), "" for PipeWire's default source
   std::string backend = "pipewire";  // pipewire | alsa
   std::string target;
@@ -124,7 +154,8 @@ class AudioEngine {
   nlohmann::json list() const;
   nlohmann::json get(int id) const;  // null when there is no such stream
   // PUT: gain_db at any time; a tone's freq/freq_right/level_db and a noise's level_db live; for a
-  // URL stream, its playlist: {"next": true}, {"previous": true}, {"track": n}, {"enqueue": [...]}.
+  // URL stream, its playlist: {"next": true}, {"previous": true}, {"track": n}, {"enqueue": [...]},
+  // {"repeat": "off|track|all"}, {"shuffle": bool}.
   bool update(int id, const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
   bool remove(int id);  // stops it if it runs, and forgets it
   void stop_all();

@@ -148,14 +148,93 @@ namespace {
 
 constexpr size_t kMaxPlaylist = 500;
 
-PlaylistItem playlist_item(const json& it) {
-  if (!it.is_object()) throw std::invalid_argument("a playlist item is {url, title}");
-  PlaylistItem p{trim(it.value("url", std::string{})), it.value("title", std::string{}).substr(0, 120)};
-  if (!url_ok(p.url)) throw std::invalid_argument("a playlist url must be an http:// or https:// URL");
+PlaylistItem titled(const std::string& url, const std::string& title) {
+  PlaylistItem p;
+  p.url = url;
+  p.title = title;
   return p;
 }
 
+PlaylistItem playlist_item(const json& it) {
+  if (!it.is_object()) throw std::invalid_argument("a playlist item is {url, title, artist, album, duration_ms}");
+  PlaylistItem p = titled(trim(str(it, "url", "")), str(it, "title", "").substr(0, 120));
+  if (!url_ok(p.url)) throw std::invalid_argument("a playlist url must be an http:// or https:// URL");
+  p.artist = str(it, "artist", "").substr(0, 120);
+  p.album = str(it, "album", "").substr(0, 120);
+  // Up to a day: a media server's length of a recording, never a radio's (no end).
+  p.duration_ms = static_cast<uint32_t>(std::clamp(num(it, "duration_ms", 0), 0.0, 86400000.0));
+  return p;
+}
+
+json playlist_item_json(const PlaylistItem& it) {
+  return json{{"url", it.url}, {"title", it.title}, {"artist", it.artist}, {"album", it.album},
+              {"duration_ms", it.duration_ms ? json(it.duration_ms) : json(nullptr)}};
+}
+
+std::string repeat_mode(const json& j, const std::string& def) {
+  const std::string r = str(j, "repeat", def);
+  if (r != "off" && r != "track" && r != "all") throw std::invalid_argument("repeat is off, track or all");
+  return r;
+}
+
 }  // namespace
+
+// ---- the play order ---------------------------------------------------------------------------
+
+void PlayOrder::reset(int n, int current, bool shuffle) {
+  order_.clear();
+  for (int i = 0; i < n; ++i) order_.push_back(i);
+  at_ = 0;
+  if (n <= 0) return;
+  current = std::clamp(current, 0, n - 1);
+  if (shuffle) {
+    // The one playing stays first; the rest follow in a random order.
+    std::swap(order_[0], order_[static_cast<size_t>(current)]);
+    std::shuffle(order_.begin() + 1, order_.end(), rng_);
+  } else {
+    at_ = static_cast<size_t>(current);
+  }
+}
+
+void PlayOrder::grow(int n, bool shuffle) {
+  for (int i = static_cast<int>(order_.size()); i < n; ++i) {
+    if (!shuffle || at_ + 1 >= order_.size()) {
+      order_.push_back(i);
+    } else {
+      std::uniform_int_distribution<size_t> d(at_ + 1, order_.size());
+      order_.insert(order_.begin() + static_cast<std::ptrdiff_t>(d(rng_)), i);
+    }
+  }
+}
+
+int PlayOrder::next(const std::string& repeat, bool asked, bool shuffle) {
+  if (order_.empty()) return -1;
+  if (!asked && repeat == "track") return order_[at_];
+  if (at_ + 1 < order_.size()) return order_[++at_];
+  if (repeat == "all") {
+    // Round again; shuffled, in a new order that does not start with the track just played.
+    const int last = order_[at_];
+    if (shuffle && order_.size() > 1) {
+      std::shuffle(order_.begin(), order_.end(), rng_);
+      if (order_[0] == last) std::swap(order_[0], order_[order_.size() - 1]);
+    }
+    at_ = 0;
+    return order_[0];
+  }
+  return asked ? order_[at_] : -1;
+}
+
+int PlayOrder::previous(const std::string& repeat) {
+  if (order_.empty()) return -1;
+  if (at_ > 0) return order_[--at_];
+  if (repeat == "all") at_ = order_.size() - 1;
+  return order_[at_];
+}
+
+void PlayOrder::go(int track) {
+  const auto it = std::find(order_.begin(), order_.end(), track);
+  if (it != order_.end()) at_ = static_cast<size_t>(it - order_.begin());
+}
 
 bool stream_spec_from_json(const json& j, StreamSpec* out, std::string* err) {
   try {
@@ -207,11 +286,16 @@ bool stream_spec_from_json(const json& j, StreamSpec* out, std::string* err) {
           throw std::invalid_argument("playlist is an array of 1.." + std::to_string(kMaxPlaylist) + " {url, title}");
         for (const json& it : sj["playlist"]) src.playlist.push_back(playlist_item(it));
         if (src.url.empty()) src.url = src.playlist.front().url;
-        else if (src.playlist.front().url != src.url) src.playlist.insert(src.playlist.begin(), PlaylistItem{src.url, src.title});
+        else if (src.playlist.front().url != src.url) src.playlist.insert(src.playlist.begin(), titled(src.url, src.title));
         if (src.title.empty()) src.title = src.playlist.front().title;
       }
       if (!url_ok(src.url)) throw std::invalid_argument("url must be an http:// or https:// URL");
-      if (src.playlist.empty()) src.playlist.push_back(PlaylistItem{src.url, src.title});
+      if (src.playlist.empty()) src.playlist.push_back(titled(src.url, src.title));
+      src.repeat_mode = repeat_mode(sj, "off");
+      if (sj.contains("shuffle")) {
+        if (!sj["shuffle"].is_boolean()) throw std::invalid_argument("shuffle is true or false");
+        src.shuffle = sj["shuffle"].get<bool>();
+      }
     } else if (src.type == "capture") {
       src.backend = str(sj, "backend", "pipewire");
       if (src.backend != "pipewire" && src.backend != "alsa") throw std::invalid_argument("source backend is pipewire or alsa");
@@ -258,8 +342,9 @@ json stream_spec_json(const StreamSpec& s) {
     sj.update(json{{"color", src.color}, {"level_db", src.level_db}});
   } else if (src.type == "url") {
     json pl = json::array();
-    for (const PlaylistItem& it : src.playlist) pl.push_back(json{{"url", it.url}, {"title", it.title}});
-    sj.update(json{{"url", src.url}, {"decoder", src.decoder}, {"title", src.title}, {"playlist", pl}});
+    for (const PlaylistItem& it : src.playlist) pl.push_back(playlist_item_json(it));
+    sj.update(json{{"url", src.url}, {"decoder", src.decoder}, {"title", src.title}, {"playlist", pl},
+                   {"repeat", src.repeat_mode}, {"shuffle", src.shuffle}});
   } else if (src.type == "capture") {
     sj.update(json{{"backend", src.backend}, {"target", src.target}, {"monitor", src.monitor},
                    {"title", src.title}});
@@ -561,6 +646,7 @@ struct AudioEngine::Stream {
   uint64_t frames = 0;
   bool params_dirty = false;
   int track = 0;     // a URL stream's playlist position
+  PlayOrder order{static_cast<uint32_t>(std::random_device{}())};  // which track follows which
   uint64_t track_frames = 0;  // frames played of the current track
   bool paused = false;  // a URL stream: silence goes out, and the decoder waits on its pipe
   int jump_to = -1;  // a track asked for (next, previous, a row), taken by the pump
@@ -872,7 +958,7 @@ void AudioEngine::Stream::run() {
           int next;
           {
             std::lock_guard<std::mutex> lk(m);
-            next = track + 1;
+            next = order.next(spec.source.repeat_mode, false, spec.source.shuffle);
           }
           if (!start_track(next, &fail)) ended = true;
         } else {
@@ -999,6 +1085,7 @@ bool AudioEngine::create(const json& body, json* out, std::string* err, int* sta
     s = std::make_shared<Stream>();
     s->id = next_id_++;
     s->spec = spec;
+    s->order.reset(static_cast<int>(spec.source.playlist.size()), 0, spec.source.shuffle);
     s->label = spec.label.empty() ? default_label(spec) : spec.label;
     s->node_name = "btbench-stream-" + std::to_string(s->id);
     s->tools = &tools_;
@@ -1056,16 +1143,31 @@ bool AudioEngine::update(int id, const json& body, json* out, std::string* err, 
         sp.source.playlist.push_back(playlist_item(it));
       }
     }
+    if (body.contains("repeat") || body.contains("shuffle")) {
+      if (sp.source.type != "url") throw std::invalid_argument("only a URL stream repeats and shuffles its playlist");
+      sp.source.repeat_mode = repeat_mode(body, sp.source.repeat_mode);
+      if (body.contains("shuffle")) {
+        if (!body["shuffle"].is_boolean()) throw std::invalid_argument("shuffle is true or false");
+        sp.source.shuffle = body["shuffle"].get<bool>();
+      }
+    }
     if (body.contains("paused")) {
       if (sp.source.type != "url") throw std::invalid_argument("only a URL stream pauses");
       s->paused = body["paused"].get<bool>();
     }
     const int n = static_cast<int>(sp.source.playlist.size());
-    if (body.value("next", false)) s->jump_to = std::min(s->track + 1, n - 1);
-    if (body.value("previous", false)) s->jump_to = std::max(s->track - 1, 0);
+    if (sp.source.type == "url") {
+      // Shuffle switched: a new order from the track playing. Tracks enqueued: into the order.
+      if (sp.source.shuffle != s->spec.source.shuffle) s->order.reset(n, s->track, sp.source.shuffle);
+      else s->order.grow(n, sp.source.shuffle);
+    }
+    if (body.value("next", false)) s->jump_to = s->order.next(sp.source.repeat_mode, true, sp.source.shuffle);
+    if (body.value("previous", false)) s->jump_to = s->order.previous(sp.source.repeat_mode);
     if (body.contains("track")) {
+      if (!body["track"].is_number_integer()) throw std::invalid_argument("track is a number");
       const int t = body["track"].get<int>();
       if (t < 0 || t >= n) throw std::invalid_argument("track is 0.." + std::to_string(n - 1));
+      s->order.go(t);
       s->jump_to = t;
     }
     if (body.contains("source")) {

@@ -87,6 +87,30 @@ const fmtUptime = s => {
 };
 const pill = (text, cls) => `<span class="pill ${cls || ''}">${esc(text)}</span>`;
 
+// Repeat and shuffle as two toggle buttons, for every player (a phone's over AVRCP, the board's
+// own, a playlist the board plays). `repeat` is off | all | one, `shuffle` a bool, either null when
+// the player has no such setting (no button then). `cls` is the transport row's button class;
+// `attrs` what the row's click handler needs to tell the players apart. A press sets the next
+// value: repeat goes off → all → one → off.
+const MODE_SVG = {
+  repeat: 'M17 2l3 3-3 3M3 11V9a4 4 0 014-4h13M7 22l-3-3 3-3M21 13v2a4 4 0 01-4 4H4',
+  shuffle: 'M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5',
+};
+const nextRepeat = r => r === 'off' ? 'all' : r === 'all' ? 'one' : 'off';
+function modeButtons(cls, repeat, shuffle, attrs) {
+  const b = (mode, on, label, extra) => `<button class="${cls} mode${on ? ' on' : ''}" data-mode="${mode}" ${attrs || ''}
+    title="${label}" aria-label="${label}" aria-pressed="${on}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${MODE_SVG[mode]}"/></svg>${extra || ''}</button>`;
+  return (repeat != null ? b('repeat', repeat !== 'off', repeat === 'one' ? 'Repeat this track' : repeat === 'all' ? 'Repeat all' : 'Repeat off',
+    repeat === 'one' ? '<b class="mode-one">1</b>' : '') : '') +
+    (shuffle != null ? b('shuffle', shuffle, shuffle ? 'Shuffle on' : 'Shuffle off') : '');
+}
+// BlueZ's MediaPlayer1 values (a phone's player) ↔ the buttons'.
+const btRepeat = v => v == null ? null : v === 'singletrack' ? 'one' : v === 'off' ? 'off' : 'all';
+const btRepeatValue = r => r === 'one' ? 'singletrack' : r === 'all' ? 'alltracks' : 'off';
+// The board's (a stream's playlist, its own player): off | track | all.
+const boardRepeat = v => v === 'track' ? 'one' : v === 'all' ? 'all' : 'off';
+const boardRepeatValue = r => r === 'one' ? 'track' : r;
+
 // Two clicks for anything that cannot be undone from here (forget a device, delete a capture):
 // the first arms the button for three seconds.
 const armed = {};
@@ -137,7 +161,9 @@ function registerTab(name, def) { tabs[name] = def; }
 // panes of one tab costs the board nothing, while a tab of its own (packets) starts and stops its
 // stream with it. The hash names the view, "#audio/play".
 const NAV = [
-  {id: 'listen', label: 'Listen', icon: 'M12 21a9 9 0 100-18 9 9 0 000 18zM10 8.5v7l6-3.5z', views: [{tab: 'player', label: 'Now playing'}]},
+  {id: 'listen', label: 'Listen', icon: 'M12 21a9 9 0 100-18 9 9 0 000 18zM10 8.5v7l6-3.5z', views: [
+    {tab: 'player', pane: 'now', label: 'Now playing'},
+    {tab: 'player', pane: 'library', label: 'Library'}]},
   {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [
     {tab: 'devices', label: 'Devices'},
     {tab: 'hid', label: 'Input devices'}]},

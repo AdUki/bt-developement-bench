@@ -2,6 +2,7 @@
 // framing, what a stream body may say and the command lines it becomes, the endpoint lists made
 // from pw-dump and from BlueZ's transports, and the UPnP parsers. The pumping itself (processes,
 // pipes) is exercised with `make run` against the desktop's PipeWire and a radio stream.
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -177,6 +178,17 @@ void test_specs() {
   CHECK_EQ(back["source"]["target"].get<std::string>(), std::string("bluez_input.5C_E9_1E_22_40_01.2"));
   CHECK_EQ(back["rate"].get<int>(), 44100);
 
+  // A media server's track carries its artist, album and length; repeat and shuffle round-trip.
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","repeat":"all","shuffle":true,"playlist":[
+      {"url":"http://u/1.mp3","title":"One","artist":"Band","album":"LP","duration_ms":183000}]}})"), &s, &err));
+  CHECK_EQ(s.source.playlist[0].artist, std::string("Band"));
+  CHECK_EQ(s.source.playlist[0].duration_ms, 183000u);
+  CHECK_EQ(stream_spec_json(s)["source"]["repeat"].get<std::string>(), std::string("all"));
+  CHECK(stream_spec_json(s)["source"]["shuffle"].get<bool>());
+  CHECK_EQ(stream_spec_json(s)["source"]["playlist"][0]["album"].get<std::string>(), std::string("LP"));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"http://u","repeat":"forever"}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"http://u","shuffle":"yes"}})"), &s, &err));
+
   // A URL stream's playlist: its first item is the URL, given or not; a lone URL is a playlist of one.
   CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"http://r/radio","title":"Radio"}})"), &s, &err));
   CHECK_EQ(s.source.playlist.size(), size_t(1));
@@ -316,6 +328,42 @@ void test_pw_dump_parse() {
   CHECK(parse_pw_dump("").empty());
 }
 
+// The order a playlist plays in, with repeat and shuffle.
+void test_play_order() {
+  PlayOrder o(7);
+  o.reset(3, 0, false);
+  CHECK_EQ(o.next("off", false, false), 1);
+  CHECK_EQ(o.next("off", false, false), 2);
+  CHECK_EQ(o.next("off", false, false), -1);   // the end of the list
+  CHECK_EQ(o.next("off", true, false), 2);     // next on the last track: it again
+  CHECK_EQ(o.next("track", false, false), 2);  // repeat one: at its end, the same track
+  CHECK_EQ(o.next("all", false, false), 0);    // repeat all: round again
+  CHECK_EQ(o.previous("off"), 0);              // previous on the first: it again
+  CHECK_EQ(o.previous("all"), 2);              // ... or, repeating all, the last
+  o.go(1);
+  CHECK_EQ(o.next("off", true, false), 2);
+  o.grow(4, false);
+  CHECK_EQ(o.next("off", false, false), 3);
+
+  // Shuffled: the one playing first, then every other track once, then the end.
+  o.reset(6, 4, true);
+  CHECK_EQ(o.order().front(), 4);
+  std::vector<int> seen{4};
+  for (int t; (t = o.next("off", false, true)) >= 0;) seen.push_back(t);
+  std::sort(seen.begin(), seen.end());
+  CHECK(seen == (std::vector<int>{0, 1, 2, 3, 4, 5}));
+  // Repeating all, a new round does not start with the track that just ended.
+  const int last = o.order().back();
+  CHECK(o.next("all", false, true) != last);
+  CHECK_EQ(o.order().size(), size_t(6));
+  // A track enqueued while shuffled comes later, not before the one playing.
+  o.reset(2, 1, true);
+  o.grow(3, true);
+  CHECK_EQ(o.order().front(), 1);
+  CHECK_EQ(o.order().size(), size_t(3));
+  CHECK(PlayOrder().next("off", true, false) == -1);  // nothing to play
+}
+
 void test_cards() {
   const json dump = json::parse(R"J([
     {"id": 58, "type": "PipeWire:Interface:Device", "info": {
@@ -445,6 +493,7 @@ int main() {
   test_argv();
   test_endpoints();
   test_pw_dump_parse();
+  test_play_order();
   test_cards();
   test_xml();
   test_upnp();

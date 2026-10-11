@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <random>
 #include <set>
 #include <string>
 #include <thread>
@@ -108,6 +109,10 @@ class BenchPlayer : public BusUser {
   // playing (or queueing) a library entry by its id. False with *err for an unknown one.
   bool action(const std::string& what, std::string* err);
   bool play_item(int id, bool enqueue, std::string* err);
+  // Repeat (off | track | all) and shuffle, as a remote sets them (MPRIS LoopStatus and Shuffle):
+  // of the stream it tells about when there is one, else of its own now playing list. "" or a
+  // null `shuffle` leaves that one as it is.
+  bool set_settings(const std::string& repeat, const bool* shuffle, std::string* err);
 
   // BusUser
   void bus_opened(sd_bus* bus) override;
@@ -124,6 +129,7 @@ class BenchPlayer : public BusUser {
   int on_item(sd_bus_message* m, const std::string& method, sd_bus_error* e);
   int get_prop(sd_bus_message* reply, const std::string& iface, const std::string& prop,
                const std::string& path, sd_bus_error* e);
+  int set_prop(sd_bus_message* value, const std::string& prop, sd_bus_error* e);
   bool item_exists(const std::string& path, int* id) const;
   size_t item_count() const;
 
@@ -131,7 +137,7 @@ class BenchPlayer : public BusUser {
   enum class Status { stopped, playing, paused };
   struct Cmd {
     enum Kind { play, stop, pause, poll, mirror } kind;
-    nlohmann::json body;  // mirror: {op: pause|play|stop|next|previous}
+    nlohmann::json body;  // mirror: {op: pause|play|stop|next|previous|settings, repeat, shuffle}
   };
 
   void load_state();
@@ -144,7 +150,14 @@ class BenchPlayer : public BusUser {
   void append_item_props(sd_bus_message* m, const LibItem& it) const;
   void register_on(sd_bus* bus, const std::string& adapter);
   void unregister_all(sd_bus* bus);
-  void changed(bool track, bool status, bool playlist);
+  void changed(bool track, bool status, bool playlist, bool settings = false);
+  // Where the track is now, as measured by a poll (the stream's track_seconds); m_ held.
+  // True when the bus loop has a Seeked to send (the caller wakes it, with m_ released).
+  bool note_position_locked(int64_t ms);
+  // The now playing list's next position: at a track's end (`asked` false) or on next, with
+  // repeat and shuffle; -1 at the end. m_ held.
+  int next_pos_locked(bool asked);
+  int64_t position_locked(int64_t now_ms) const;
   void emit_changes(sd_bus* bus);
   void queue_cmd(Cmd::Kind k);
   void run_worker();
@@ -174,6 +187,21 @@ class BenchPlayer : public BusUser {
   unsigned mirror_polls_ = 0;
   std::string mirror_default_bt_;  // PipeWire's default sink when it is a Bluetooth one
   int mirror_default_for_ = 0;     // the stream it was asked for
+  // Repeat and shuffle: its own (for its now playing list), and the told stream's (from its
+  // spec, read at each poll).
+  std::string repeat_ = "off";
+  bool shuffle_ = false;
+  std::mt19937 rng_{std::random_device{}()};
+  std::string mirror_repeat_ = "off";
+  bool mirror_shuffle_ = false;
+  bool mirror_url_ = false;  // the told stream is a URL stream: it has a playlist to repeat
+  // Where the track is: pos_ms_ measured at pos_at_ms_ (steady clock), moving while it plays.
+  // BlueZ keeps its own count for the remote (a new track is 0, a clock runs while Playing):
+  // told_* is that count, so a Seeked goes out only when the two drift apart (a stream joined
+  // midway, a pause the remote missed, a stall).
+  int64_t pos_ms_ = 0, pos_at_ms_ = 0;
+  int64_t told_ms_ = 0, told_at_ms_ = 0;
+  bool told_playing_ = false;
   std::string sink_;        // where it plays
   unsigned sink_polls_ = 0;  // polls since it last looked for a Bluetooth sink
   std::string icy_title_;   // a radio's current title
@@ -181,6 +209,7 @@ class BenchPlayer : public BusUser {
   std::vector<int> search_;
   int folder_ = -1;  // MediaFolder1's current folder (the root, an item, or kNowPlaying/kSearch)
   bool pending_track_ = false, pending_status_ = false, pending_playlist_ = false;
+  bool pending_settings_ = false, pending_seek_ = false;
 
   // Bus thread only.
   sd_bus* bus_ = nullptr;

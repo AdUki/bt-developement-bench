@@ -463,11 +463,20 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     send_json(res, d.player.state());
   });
 
-  // Body: {"enabled": true|false}: whether the player is registered with BlueZ at all.
+  // Body: any of {"enabled": bool} (whether the player is registered with BlueZ at all),
+  // {"repeat": "off|track|all"}, {"shuffle": bool} (of the stream it tells about, else its own).
   svr.Put("/api/media/local-player", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
-    if (!j.contains("enabled") || !j["enabled"].is_boolean()) return send_error(res, 400, "body is {\"enabled\": bool}");
+    const bool en = j.contains("enabled"), rep = j.contains("repeat"), shf = j.contains("shuffle");
+    if ((!en && !rep && !shf) || (en && !j["enabled"].is_boolean()) || (rep && !j["repeat"].is_string()) ||
+        (shf && !j["shuffle"].is_boolean()))
+      return send_error(res, 400, "body has any of {\"enabled\": bool, \"repeat\": \"off|track|all\", \"shuffle\": bool}");
     std::string err;
-    if (!d.player.set_enabled(j["enabled"].get<bool>(), &err)) return send_error(res, 500, err);
+    if (en && !d.player.set_enabled(j["enabled"].get<bool>(), &err)) return send_error(res, 500, err);
+    if (rep || shf) {
+      const bool on = shf && j["shuffle"].get<bool>();
+      if (!d.player.set_settings(rep ? j["repeat"].get<std::string>() : "", shf ? &on : nullptr, &err))
+        return send_error(res, 400, err);
+    }
     send_json(res, d.player.state());
   }));
 

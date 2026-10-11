@@ -115,13 +115,16 @@ function renderNowPlaying() {
     const item = list[s.track] || {};
     playing = !s.paused && s.state === 'running';
     title = s.meta.title || item.title || s.source.title || 'Internet radio';
-    sub = list.length > 1 ? `Track ${s.track + 1} of ${list.length}` : (s.meta.name || s.source.title || '');
+    sub = list.length > 1 ? [item.artist, item.album, `track ${s.track + 1} of ${list.length}`].filter(Boolean).join(' — ')
+      : (s.meta.name || s.source.title || '');
     sub2 = s.sink ? 'Playing on ' + outLabel(s.sink.target) : 'Playing in this browser';
     pos = (s.track_seconds || 0) * 1000;
-    dur = (item.duration_s || 0) * 1000;
+    dur = item.duration_ms || (item.duration_s || 0) * 1000;
     if (item.art) artSrc = item.art;
     else art = svg(list.length > 1 ? PL_SVG.note : PL_SVG.radio, 'ph');
-    can = {prev: s.track > 0, next: s.track + 1 < list.length, play: true, stop: true};
+    // Repeating all, the first track's previous is the last, and the last one's next the first.
+    const round = s.source.repeat === 'all' || s.source.shuffle;
+    can = {prev: round ? list.length > 1 : s.track > 0, next: round ? list.length > 1 : s.track + 1 < list.length, play: true, stop: true};
   }
   // An image: loading until it arrived (or failed: then the note stays).
   if (artSrc) {
@@ -139,10 +142,19 @@ function renderNowPlaying() {
   // Play and pause both, all the buttons alike, and the state said in words: a phone reports its
   // status late or not at all, and buttons that change with it then offer the wrong one.
   const status = c.kind === 'phone' ? (c.p.status || 'unknown') : c.kind === 'board' ? (c.s.paused ? 'paused' : c.s.state === 'running' ? 'playing' : c.s.state) : '';
-  setHTML($('np-ctl'), btn('previous', PL_SVG.previous, can.prev) +
+  // Two rows, so the buttons keep their width on a phone: the transport, then repeat, shuffle and
+  // the state.
+  setHTML($('np-ctl'), '<div class="np-row">' + btn('previous', PL_SVG.previous, can.prev) +
     btn('play', PL_SVG.play, can.play) + btn('pause', PL_SVG.pause, can.play) +
-    btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop) +
-    (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : ''));
+    btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop) + '</div><div class="np-row">' +
+    (c.kind === 'phone' ? modeButtons('np-btn', btRepeat(c.p.repeat), c.p.shuffle == null ? null : c.p.shuffle !== 'off')
+      : c.kind === 'board' && (c.s.source.playlist || []).length > 1 ? modeButtons('np-btn', boardRepeat(c.s.source.repeat), !!c.s.source.shuffle) : '') +
+    (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : '') + '</div>');
+  // The library page's bar: the track, and play/pause and next, to skip without leaving the list.
+  $('np-mini').hidden = c.kind === 'none';
+  setText($('np-mini-title'), title);
+  setText($('np-mini-sub'), sub || sub2);
+  setHTML($('np-mini-ctl'), btn(playing ? 'pause' : 'play', playing ? PL_SVG.pause : PL_SVG.play, can.play) + btn('next', PL_SVG.next, can.next));
   renderTime(pos, dur);
   renderVolume(c);
   setMediaSession();
@@ -151,6 +163,21 @@ function renderNowPlaying() {
   $('np-out-row').hidden = c.kind === 'phone';
   $('np-hear').hidden = c.kind !== 'phone';
   renderQueue(c);
+}
+
+// Repeat or shuffle pressed: the phone's player's setting, or the board's playlist's.
+function npMode(mode) {
+  const c = current();
+  if (c.kind === 'phone') {
+    const p = c.p;
+    const body = mode === 'repeat' ? {repeat: btRepeatValue(nextRepeat(btRepeat(p.repeat)))} : {shuffle: p.shuffle === 'off' ? 'alltracks' : 'off'};
+    return put('/media/players', Object.assign({path: p.path}, body)).catch(fail);
+  }
+  if (c.kind === 'board') {
+    const src = c.s.source;
+    const body = mode === 'repeat' ? {repeat: boardRepeatValue(nextRepeat(boardRepeat(src.repeat)))} : {shuffle: !src.shuffle};
+    return put(`/audio/streams/${c.s.id}`, body).then(refreshPlayerStreams).catch(fail);
+  }
 }
 
 function renderTime(pos, dur) {
@@ -408,7 +435,7 @@ function upnpFolder(server, id, title, push) {
   api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&count=200`).then(r => {
     pl.libItems = r.containers.map(c => ({kind: 'folder', title: c.title, id: c.id, sub: c.child_count != null ? c.child_count + ' items' : ''}))
       .concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url, art: it.art,
-        sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s})));
+        sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s, artist: it.artist, album: it.album})));
     renderLib();
   }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
 }
@@ -470,20 +497,25 @@ function libClick(i, add) {
   if (it.kind === 'station') return playOnBoard([{url: it.url, title: it.title}]);
   const tracks = pl.libItems.filter(x => x.kind === 'track');
   const from = tracks.indexOf(it);
-  const items = (add ? [it] : tracks.slice(from)).map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s}));
+  const items = (add ? [it] : tracks.slice(from)).map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s,
+    artist: x.artist, album: x.album}));
   // "+" on a track while the board plays: onto the end of its queue.
   const b = boardStream();
   if (add && b) {
     items.forEach(t => { pl.art[t.url] = t; });
-    return put(`/audio/streams/${b.id}`, {enqueue: items.map(t => ({url: t.url, title: t.title}))})
+    return put(`/audio/streams/${b.id}`, {enqueue: items.map(playlistItem)})
       .then(() => toast('Added to the queue')).catch(fail);
   }
   playOnBoard(items);
 }
 
+// A track as the board's playlist keeps it: what the board's player tells a car or speaker over
+// AVRCP (artist, album, length) goes along; the cover stays here (pl.art), by URL.
+const playlistItem = it => ({url: it.url, title: it.title, artist: it.artist || '', album: it.album || '',
+  duration_ms: it.duration_s ? Math.round(it.duration_s * 1000) : null});
+
 // What the board plays from the library: one stream with the tracks as its playlist, to the
-// output chosen. The art and durations a UPnP server gave are kept here by URL (the daemon keeps
-// only the URL and title).
+// output chosen. The art a UPnP server gave is kept here by URL (the daemon does not keep it).
 function playOnBoard(items) {
   items.forEach(it => { pl.art[it.url] = it; });
   const out = $('np-out').value;
@@ -491,7 +523,7 @@ function playOnBoard(items) {
   const sink = listen ? null : out === 'default' ? {type: 'pipewire', target: ''} : {type: out.split(':')[0], target: out.slice(out.indexOf(':') + 1)};
   const old = boardStream();
   const go = () => {
-    return post('/audio/streams', {source: {type: 'url', url: items[0].url, title: items[0].title, playlist: items.map(it => ({url: it.url, title: it.title}))},
+    return post('/audio/streams', {source: {type: 'url', url: items[0].url, title: items[0].title, playlist: items.map(playlistItem)},
       sink, rate: 48000, channels: 2, label: items.length > 1 ? items[0].title + ' and ' + (items.length - 1) + ' more' : items[0].title})
       .then(s => {
         pl.boardId = s.id;
@@ -521,7 +553,7 @@ function decorate(s) {
 
 const outLabel = id => {
   const e = pl.endpoints && pl.endpoints.sinks.find(x => x.id === id);
-  return e ? e.label : id ? id : 'the default output';
+  return e ? (e.address ? devName(e.address) : e.label) : id ? id : 'the default output';
 };
 
 function renderOutputs(ep) {
@@ -531,6 +563,7 @@ function renderOutputs(ep) {
   const kind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
   ep.sinks.forEach(e => opts.push({value: `${kind}:${e.id}`, label: e.address ? `${devName(e.address)} (Bluetooth)` : e.label}));
   fillSelect($('np-out'), opts, idle($('np-out')) ? (lsGet('btbench.pl.out') || 'browser') : null);
+  renderNowPlaying();  // "Playing on …" names the output now that its label is known
 }
 
 function refreshPlayerStreams() {
@@ -554,6 +587,12 @@ function noteFailure() {
 
 function setupPlayer() {
   $('np-ctl').onclick = e => {
+    const b = e.target.closest('[data-np]');
+    if (b && !b.disabled) npAction(b.dataset.np);
+    const m = e.target.closest('[data-mode]');
+    if (m) npMode(m.dataset.mode);
+  };
+  $('np-mini-ctl').onclick = e => {
     const b = e.target.closest('[data-np]');
     if (b && !b.disabled) npAction(b.dataset.np);
   };

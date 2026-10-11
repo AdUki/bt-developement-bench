@@ -357,8 +357,9 @@ board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPl
 
 ```json
 {"enabled": true, "path": "/org/btbench/player", "registered": ["/org/bluez/hci0"], "error": "",
- "status": "playing", "track": {"id": 2, "Title": "Sine 440 Hz", "Artist": "btbench",
+ "status": "playing", "track": {"id": 2, "Title": "Sine 440 Hz", "Artist": "",
  "Album": "Test signals", "Genre": "Test signal", "Number": 2, "NumberOfTracks": 9},
+ "repeat": "off", "shuffle": false, "position_ms": 12400,
  "position": {"index": 1, "count": 9}, "queue": [{"id": 1, "name": "Sine 1 kHz"}, ...],
  "stream": 3, "mirror": null, "sink": "bluez_output.0C_32_3A_D6_C3_44.1",
  "library": [{"id": 0, "parent": null, "name": "Test signals", "type": "folder", "playable": true},
@@ -371,18 +372,28 @@ board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPl
 (`/api/audio/streams/{id}`), `sink` the endpoint it plays into: the Bluetooth sink (PipeWire's
 default sink if that is one, else the first), or PipeWire's default sink when there is none.
 `registered` lists the adapters BlueZ took it on; `error` says why the last play or registration
-failed. `library` is the whole tree, ids are stable while btbenchd runs.
+failed. `library` is the whole tree, ids are stable while btbenchd runs. `position_ms` is how far
+into the track it is (paused time not counted); `repeat` (`off`, `track`, `all`) and `shuffle` are
+the player's MPRIS `LoopStatus` and `Shuffle`, which BlueZ offers the remote as AVRCP's repeat and
+shuffle settings. "btbench" is the player's name (`Identity`), never a track's artist.
+
+BlueZ counts the position for the remote itself: from 0 at each new track, with a clock running
+while the status is Playing. The player sends MPRIS `Seeked` when the track's real position is more
+than 1.5 s from that count (a stream joined midway, a pause the count missed), and a track's
+`Duration` (`mpris:length`) when it has one, which the remote needs for a progress bar.
 
 While the player plays nothing itself, it tells remotes what another stream plays to a Bluetooth
 sink (to one, or to PipeWire's default sink when that is a Bluetooth one; the newest if several):
-`mirror` is that stream's id, `track` its title — a radio's ICY title with the station as `Album`,
-a playlist's item with `Number`/`NumberOfTracks`, a test signal by name — and `status` playing or
-paused. A remote's buttons then act on that stream: pause and play pause a URL stream (they end a
-test signal, which has no pause), stop ends it, next and previous move through its playlist.
+`mirror` is that stream's id, `track` its title — a radio's ICY title (split into `Artist` and
+`Title` at its " - ") with the station as `Album`; a playlist's item with the `Artist`, `Album` and
+`Duration` its playlist entry carries, and `Number`/`NumberOfTracks`; a test signal by name — and
+`status` playing or paused. A remote's buttons then act on that stream: pause and play pause a URL
+stream (they end a test signal, which has no pause), stop ends it, next and previous move through
+its playlist, and repeat and shuffle are the stream's own (`source.repeat`, `source.shuffle`).
 
 | route | body | what |
 |---|---|---|
-| `PUT /api/media/local-player` | `{"enabled": bool}` | offer the player to devices or not (kept in `/data/btbench/player.json`, on by default); answered with the state |
+| `PUT /api/media/local-player` | any of `{"enabled": bool}`, `{"repeat": "off\|track\|all"}`, `{"shuffle": bool}` | offer the player to devices or not (kept in `/data/btbench/player.json`, on by default); repeat and shuffle of the stream it tells about, else of its now playing list (a test signal has none: 400); answered with the state |
 | `POST /api/media/local-player` | `{"action": "play\|pause\|stop\|next\|previous"}` | the controls a remote has; `play` with nothing chosen plays the test signals |
 |  |  | Both answer with the state at once; starting or stopping the stream follows within a second (the next GET shows it) |
 | `POST /api/media/local-player` | `{"play": <id>}` or `{"enqueue": <id>}` | play a library entry (a folder: its tracks; a track: in its folder, so next and previous go through it), or add it to the now playing list |
@@ -430,7 +441,7 @@ there to play into or capture from. At most 4 run at once.
 | `sweep` | `from`, `to` Hz, `seconds`, `log` (default true), `repeat` (default true), `level_db` |
 | `noise` | `color`: `white`, `pink` or `brown`; `level_db` is the RMS (default -20) |
 | `silence` | — |
-| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest), `title` (a name for the label), `playlist`: `[{url, title}, ...]` (up to 500) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]` |
+| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest), `title` (a name for the label), `playlist`: `[{url, title, artist, album, duration_ms}, ...]` (up to 500; all but `url` optional, what a media server said about the track, for the board's player to tell remotes) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]`; `repeat` `off\|track\|all` (default off) and `shuffle` (each track once in a random order, the first first) |
 | `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
 
 `sink` is `null` (listeners only), or `{"type": "pipewire", "target": ""}` (a node name, "" the
@@ -456,13 +467,15 @@ last words: a refused URL, a sink that went away), `stopped`. `level` is the las
 gain. `meta` carries an ICY stream's station name and current title (from the decoder, or —
 when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to. `node` is
 the PipeWire stream's name (`wpctl status`, `pw-top`). A URL stream's `track` is its position in
-`source.playlist` (`meta.title` is that item's title), `track_seconds` how much of it has played;
-the stream ends after the last track.
+`source.playlist` (`meta.title` is that item's title), `track_seconds` how much of it has played
+(paused time not counted); the stream ends after the last track, unless it repeats. With repeat
+`track` a track that ends plays again (next still moves on); with `all` the last is followed by the
+first (shuffled: by a new order) and previous on the first goes to the last.
 
 | route | what |
 |---|---|
 | `GET /api/audio/streams/{id}` | one stream |
-| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title}]}` (appended to the playlist), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits) |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; shuffled, at random places after the current track), `{"repeat": "all"}`, `{"shuffle": true}` (a new order from the current track), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits) |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
 
