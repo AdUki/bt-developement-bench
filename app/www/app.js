@@ -256,12 +256,68 @@ function renderNav() {
   lsSet('btbench.area.' + area.id, here);
 }
 
-// Shows a view by its key ("audio/play", "capture"), keeping the hash in step.
-function go(key) {
+// Shows a view by its key ("audio/play", "capture"), keeping the hash in step. Each view shown is
+// a history entry, so a phone's Back returns to the view before instead of leaving the console;
+// `replace` (the first view, a hash typed by hand) takes the current entry's place.
+function go(key, replace) {
   const [tab, pane] = key.split('/');
-  history.replaceState(null, '', '#' + key);
+  const same = key === location.hash.slice(1);
   showTab(tab, pane);
+  const state = {layer: backLayers.length};
+  if (replace || same) history.replaceState(state, '', '#' + key);
+  else history.pushState(state, '', '#' + key);
 }
+
+const viewNow = () => viewKey({tab: currentTab, pane: panes[currentTab]});
+
+// ---------------------------------------------------------------- the back button
+
+// What opens over a view and Back should close first — a card made full screen, a folder opened in
+// the library — is a layer: one history entry each, {layer: depth}, with the function that closes
+// it. Back pops entries: popstate closes the layers above the entry's depth, then shows the
+// entry's view. A layer the page closes itself (its button, Esc, a breadcrumb) takes its entries
+// back out of the history with backClose, whose own popstate is then ignored.
+const backLayers = [];  // {close}, oldest first
+let backSkip = 0;       // popstates of our own history.go(), not the user's
+
+function backOpen(close) {
+  const layer = {close};
+  backLayers.push(layer);
+  history.pushState({layer: backLayers.length}, '', location.hash);
+  return layer;
+}
+
+// The page closed `layer` itself: it and the layers opened after it leave the stack and the history,
+// without their close functions (the page has already put itself in the state it wants).
+function backClose(layer) {
+  const i = backLayers.indexOf(layer);
+  if (i < 0) return;
+  const n = backLayers.length - i;
+  backLayers.splice(i);
+  backSkip++;
+  history.go(-n);
+}
+
+// The same without touching the history, for a layer closed by going to another view: the view's
+// entry is pushed next, and the layer's entries under it are skipped on the way back (popstate).
+function backForget(layer) {
+  const i = backLayers.indexOf(layer);
+  if (i >= 0) backLayers.splice(i);
+}
+
+window.addEventListener('popstate', e => {
+  if (backSkip) { backSkip--; return; }
+  const depth = (e.state && e.state.layer) || 0;
+  while (backLayers.length > depth) backLayers.pop().close();
+  const key = location.hash.slice(1);
+  if (key && key !== viewNow()) showTab(...key.split('/'));
+  // An entry of a layer forgotten meanwhile (backForget): nothing of it is left to close, so on to
+  // the entry under it.
+  if (depth > backLayers.length) {
+    backSkip++;
+    history.go(backLayers.length - depth);
+  }
+});
 
 function showPane(name, pane) {
   const panel = $(name);
@@ -277,7 +333,7 @@ function showPane(name, pane) {
 function showTab(name, pane) {
   if (!tabs[name] && !$(name)) name = 'player';
   showPane(name, pane);
-  if (fullCard) setFull(fullCard, false);
+  if (fullCard) setFull(fullCard, false, true);
   if (currentTab !== name) {
     const old = tabs[currentTab];
     if (old && old.hide) old.hide();
@@ -295,7 +351,11 @@ function showTab(name, pane) {
   updateFit();
 }
 
-window.addEventListener('hashchange', () => { if (location.hash.length > 1) go(location.hash.slice(1)); });
+// A hash typed or linked by hand (popstate has shown the view already when Back changed it).
+window.addEventListener('hashchange', () => {
+  const key = location.hash.slice(1);
+  if (key && key !== viewNow()) go(key, true);
+});
 
 // ---------------------------------------------------------------- the WebSocket
 
@@ -542,8 +602,16 @@ function updateFit() {
 const FULL_SVG = {on: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5', off: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5'};
 let fullCard = null;
 
-function setFull(card, on) {
-  if (on && fullCard && fullCard !== card) setFull(fullCard, false);
+// Full screen is a layer (Back puts the card back). `leaving`: put back because another view is
+// shown, whose history entry replaces the layer's.
+function setFull(card, on, leaving) {
+  if (on && fullCard && fullCard !== card) setFull(fullCard, false, leaving);
+  if (on && !card._back) card._back = backOpen(() => { card._back = null; setFull(card, false); });
+  if (!on && card._back) {
+    const layer = card._back;
+    card._back = null;
+    if (leaving) backForget(layer); else backClose(layer);
+  }
   card.classList.toggle('is-full', on);
   document.body.classList.toggle('has-full', on);
   fullCard = on ? card : null;
@@ -588,6 +656,6 @@ function startConsole() {
   refreshRequest();
   buildNav();
   const t = lsGet('btbench.tab') || 'player';
-  go(location.hash.slice(1) || (panes[t] ? t + '/' + panes[t] : t));
+  go(location.hash.slice(1) || (panes[t] ? t + '/' + panes[t] : t), true);
   connectWs();
 }

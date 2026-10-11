@@ -401,6 +401,7 @@ function openLib(kind, chosen) {
   pl.libLoading = '';
   pl.lib = kind;
   if (chosen) lsSet('btbench.pl.lib', kind);  // only a tab picked by hand is remembered
+  libDropBack(0);
   pl.libPath = [];
   renderLibTabs();
   if (kind === 'radio') {
@@ -415,6 +416,57 @@ function openLib(kind, chosen) {
   } else if (phone) {
     phoneFolder(phone, phone.path + '/Filesystem', 'Files');
   }
+}
+
+// ---- Back in the library: each folder opened is a layer (app.js backOpen), and Back shows the
+// list it was opened from as it was left — its rows, the pages already loaded, where it was
+// scrolled to — without asking the server again. The top of a library (a phone's root folder, the
+// list of media servers) is no layer: Back from there goes to the view before.
+
+// The element the library scrolls in: the page on a phone, a card or the pane in fit mode.
+function libScroller() {
+  for (let e = $('np-lib'); e && e !== document.body; e = e.parentElement) {
+    const o = getComputedStyle(e).overflowY;
+    if ((o === 'auto' || o === 'scroll') && e.scrollHeight > e.clientHeight) return e;
+  }
+  return document.scrollingElement;
+}
+
+function libSnapshot() {
+  return {items: pl.libItems, more: pl.libMore, lib: pl.lib, server: pl.upnpServer, scroll: libScroller().scrollTop};
+}
+
+// Back to the list `entry` was opened from (its parent's snapshot).
+function libRestore(entry) {
+  const i = pl.libPath.indexOf(entry);
+  if (i < 0 || pl.lib !== entry.parent.lib) return;
+  const snap = entry.parent;
+  pl.libPath = pl.libPath.slice(0, i);
+  pl.libSeq++;
+  pl.libLoading = '';
+  pl.upnpServer = snap.server;
+  pl.libItems = snap.items;
+  pl.libMore = snap.more && Object.assign({}, snap.more, {seq: pl.libSeq, busy: false});
+  renderCrumbs();
+  renderLib();
+  libScroller().scrollTop = snap.scroll;
+}
+
+// A folder opened from what is shown: remember that, and give Back a way to it.
+function libDescend(entry, layered) {
+  entry.parent = libSnapshot();
+  pl.libPath.push(entry);
+  if (layered) entry.back = backOpen(() => { entry.back = null; libRestore(entry); });
+}
+
+// The library leaves the folders from `from` on by itself (a breadcrumb, another library, a
+// search): their history entries go too.
+function libDropBack(from) {
+  const first = pl.libPath.slice(from).find(c => c.back);
+  if (!first) return;
+  const layer = first.back;
+  pl.libPath.slice(from).forEach(c => { c.back = null; });
+  backClose(layer);
 }
 
 function upnpServers(search) {
@@ -455,7 +507,7 @@ function upnpRows(r, folderArt) {
 function upnpFolder(server, id, title, push, meta) {
   const seq = ++pl.libSeq;
   pl.upnpServer = server;
-  if (push !== false) pl.libPath.push({id, title, meta: meta || null});
+  if (push !== false) libDescend({id, title, meta: meta || null}, true);
   const here = pl.libPath[pl.libPath.length - 1];
   const folderArt = here && here.meta ? here.meta.art : '';
   renderCrumbs();
@@ -531,7 +583,7 @@ const phoneRow = (i, player) => ({kind: i.type === 'folder' ? 'pfolder' : 'ptrac
   sub: i.artist || (i.metadata && i.metadata.artist) || '', path: i.path, playable: i.playable, player});
 
 function phoneFolder(p, folder, title, push) {
-  if (push !== false) pl.libPath.push({id: folder, title});
+  if (push !== false) libDescend({id: folder, title}, pl.libPath.length > 0);
   renderCrumbs();
   setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
   // Only the last folder asked for is shown: browsing waits its turn on the board, and an earlier
@@ -801,6 +853,10 @@ function setupPlayer() {
     if (!a) return;
     e.preventDefault();
     const i = parseInt(a.dataset.crumb, 10);
+    // A folder above this one: shown as it was left, like Back to it (the one shown: loaded again).
+    const below = pl.libPath[i + 1];
+    libDropBack(i + 1);
+    if (below && below.parent) return libRestore(below);
     if (i < 0) { pl.libPath = []; return upnpServers(false); }
     const c = pl.libPath[i];
     pl.libPath = pl.libPath.slice(0, i + 1);
@@ -822,6 +878,7 @@ function setupPlayer() {
     const p = phones().find(x => x.searchable);
     if (!p) return;
     post('/media/players/search', {path: p.path, value: e.target.value}).then(r => {
+      libDropBack(0);
       pl.libPath = [{id: r.folder, title: '“' + e.target.value + '”'}];
       renderCrumbs();
       pl.libItems = (r.items || []).map(i => phoneRow(i, p.path));
@@ -834,8 +891,12 @@ registerTab('player', {
   topics: () => ['media', 'audio.streams'],
   show() {
     // The library opens once the players are known: a browsable phone's is the first tab.
-    api('/media').then(m => { pl.media = m; notePlayers(m.players); renderNowPlaying(); renderLibTabs(); openLib(pl.lib); })
-      .catch(() => { renderLibTabs(); openLib(pl.lib); });
+    // A folder still open from before (Back to this view, or a look at another tab) stays as it was
+    // left, with its Back entries; a phone's only while the phone is still there.
+    const kept = () => pl.libPath.length && pl.libItems.length && (pl.libPath[0].parent || {}).lib === pl.lib &&
+      (pl.lib !== 'phone' || phones().some(x => x.browsable));
+    api('/media').then(m => { pl.media = m; notePlayers(m.players); renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); })
+      .catch(() => { renderLibTabs(); if (!kept()) openLib(pl.lib); });
     api('/bluetooth').then(b => { if (!btState) btState = b; }).catch(() => {});
     api('/audio/endpoints').then(renderOutputs).catch(() => {});
     refreshPlayerStreams();
