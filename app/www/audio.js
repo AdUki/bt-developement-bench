@@ -19,7 +19,7 @@ function refreshAudio() {
   return api('/audio').then(s => { renderAudio(s); setText($('au-msg'), ''); }).catch(e => {
     $('au-restart').disabled = e.status === 503;
     // On a PC the target scripts are not installed; say so plainly rather than as an error.
-    setText($('au-msg'), e.status === 503 ? 'Restarting the stack works on the board only (btbench-audio is not installed on this machine).' : e.message);
+    setText($('au-msg'), e.status === 503 ? 'Restarting PipeWire works on the board only (btbench-audio is not installed on this machine).' : e.message);
   });
 }
 
@@ -33,7 +33,7 @@ function renderEndpoints(ep) {
   const t = ep.tools || {};
   const missing = ['pw-cat', 'mpg123', 'ffmpeg'].filter(k => !t[k]);
   // Without PipeWire the only endpoints are the loopback card's, played to with aplay.
-  setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'no audio stack'}` +
+  setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'PipeWire is not running'}` +
     `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
   // Bluetooth sinks first, by the device's name and codec: with nothing chosen before, the first
   // connected speaker or car is where things play. Listening only is last, not the default.
