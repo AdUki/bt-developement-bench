@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <future>
 #include <set>
 
@@ -84,6 +85,32 @@ bool bt_agent_capability_ok(const std::string& cap) {
   for (const char* c : kCaps)
     if (cap == c) return true;
   return false;
+}
+
+json bt_keep_adapter_settings(json kept, const json& set, uint32_t timeout_s) {
+  if (!kept.is_object()) kept = json::object();
+  for (const char* k : {"powered", "alias", "discoverable_timeout_s", "pairable", "discoverable"})
+    if (set.contains(k)) kept[k] = set[k];
+  if (kept.value("discoverable", false) && timeout_s) kept["discoverable"] = false;
+  return kept;
+}
+
+DDict bt_restore_adapter_props(const json& kept) {
+  DDict props;
+  if (!kept.is_object()) return props;
+  const auto b = [&](const char* k) { return kept.contains(k) && kept[k].is_boolean(); };
+  if (b("powered")) props.push_back({"Powered", DVar::boolean(kept["powered"].get<bool>())});
+  // An adapter kept off takes nothing else now: BlueZ answers Not Ready, and what it keeps
+  // itself (the alias) is already there when it is powered again.
+  if (b("powered") && !kept["powered"].get<bool>()) return props;
+  if (kept.contains("alias") && kept["alias"].is_string()) props.push_back({"Alias", DVar::str(kept["alias"].get<std::string>())});
+  if (kept.contains("discoverable_timeout_s") && kept["discoverable_timeout_s"].is_number_integer()) {
+    const long long t = kept["discoverable_timeout_s"].get<long long>();
+    if (t >= 0 && t <= 0xffffffffLL) props.push_back({"DiscoverableTimeout", DVar::u32(static_cast<uint32_t>(t))});
+  }
+  if (b("pairable")) props.push_back({"Pairable", DVar::boolean(kept["pairable"].get<bool>())});
+  if (b("discoverable")) props.push_back({"Discoverable", DVar::boolean(kept["discoverable"].get<bool>())});
+  return props;
 }
 
 bool bt_scan_filter_from_json(const json& j, BtScanFilter* f, std::string* err) {
@@ -246,6 +273,77 @@ BtManager::BtManager() : objs_(std::make_shared<const json>(json::object())) {}
 BtManager::~BtManager() { stop(); }
 
 void BtManager::set_adapter(std::string want) { want_adapter_ = std::move(want); }
+
+void BtManager::set_state_file(std::string path) {
+  state_file_ = std::move(path);
+  std::ifstream f(state_file_);
+  if (!f) return;
+  try {
+    const json j = json::parse(f);
+    const std::string policy = j.value("agent", std::string{});
+    const std::string cap = j.value("agent_capability", std::string{});
+    if (policy == "auto" || policy == "ask") agent_policy_ = policy;
+    if (bt_agent_capability_ok(cap)) agent_capability_ = cap;
+    if (j.contains("adapters") && j["adapters"].is_object()) kept_adapters_ = j["adapters"];
+  } catch (const std::exception& e) {
+    // A broken file is replaced by the next change; until then the defaults hold.
+    LOG_WARN("bluetooth: {}: {}", state_file_, e.what());
+  }
+}
+
+void BtManager::save_state_locked() const {
+  if (state_file_.empty()) return;
+  const std::string tmp = state_file_ + ".tmp";
+  std::ofstream f(tmp);
+  f << json{{"agent", agent_policy_}, {"agent_capability", agent_capability_}, {"adapters", kept_adapters_}}.dump(2)
+    << "\n";
+  f.close();
+  if (!f || std::rename(tmp.c_str(), state_file_.c_str()) != 0)
+    LOG_WARN("bluetooth: cannot write {}", state_file_);
+}
+
+namespace {
+int restore_reply(sd_bus_message* m, void* userdata, sd_bus_error*) {
+  std::unique_ptr<std::string> what(static_cast<std::string*>(userdata));
+  if (sd_bus_message_is_method_error(m, nullptr)) {
+    const sd_bus_error* e = sd_bus_message_get_error(m);
+    LOG_WARN("bluetooth: restoring {}: {}", *what, e && e->message ? e->message : "refused");
+  }
+  return 0;
+}
+}  // namespace
+
+// Bus thread. Each adapter gets its kept settings once each time BlueZ shows it, so a bluetoothd
+// restarted by Setup, or a controller rebound after it hung, comes back as it was set. The writes
+// are queued without waiting: bluetoothd handles them in order, and a refusal is only logged.
+void BtManager::restore_adapters(const json& objs) {
+  std::set<std::string> present;
+  for (const BtAdapterId& a : model_adapter_ids(objs)) {
+    present.insert(a.path);
+    if (restored_.count(a.path)) continue;
+    restored_.insert(a.path);
+    const std::string name = a.path.substr(a.path.rfind('/') + 1);
+    DDict props;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      if (kept_adapters_.contains(name)) props = bt_restore_adapter_props(kept_adapters_[name]);
+    }
+    if (props.empty()) continue;
+    LOG_INFO("bluetooth: {}: restoring {} kept setting(s)", name, props.size());
+    for (const auto& p : props) {
+      sd_bus_message* m = nullptr;
+      int r = sd_bus_message_new_method_call(bus_, &m, kBluez, a.path.c_str(), "org.freedesktop.DBus.Properties", "Set");
+      if (r >= 0) r = sd_bus_message_append(m, "ss", kAdapterIface, p.first.c_str());
+      if (r >= 0) r = append_variant(m, p.second);
+      auto* what = new std::string(name + " " + p.first);
+      if (r >= 0) r = sd_bus_call_async(bus_, nullptr, m, restore_reply, what, 5 * 1000000ull);
+      if (r < 0) delete what;
+      sd_bus_message_unref(m);
+    }
+    dirty_ = true;
+  }
+  for (auto it = restored_.begin(); it != restored_.end();) it = present.count(*it) ? std::next(it) : restored_.erase(it);
+}
 void BtManager::add_user(BusUser* u) { users_.push_back(u); }
 void BtManager::on_notify(NotifyFn fn) { notify_ = std::move(fn); }
 void BtManager::on_change(std::function<void(bool)> fn) { change_fn_ = std::move(fn); }
@@ -538,6 +636,7 @@ void BtManager::refresh() {
       LOG_WARN("bluetooth: {}", why);
       logged_error_ = why;
     }
+    restored_.clear();
     if (!ready_adapter_.empty()) {
       ready_adapter_.clear();
       for (BusUser* u : users_) u->bluez_gone();
@@ -554,6 +653,7 @@ void BtManager::refresh() {
   }
   sd_bus_error_free(&e);
   if (!agent_registered_ || agent_cap_registered_ != agent_capability_) register_agent();
+  restore_adapters(*objs);
 
   const std::string apath = bt_pick_adapter(model_adapter_ids(*objs), want_adapter_);
   std::string err;
@@ -1147,6 +1247,16 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
       return false;
     }
   }
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    const std::string name = path.substr(path.rfind('/') + 1);
+    uint32_t timeout = 0;
+    if (j.contains("discoverable_timeout_s")) timeout = j["discoverable_timeout_s"].get<uint32_t>();
+    else if (objs_->contains(path) && (*objs_)[path].contains(kAdapterIface))
+      timeout = static_cast<uint32_t>(num_of((*objs_)[path][kAdapterIface], "DiscoverableTimeout"));
+    kept_adapters_[name] = bt_keep_adapter_settings(kept_adapters_.value(name, json::object()), j, timeout);
+    save_state_locked();
+  }
   touch();
   return true;
 }
@@ -1164,6 +1274,7 @@ bool BtManager::set_agent(const std::string& policy, const std::string& capabili
     std::lock_guard<std::mutex> lk(m_);
     if (!policy.empty()) agent_policy_ = policy;
     if (!capability.empty()) agent_capability_ = capability;
+    save_state_locked();
   }
   // A new capability needs a new registration; tick() → refresh() notices the difference.
   touch();

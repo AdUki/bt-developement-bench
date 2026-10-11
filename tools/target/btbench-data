@@ -1,6 +1,6 @@
 #!/bin/sh
 # btbench-data — get /data ready for the bench. btbench-data.service runs it at every boot, before
-# sysinit.target, so every service after it finds its directories there. Two jobs:
+# sysinit.target, so every service after it finds its directories there. Three jobs:
 #
 # 1. Grow the data partition, and its filesystem, to fill the card. The image carries a small
 #    /data (64 MB) so that it flashes in seconds whatever the card's size; the first boot takes the
@@ -14,6 +14,13 @@
 #    sshd's host keys, the WirePlumber fragment Setup writes), bluetooth (BlueZ's pairings). Only
 #    settings: the root filesystem is read-only and what changes often is in RAM (docs/system.md
 #    "The SD card").
+#
+# 3. A factory reset, when /data/btbench/factory-reset asks for one (POST /api/system/factory-reset
+#    writes it and reboots). It is done here, at boot, rather than by btbenchd at once: bluetoothd
+#    rewrites its files while it runs and the pairings' cache directories are mount points then,
+#    while here nothing has started yet. The file's words say what else goes: "pairings" (BlueZ's
+#    link keys), "wifi" (the networks: the image's first network comes back, and the setup AP).
+#    sshd's host keys and the clock always stay.
 #
 # Never fails the boot: a /data that cannot grow is still a working /data. Every problem is logged
 # and the script exits 0.
@@ -75,6 +82,25 @@ grow() {
 
 grow
 
+reset=/data/btbench/factory-reset
+if [ -f "$reset" ]; then
+    what=$(cat "$reset")
+    log "factory reset: settings${what:+, $what}"
+    for f in /data/btbench/* /data/btbench/.[!.]*; do
+        [ -e "$f" ] || continue
+        case ${f##*/} in
+        ssh | timesync | factory-reset) ;;
+        wifi) case " $what " in *" wifi "*) rm -rf "$f" ;; esac ;;
+        *) rm -rf "$f" ;;
+        esac
+    done
+    case " $what " in *" pairings "*) rm -rf /data/bluetooth/* ;; esac
+    # Last, and synced: a power cut before this line repeats the reset, never half of it.
+    sync
+    rm -f "$reset"
+    sync
+fi
+
 # Pairings are link keys: root only. The Wi-Fi networks and the host keys are secrets too.
 mkdir -p /data/btbench/wifi /data/btbench/ssh /data/bluetooth
 chmod 700 /data/bluetooth /data/btbench/wifi /data/btbench/ssh
@@ -82,6 +108,18 @@ chmod 700 /data/bluetooth /data/btbench/wifi /data/btbench/ssh
 # a fragment with nothing in it (a comment: WirePlumber parses every file there) until Setup writes one.
 [ -e /data/btbench/wireplumber-profiles.conf ] ||
     echo "# btbenchd Setup's WirePlumber settings: none yet" > /data/btbench/wireplumber-profiles.conf
+
+# WirePlumber's own state (StateDirectory=wireplumber, in the RAM copy of /var/lib): the profile
+# picked for each device (a codec), the routes and their volumes, the streams' volumes. Kept on
+# /data so a codec chosen in the console is the one a device gets after a reboot. It is written
+# when one of them changes, a few hundred bytes. Ordered before WirePlumber (sysinit.target).
+wp=/var/lib/wireplumber
+if [ -d /var/lib ] && ! mountpoint -q "$wp"; then
+    mkdir -p "$wp" /data/btbench/wireplumber
+    [ -n "$(ls -A /data/btbench/wireplumber)" ] || cp -a "$wp/." /data/btbench/wireplumber/ 2>/dev/null
+    chown pipewire:pipewire /data/btbench/wireplumber 2>/dev/null
+    mount --bind /data/btbench/wireplumber "$wp" || log "could not keep $wp on /data"
+fi
 
 # systemd-timesyncd's clock (the time of its last sync), on /data rather than in the RAM copy of
 # /var/lib: at boot it sets the clock forward to it, and a board with no network (on the USB link,

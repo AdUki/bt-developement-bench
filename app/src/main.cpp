@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
 
   btb::BtManager bt;
   bt.set_adapter(bt_adapter);
+  bt.set_state_file(data_dir + "/bluetooth.json");
   btb::AdvManager adv(bt);
   btb::GattServer gatt_server(bt, [&publish](const nlohmann::json& ev) { publish("gatt.server", ev); });
   // The HID remote is a second GATT application with its own root, so the console's GATT server
@@ -173,6 +174,7 @@ int main(int argc, char** argv) {
   // OBEX (obexd on the system bus), started on first use; its files live under the data dir.
   btb::obex::Options oopt;
   oopt.root = volatile_dir + "/obex";
+  oopt.state_file = data_dir + "/obex.json";
   btb::obex::ObexManager obex(oopt, publish, [&hub](const std::string& t) { return hub.has_subscribers(t); });
 
   // The HID host side: Bluetooth input devices, their events, and their media keys driving the

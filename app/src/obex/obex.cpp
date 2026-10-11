@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <fstream>
 #include <future>
 
 #include "dbus_util.h"
@@ -262,6 +263,18 @@ struct ObexManager::Bus {
 ObexManager::ObexManager(Options opt, Publish publish, HasSubscribers has_subscribers)
     : opt_(std::move(opt)), publish_(std::move(publish)), has_subscribers_(std::move(has_subscribers)) {
   for (const char* d : {"in", "out", "shared", "in/cover"}) mkdirs(opt_.root + "/" + d);
+  // What the server does with a push is a setting: kept across reboots, unlike the files.
+  if (!opt_.state_file.empty()) {
+    std::ifstream f(opt_.state_file);
+    try {
+      if (f) {
+        const std::string p = nlohmann::json::parse(f).value("policy", std::string{});
+        if (p == "auto" || p == "ask" || p == "reject") policy_ = p;
+      }
+    } catch (const std::exception&) {
+      // A broken file is replaced by the next change.
+    }
+  }
   wake_fd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
   running_.store(true);
   thread_ = std::thread([this] { run(); });
@@ -701,6 +714,13 @@ bool ObexManager::set_policy(const std::string& policy, std::string* err) {
   std::lock_guard<std::mutex> lk(m_);
   policy_ = policy;
   publish_pending_ = true;
+  if (!opt_.state_file.empty()) {
+    const std::string tmp = opt_.state_file + ".tmp";
+    std::ofstream f(tmp);
+    f << nlohmann::json{{"policy", policy_}}.dump() << "\n";
+    f.close();
+    if (f) std::rename(tmp.c_str(), opt_.state_file.c_str());
+  }
   return true;
 }
 

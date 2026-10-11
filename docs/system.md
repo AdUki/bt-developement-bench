@@ -21,11 +21,18 @@ power cut (the usual way a bench is switched off) cannot corrupt the root or `/b
   boot, and `/var/log` is a link into `/var/volatile`. opkg's database is in `/usr/lib/opkg`, on
   the root, so what `make pkg` installs stays known to opkg.
 - **`/data` holds settings only, written when one changes:**
-  - `btbench/`: Setup's files, `bluetoothd.env`, `btsnoop.env`, the HID and radio
-    settings, `wifi/` (networks), `ssh/` (sshd's host keys), `wireplumber-profiles.conf`;
+  - `btbench/`: Setup's files, `bluetoothd.env`, `btsnoop.env`, the adapter and agent
+    (`bluetooth.json`), the HID, player, OBEX and radio settings, `wifi/` (networks), `ssh/`
+    (sshd's host keys), `wireplumber-profiles.conf`, and `wireplumber/`: WirePlumber's own state
+    (each device's profile, so its codec, and the volumes), bound over `/var/lib/wireplumber`;
   - `btbench/timesync/`: timesyncd's clock, one small write per NTP sync, so a board without a
     network does not start at the image's build date;
   - `bluetooth/`: BlueZ's pairings, bind-mounted over `/var/lib/bluetooth`.
+- **A factory reset** (System → Overview, or `POST /api/system/factory-reset`) empties
+  `btbench/` but for the host keys, the clock and, unless asked, the Wi-Fi networks, and with
+  *Forget paired devices* `bluetooth/` too. btbenchd only leaves `/data/btbench/factory-reset` and
+  reboots; btbench-data does the deleting early in the next boot, before bluetoothd or WirePlumber
+  run, so nothing writes its files back. Over ssh: `echo pairings > /data/btbench/factory-reset; reboot`.
 - **What changes often is in RAM,** and gone at reboot:
   - the journal (`/run/log/journal`, uncompressed, 32 MB);
   - the per-program logs (`/tmp/logs`);

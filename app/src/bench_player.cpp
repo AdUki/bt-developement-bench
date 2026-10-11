@@ -408,6 +408,9 @@ void BenchPlayer::load_state() {
   try {
     const json j = json::parse(f);
     enabled_ = j.value("enabled", true);
+    const std::string repeat = j.value("repeat", std::string("off"));
+    if (repeat == "off" || repeat == "track" || repeat == "all") repeat_ = repeat;
+    shuffle_ = j.value("shuffle", false);
   } catch (const std::exception&) {
     // A broken file is replaced by the next change.
   }
@@ -416,7 +419,7 @@ void BenchPlayer::load_state() {
 void BenchPlayer::save_state() const {
   if (state_file_.empty()) return;
   std::ofstream f(state_file_ + ".tmp");
-  f << json{{"enabled", enabled_}}.dump() << "\n";
+  f << json{{"enabled", enabled_}, {"repeat", repeat_}, {"shuffle", shuffle_}}.dump() << "\n";
   f.close();
   if (f) std::rename((state_file_ + ".tmp").c_str(), state_file_.c_str());
 }
@@ -1044,6 +1047,7 @@ bool BenchPlayer::set_settings(const std::string& repeat, const bool* shuffle, s
   }
   if (!repeat.empty()) repeat_ = repeat;
   if (shuffle) shuffle_ = *shuffle;
+  save_state();
   lk.unlock();
   changed(false, false, false, true);
   return true;

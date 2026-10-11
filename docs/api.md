@@ -98,7 +98,9 @@ by alias.
 Any of: `powered`, `alias`, `discoverable`, `discoverable_timeout_s`, `pairable` (on `adapter`,
 e.g. `"hci1"`; default the primary), `agent` (`"auto"` or `"ask"`), `agent_capability`
 (`DisplayOnly`, `DisplayYesNo`, `KeyboardOnly`, `NoInputNoOutput`, `KeyboardDisplay`). Answers with
-the new state.
+the new state. What is set is kept in `/data/btbench/bluetooth.json` and put back on the adapter
+whenever BlueZ shows it (a reboot, a bluetoothd restart), since BlueZ powers adapters on at start
+and forgets Pairable; a discoverable with a timeout is kept as off.
 
 The agent is BlueZ's default agent. With `auto` it accepts every pairing and every service
 authorization by itself, the way a device with no screen would, and only a passkey to type goes to
@@ -393,7 +395,7 @@ its playlist, and repeat and shuffle are the stream's own (`source.repeat`, `sou
 
 | route | body | what |
 |---|---|---|
-| `PUT /api/media/local-player` | any of `{"enabled": bool}`, `{"repeat": "off\|track\|all"}`, `{"shuffle": bool}` | offer the player to devices or not (kept in `/data/btbench/player.json`, on by default); repeat and shuffle of the stream it tells about, else of its now playing list (a test signal has none: 400); answered with the state |
+| `PUT /api/media/local-player` | any of `{"enabled": bool}`, `{"repeat": "off\|track\|all"}`, `{"shuffle": bool}` | offer the player to devices or not (kept in `/data/btbench/player.json`, on by default); repeat and shuffle of the stream it tells about, else of its now playing list (kept in the same file; a test signal has none: 400); answered with the state |
 | `POST /api/media/local-player` | `{"action": "play\|pause\|stop\|next\|previous"}` | the controls a remote has; `play` with nothing chosen plays the test signals |
 |  |  | Both answer with the state at once; starting or stopping the stream follows within a second (the next GET shows it) |
 | `POST /api/media/local-player` | `{"play": <id>}` or `{"enqueue": <id>}` | play a library entry (a folder: its tracks; a track: in its folder, so next and previous go through it), or add it to the now playing list |
@@ -549,7 +551,8 @@ sessions: [{id, path, destination, target, channel, psm}], transfers: [{id, sess
 name, filename, size, transferred, direction}], files: {in, out, shared}}`.
 `PUT /api/obex` `{"running": true|false, "policy": "auto|ask|reject"}`: start/stop obexd, and what
 the board's OBEX server does with an incoming push (`auto` saves it into `in/`; `ask` holds it as
-`request` for `POST /api/obex/request` `{"id", "accept", "name"}`, 55 s).
+`request` for `POST /api/obex/request` `{"id", "accept", "name"}`, 55 s). The policy is kept in
+`/data/btbench/obex.json`.
 
 `POST /api/obex/sessions` `{"address", "target": "opp|ftp|pbap|map|bip-avrcp", "channel"|"psm"}`
 (201) opens a client session; `DELETE /api/obex/sessions/{id}` closes it.
@@ -736,11 +739,12 @@ servers did. A restart drops every connection. Answers with the state plus `rest
 | `PUT /api/system/btdebug` `{"on": ["l2cap", "smp"], "off": ["all"], "keep": ["l2cap"]}` | any of them, applied off → on → keep; `keep` replaces the areas on from boot (`[]`: none). Answers with the status |
 | `PUT /api/system/journal` `{"unit": "pipewire"}` | the unit the `journal` topic follows (default bluetooth) |
 | `POST /api/system/reboot` | answers, then reboots |
+| `POST /api/system/factory-reset` `{"pairings": true, "wifi": false}` | every setting back to the image's (both keys optional, defaults shown): answers, then reboots, and btbench-data does the reset at that boot before anything starts (docs/contracts.md, `/data/btbench/factory-reset`). The debug areas kept from boot go at once. `pairings` forgets the paired devices, `wifi` the networks (the image's first one comes back). sshd's host keys stay |
 
 `power` is the raspberrypi-hwmon undervoltage alarm (`in0_lcrit_alarm`): undervoltage corrupts the
 Bluetooth UART long before anything else notices, so `seen` is latched since btbenchd started.
-`board` and `device` are `/etc/btbench/board.env` and `device.env`. Reboot and restarts answer 403
-on a PC (`btbenchd --pc`).
+`board` and `device` are `/etc/btbench/board.env` and `device.env`. Reboot, factory reset and
+restarts answer 403 on a PC (`btbenchd --pc`).
 
 ### The log viewer's route
 

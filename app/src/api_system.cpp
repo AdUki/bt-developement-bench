@@ -362,6 +362,35 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     });
   });
 
+  // Body (optional): {"pairings": true, "wifi": false}. Every setting back to the image's: the
+  // reset itself is btbench-data's, at the next boot (tools/target/btbench-data says why), so this
+  // only leaves it the word and reboots. The debug areas kept from boot are a file on the root,
+  // which btbench-data does not touch: they go now.
+  svr.Post("/api/system/factory-reset", json_route([&d, opt](const json& j, const httplib::Request&, httplib::Response& res) {
+    if (!opt.allow_power) return send_error(res, 403, "factory reset is off on a PC");
+    const json body = j.is_object() ? j : json::object();
+    for (const char* k : {"pairings", "wifi"})
+      if (body.contains(k) && !body[k].is_boolean()) return send_error(res, 400, std::string(k) + " is true or false");
+    std::string what;
+    if (body.value("pairings", true)) what += "pairings ";
+    if (body.value("wifi", false)) what += "wifi ";
+    const std::string path = d.sys.data_dir() + "/factory-reset";
+    {
+      std::ofstream f(path);
+      f << what << "\n";
+      f.close();
+      if (!f) return send_error(res, 500, "cannot write " + path);
+    }
+    const TargetScripts::Result r = d.scripts.action("btbench-btdebug", {"keep"}, 15000);
+    if (r.http != 200) LOG_WARN("factory reset: btbench-btdebug keep: {}", r.body.dump());
+    LOG_INFO("factory reset ({}settings) at the next boot: rebooting", what);
+    send_json(res, json{{"ok", true}, {"pairings", body.value("pairings", true)}, {"wifi", body.value("wifi", false)}});
+    after_reply([] {
+      sync();
+      if (std::system("systemctl reboot") != 0) LOG_ERROR("reboot failed");
+    });
+  }));
+
   // ---- Jobs -------------------------------------------------------------------------------------
 
   svr.Get("/api/jobs", [&d](const httplib::Request&, httplib::Response& res) {

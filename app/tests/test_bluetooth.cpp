@@ -1,5 +1,6 @@
 // The Bluetooth manager's decisions: what the agent answers by itself, which IO capabilities and
-// discovery filters it takes, and the request's shape. The bus traffic is tools/fake-bluez's.
+// discovery filters it takes, the request's shape, and which adapter settings it keeps and how it
+// puts them back. The bus traffic is tools/fake-bluez's.
 #include "bluetooth.h"
 #include "check.h"
 #include "uuids.h"
@@ -95,11 +96,46 @@ void test_request_json() {
 
 }  // namespace
 
+std::string names(const DDict& d) {
+  std::string out;
+  for (const auto& p : d) out += (out.empty() ? "" : ",") + p.first;
+  return out;
+}
+
+void test_kept_adapter_settings() {
+  // What was set is kept, on top of what was kept before; nothing else is invented.
+  json k = bt_keep_adapter_settings(json::object(), json{{"powered", false}}, 0);
+  CHECK_EQ(k.dump(), std::string(R"({"powered":false})"));
+  k = bt_keep_adapter_settings(k, json{{"pairable", false}, {"alias", "bench"}}, 0);
+  CHECK_EQ(k.dump(), std::string(R"({"alias":"bench","pairable":false,"powered":false})"));
+  // A lasting Discoverable is a setting; one with a timeout in force is a moment, kept as off.
+  CHECK(bt_keep_adapter_settings(json::object(), json{{"discoverable", true}}, 0)["discoverable"].get<bool>());
+  CHECK(!bt_keep_adapter_settings(json::object(), json{{"discoverable", true}}, 180)["discoverable"].get<bool>());
+  CHECK(!bt_keep_adapter_settings(json::object(), json{{"discoverable", true}, {"discoverable_timeout_s", 60}}, 60)
+             ["discoverable"].get<bool>());
+  // A broken kept entry starts over.
+  CHECK_EQ(bt_keep_adapter_settings(json("x"), json{{"pairable", true}}, 0).dump(), std::string(R"({"pairable":true})"));
+
+  // Restored in BlueZ's order: Powered first, the timeout before Discoverable.
+  const json all{{"discoverable", true}, {"pairable", false}, {"discoverable_timeout_s", 0}, {"alias", "b"}, {"powered", true}};
+  CHECK_EQ(names(bt_restore_adapter_props(all)), std::string("Powered,Alias,DiscoverableTimeout,Pairable,Discoverable"));
+  // An adapter kept off is only switched off: BlueZ refuses the rest while it is.
+  json off = all;
+  off["powered"] = false;
+  const DDict p = bt_restore_adapter_props(off);
+  CHECK_EQ(names(p), std::string("Powered"));
+  CHECK_EQ(p[0].second.i, 0);
+  // Nothing kept, nothing written; values of the wrong type are skipped.
+  CHECK(bt_restore_adapter_props(json::object()).empty());
+  CHECK(bt_restore_adapter_props(json{{"powered", "yes"}, {"discoverable_timeout_s", -1}}).empty());
+}
+
 int main() {
   uuid_names().load_text(R"({"uuid16": {"110d": "Advanced Audio Distribution"}})", nullptr);
   test_agent_policy();
   test_capabilities();
   test_scan_filter();
   test_request_json();
+  test_kept_adapter_settings();
   return report("test_bluetooth");
 }

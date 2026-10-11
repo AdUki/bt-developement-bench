@@ -634,6 +634,15 @@
       <div class="card danger-zone">
         <div class="card-head"><div><h3>Power</h3><p class="hint">The console reconnects by itself when the board is back.</p></div>
           <button id="sys-reboot" class="danger">Reboot the board</button></div>
+        <details class="more-fields">
+          <summary>Factory reset</summary>
+          <p class="hint">Puts every setting back to the image's: Setup, the adapter, the agent, audio, HID, OBEX, radio stations, debug areas and this browser's console preferences. The board reboots and the reset runs before Bluetooth starts. sshd's host keys stay.</p>
+          <div class="switches">
+            <label class="switch"><input type="checkbox" id="sys-fdr-pairings" checked><i></i> Forget paired devices</label>
+            <label class="switch" title="The image's own network comes back, and the setup access point if it is not in reach"><input type="checkbox" id="sys-fdr-wifi"><i></i> Forget Wi-Fi networks</label>
+          </div>
+          <div class="row"><button id="sys-fdr" class="danger">Reset and reboot</button></div>
+        </details>
       </div>
     </div>
 

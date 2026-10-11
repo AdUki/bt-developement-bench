@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -38,6 +39,17 @@ enum class BtVerdict { Accept, Ask };
 BtVerdict bt_agent_policy(const std::string& policy, BtAsk ask);
 // The IO capabilities BlueZ accepts for an agent; the pairing method follows from it.
 bool bt_agent_capability_ok(const std::string& cap);
+
+// The adapter settings btbenchd keeps across reboots (bluetooth.json): BlueZ keeps the alias and
+// a lasting Discoverable itself, but powers every adapter on at start (AutoEnable) and forgets
+// Pairable, so a bench switched off or made unpairable came back on and pairable after a reboot.
+// `kept` updated with what PUT /api/bluetooth `set`; `timeout_s` is the DiscoverableTimeout in
+// force after it. A discoverable that times out is a moment ("visible for three minutes"), not a
+// setting, and is kept as off.
+nlohmann::json bt_keep_adapter_settings(nlohmann::json kept, const nlohmann::json& set, uint32_t timeout_s);
+// The kept settings as the property writes that restore them, in the order BlueZ needs: Powered
+// first (it refuses Discoverable on an adapter that is off), the timeout before Discoverable.
+DDict bt_restore_adapter_props(const nlohmann::json& kept);
 
 // A discovery filter as the API takes it, checked, with every key of BlueZ's SetDiscoveryFilter:
 // transport auto (LE and BR/EDR, interleaved: dual mode) | le | bredr, an RSSI floor (-127..20) or
@@ -123,6 +135,10 @@ class BtManager {
   // Which adapter is "the" adapter (bt_pick_adapter's `want`); with one set, only its devices are
   // listed and the agent answers only for it — on a PC the others are the desktop's. Before start().
   void set_adapter(std::string want);
+  // Where the agent's and the adapters' settings are kept (bluetooth.json in the data dir): read
+  // now, written when PUT /api/bluetooth changes one, and applied to an adapter whenever BlueZ
+  // shows it (at boot, after bluetoothd restarts). Before start(); "" keeps nothing.
+  void set_state_file(std::string path);
   void add_user(BusUser* u);  // before start()
   // Value changes of GATT characteristics (notifications, and reads), on the bus thread.
   using NotifyFn = std::function<void(const std::string& path, const std::vector<uint8_t>& value)>;
@@ -208,6 +224,8 @@ class BtManager {
   void stop_scan();
   void set_error(std::string e);
   void changed(bool request);
+  void restore_adapters(const nlohmann::json& objs);
+  void save_state_locked() const;
 
   // iface: nullptr for Device1; a bearer's (Bearer.LE1, .BREDR1) for its Connect and Disconnect.
   void call_device(const std::string& path, const char* method, const std::string& uuid,
@@ -239,6 +257,8 @@ class BtManager {
   uint64_t request_deadline_ns_ = 0;
   std::string agent_policy_ = "auto";
   std::string agent_capability_ = "KeyboardDisplay";
+  nlohmann::json kept_adapters_ = nlohmann::json::object();  // by hci name: bt_keep_adapter_settings
+  std::string state_file_;  // set before start()
   bool agent_registered_shared_ = false;
   std::vector<std::string> discovery_filters_;  // the adapter's GetDiscoveryFilters
   bool scanning_ = false;
@@ -268,6 +288,7 @@ class BtManager {
   bool scan_dirty_ = false;  // only advertising chatter (RSSI, adv data): re-read at the slower pace
   uint64_t last_refresh_ns_ = 0;
   std::string ready_adapter_;  // the adapter BusUsers were last told is ready
+  std::set<std::string> restored_;  // adapter paths given their kept settings since BlueZ showed them
   std::map<std::string, std::string> started_here_;  // device path -> the PIN to offer
   Pending* pending_ = nullptr;
   uint64_t next_request_id_ = 1;

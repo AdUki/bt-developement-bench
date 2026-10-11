@@ -102,6 +102,17 @@ function setupSystem() {
     if (!confirm('Reboot the board?')) return;
     post('/system/reboot').then(() => toast('Rebooting… the console reconnects by itself.')).catch(fail);
   };
+  $('sys-fdr').onclick = () => {
+    const pairings = $('sys-fdr-pairings').checked, wifi = $('sys-fdr-wifi').checked;
+    const also = [pairings && 'the paired devices', wifi && 'the Wi-Fi networks'].filter(Boolean);
+    if (!confirm(`Reset every setting${also.length ? ' and forget ' + also.join(' and ') : ''}, then reboot?`)) return;
+    post('/system/factory-reset', {pairings, wifi}).then(() => {
+      // The console's own preferences (the open tab, hidden graph groups) go with the board's.
+      try { Object.keys(localStorage).filter(k => k.startsWith('btbench.')).forEach(k => localStorage.removeItem(k)); } catch (e) { /* none */ }
+      toast(wifi ? 'Resetting… the board may come back on another network, or as its setup access point.'
+        : 'Resetting… the console reconnects by itself.');
+    }).catch(fail);
+  };
 }
 
 // ---------------------------------------------------------------- log files (/tmp/logs)

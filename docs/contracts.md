@@ -61,7 +61,19 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
   - `/data/btbench/hid-remote.json` — the HID remote's, `{"enabled": true, "name": "btbench remote"}`.
-  - `/data/btbench/player.json` — whether btbenchd offers its AVRCP player, `{"enabled": true}`.
+  - `/data/btbench/player.json` — whether btbenchd offers its AVRCP player, and the repeat and
+    shuffle of its own now playing list: `{"enabled": true, "repeat": "off", "shuffle": false}`.
+  - `/data/btbench/bluetooth.json` — btbenchd's agent and what `PUT /api/bluetooth` set on each
+    adapter, by hci name: `{"agent": "auto", "agent_capability": "KeyboardDisplay", "adapters":
+    {"hci0": {"powered", "alias", "pairable", "discoverable", "discoverable_timeout_s"}}}` (only
+    the keys ever set). Applied to an adapter each time BlueZ shows it: at boot, after a bluetoothd
+    restart. A discoverable with a timeout is kept as off.
+  - `/data/btbench/obex.json` — the OBEX server's push policy, `{"policy": "auto|ask|reject"}`.
+  - `/data/btbench/wireplumber/` — WirePlumber's state (the profile picked per device, routes,
+    volumes), bound over `/var/lib/wireplumber` by btbench-data.
+  - `/data/btbench/factory-reset` — written by `POST /api/system/factory-reset`; at the next boot
+    btbench-data empties `/data/btbench` except `ssh/`, `timesync/` and (unless the file says
+    `wifi`) `wifi/`, and `/data/bluetooth` when it says `pairings`, then removes it.
   - `/tmp/btbench/obex/` — OBEX files and obexd's root, in RAM (btbenchd `--volatile-dir`): `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
   - `/data/btbench/ssh/` — sshd's host keys (btbench-sshkeys); sshd reads them through `/run/btbench/ssh`.
   - `/data/btbench/timesync/` — systemd-timesyncd's clock, bound over `/var/lib/systemd/timesync` (btbench-data).
