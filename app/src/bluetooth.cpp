@@ -95,6 +95,22 @@ json bt_keep_adapter_settings(json kept, const json& set, uint32_t timeout_s) {
   return kept;
 }
 
+std::vector<std::string> bt_bredr_connected(const json& objs, const std::string& adapter_path) {
+  std::vector<std::string> out;
+  if (!objs.is_object() || adapter_path.empty()) return out;
+  const std::string prefix = adapter_path + "/dev_";
+  for (auto it = objs.begin(); it != objs.end(); ++it) {
+    if (it.key().compare(0, prefix.size(), prefix) != 0 || !it.value().contains(kDeviceIface)) continue;
+    const json& d = it.value()[kDeviceIface];
+    if (!bool_of(d, "Paired")) continue;
+    const bool bredr = it.value().contains(kBearerBredrIface)
+                           ? bool_of(it.value()[kBearerBredrIface], "Connected")
+                           : bool_of(d, "Connected") && d.contains("Class");
+    if (bredr) out.push_back(upper(str_of(d, "Address")));
+  }
+  return out;
+}
+
 DDict bt_restore_adapter_props(const json& kept) {
   DDict props;
   if (!kept.is_object()) return props;
@@ -285,6 +301,10 @@ void BtManager::set_state_file(std::string path) {
     if (policy == "auto" || policy == "ask") agent_policy_ = policy;
     if (bt_agent_capability_ok(cap)) agent_capability_ = cap;
     if (j.contains("adapters") && j["adapters"].is_object()) kept_adapters_ = j["adapters"];
+    reconnect_on_ = j.value("reconnect", true);
+    if (j.contains("reconnect_devices") && j["reconnect_devices"].is_array())
+      for (const json& a : j["reconnect_devices"])
+        if (a.is_string()) reconnect_.push_back(a.get<std::string>());
   } catch (const std::exception& e) {
     // A broken file is replaced by the next change; until then the defaults hold.
     LOG_WARN("bluetooth: {}: {}", state_file_, e.what());
@@ -295,7 +315,8 @@ void BtManager::save_state_locked() const {
   if (state_file_.empty()) return;
   const std::string tmp = state_file_ + ".tmp";
   std::ofstream f(tmp);
-  f << json{{"agent", agent_policy_}, {"agent_capability", agent_capability_}, {"adapters", kept_adapters_}}.dump(2)
+  f << json{{"agent", agent_policy_}, {"agent_capability", agent_capability_}, {"adapters", kept_adapters_},
+            {"reconnect", reconnect_on_}, {"reconnect_devices", reconnect_}}.dump(2)
     << "\n";
   f.close();
   if (!f || std::rename(tmp.c_str(), state_file_.c_str()) != 0)
@@ -312,6 +333,94 @@ int restore_reply(sd_bus_message* m, void* userdata, sd_bus_error*) {
   return 0;
 }
 }  // namespace
+
+void BtManager::set_reconnect(bool on) {
+  std::lock_guard<std::mutex> lk(m_);
+  reconnect_on_ = on;
+  save_state_locked();
+}
+
+void BtManager::forget_reconnect(const std::string& address) {
+  std::lock_guard<std::mutex> lk(m_);
+  forgotten_.insert(upper(address));
+  const auto it = std::find(reconnect_.begin(), reconnect_.end(), upper(address));
+  if (it == reconnect_.end()) return;
+  reconnect_.erase(it);
+  save_state_locked();
+}
+
+// Bus thread, on every re-read. A device joins the list when it is seen connected over BR/EDR and
+// leaves it when it is disconnected or removed from here (forget_reconnect) or is no longer paired;
+// a device that went away by itself, or with the bench, stays: that is the one to call back.
+void BtManager::note_connected(const json& objs, const std::string& apath) {
+  if (apath.empty()) return;
+  const std::vector<std::string> now = bt_bredr_connected(objs, apath);
+  std::lock_guard<std::mutex> lk(m_);
+  bool changed = false;
+  for (auto it = forgotten_.begin(); it != forgotten_.end();)
+    it = std::find(now.begin(), now.end(), *it) == now.end() ? forgotten_.erase(it) : std::next(it);
+  for (const std::string& a : now)
+    if (!forgotten_.count(a) && std::find(reconnect_.begin(), reconnect_.end(), a) == reconnect_.end()) {
+      reconnect_.push_back(a);
+      changed = true;
+    }
+  for (auto it = reconnect_.begin(); it != reconnect_.end();) {
+    const std::string path = bt_device_path(apath, *it);
+    const bool paired = objs.contains(path) && objs[path].contains(kDeviceIface) &&
+                        bool_of(objs[path][kDeviceIface], "Paired");
+    if (paired) {
+      ++it;
+    } else {
+      it = reconnect_.erase(it);
+      changed = true;
+    }
+  }
+  if (changed) save_state_locked();
+}
+
+// Bus thread. Up to three tries, 35 s apart (a Connect gives up after 30): a speaker that is still
+// booting, or busy connecting to us itself, gets another chance. The adapter must be powered first;
+// waiting for that is not a try.
+void BtManager::reconnect_tick(uint64_t now) {
+  if (!reconnect_at_ns_ || now < reconnect_at_ns_) return;
+  std::shared_ptr<const json> objs;
+  std::string apath;
+  std::vector<std::string> list;
+  bool on;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    objs = objs_;
+    apath = adapter_path_;
+    list = reconnect_;
+    on = reconnect_on_;
+  }
+  reconnect_at_ns_ = 0;
+  if (!on || list.empty() || apath.empty() || !objs->contains(apath)) return;
+  if (!bool_of((*objs)[apath][kAdapterIface], "Powered")) {
+    reconnect_at_ns_ = now + s_to_ns(2);
+    return;
+  }
+  const std::vector<std::string> connected = bt_bredr_connected(*objs, apath);
+  ++reconnect_tries_;
+  bool tried = false;
+  for (const std::string& a : list) {
+    if (std::find(connected.begin(), connected.end(), a) != connected.end()) continue;
+    const std::string path = bt_device_path(apath, a);
+    if (!objs->contains(path)) continue;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      const auto ds = dev_state_.find(path);
+      if (ds != dev_state_.end() && !ds->second.busy.empty()) continue;
+    }
+    LOG_INFO("bluetooth: reconnecting {} (try {} of 3)", a, reconnect_tries_);
+    // Over BR/EDR on purpose: a dual-mode device's Connect may pick LE, which is not the link the
+    // audio profiles need.
+    const bool bearer = (*objs)[path].contains(kBearerBredrIface);
+    call_device(path, "Connect", "", "connecting", kConnectTimeoutS, bearer ? kBearerBredrIface : nullptr);
+    tried = true;
+  }
+  if (tried && reconnect_tries_ < 3) reconnect_at_ns_ = now + s_to_ns(35);
+}
 
 // Bus thread. Each adapter gets its kept settings once each time BlueZ shows it, so a bluetoothd
 // restarted by Setup, or a controller rebound after it hung, comes back as it was set. The writes
@@ -592,6 +701,7 @@ void BtManager::tick() {
     refresh();
   }
   expire_request(now);
+  reconnect_tick(now);
   if (scan_until && now >= scan_until) {
     LOG_INFO("bluetooth: scan time is up");
     stop_scan();
@@ -704,7 +814,12 @@ void BtManager::refresh() {
     ready_adapter_ = apath;
     if (!apath.empty())
       for (BusUser* u : users_) u->bluez_ready(bus_, apath);
+    // BlueZ (re)appeared with an adapter: at boot, or after a restart that dropped every link.
+    // A few seconds' grace lets the adapter power up, and a peer that reconnects by itself do so.
+    reconnect_tries_ = 0;
+    reconnect_at_ns_ = apath.empty() ? 0 : mono_ns() + s_to_ns(5);
   }
+  note_connected(*objs, apath);
 
   // A pairing in progress whose prompt is only for show is over once the device is paired.
   if (pending_ && !pending_->msg && objs->contains(pending_->dev_path) &&
@@ -1087,6 +1202,8 @@ json BtManager::state() const {
   uint64_t deadline, scan_until;
   std::map<std::string, DevState> ds;
   std::string policy, cap;
+  bool reconnect_on;
+  std::vector<std::string> reconnect;
   BtScanFilter filter;
   std::vector<std::string> filters;
   {
@@ -1106,6 +1223,8 @@ json BtManager::state() const {
     filter = filter_;
     filters = discovery_filters_;
     agent_reg = agent_registered_shared_;
+    reconnect_on = reconnect_on_;
+    reconnect = reconnect_;
     if (!running_.load()) {
       available = false;
       error = not_running_reason_.empty() ? "Bluetooth is not running" : not_running_reason_;
@@ -1133,6 +1252,7 @@ json BtManager::state() const {
               {"devices", devices},
               {"request", has_req ? bt_request_json(req) : json(nullptr)},
               {"agent", {{"policy", policy}, {"capability", cap}, {"registered", agent_reg}}},
+              {"reconnect", {{"on", reconnect_on}, {"devices", reconnect}}},
               {"discovery",
                {{"on", discovering},
                 {"ours", scanning},
@@ -1326,6 +1446,10 @@ bool BtManager::device_action(const std::string& address, Action action, const s
     if (action == Action::Disconnect || action == Action::DisconnectBearer) s.busy = "disconnecting";
     if (action == Action::ConnectBearer) s.busy = "connecting";
   }
+  // Disconnected or removed on purpose: not to be called back at the next start.
+  if ((action == Action::Disconnect && arg.empty()) || action == Action::Remove ||
+      (action == Action::DisconnectBearer && arg == "bredr"))
+    forget_reconnect(address);
   const bool bearer = action == Action::ConnectBearer || action == Action::DisconnectBearer;
   if (bearer && arg != "le" && arg != "bredr") {
     std::lock_guard<std::mutex> lk(m_);

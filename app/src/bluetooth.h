@@ -47,6 +47,14 @@ bool bt_agent_capability_ok(const std::string& cap);
 // force after it. A discoverable that times out is a moment ("visible for three minutes"), not a
 // setting, and is kept as off.
 nlohmann::json bt_keep_adapter_settings(nlohmann::json kept, const nlohmann::json& set, uint32_t timeout_s);
+// The devices to reconnect when the bench starts: the paired ones on `adapter_path` connected over
+// BR/EDR (their Bearer.BREDR1, or with a BlueZ without it a connected device with a class of
+// device: LE-only devices have none). A phone reconnects its speaker when it boots; the bench, a
+// source, must too, since a peer that saw a clean disconnect (the board shutting down: "remote
+// user terminated") does not retry, and BlueZ reconnects only after a link loss. LE devices are
+// left to BlueZ's own auto-connect. Addresses upper case.
+std::vector<std::string> bt_bredr_connected(const nlohmann::json& objs, const std::string& adapter_path);
+
 // The kept settings as the property writes that restore them, in the order BlueZ needs: Powered
 // first (it refuses Discoverable on an adapter that is off), the timeout before Discoverable.
 DDict bt_restore_adapter_props(const nlohmann::json& kept);
@@ -173,6 +181,9 @@ class BtManager {
   bool set_adapter_props(const std::string& adapter, const nlohmann::json& j, std::string* err);
   // Agent settings: "auto"|"ask", and the IO capability (re-registers the agent).
   bool set_agent(const std::string& policy, const std::string& capability, std::string* err);
+  // Whether the devices connected over BR/EDR when the bench went down are connected again when it
+  // comes up (bt_bredr_connected; kept in bluetooth.json, on by default).
+  void set_reconnect(bool on);
   // Discovery with a filter for `seconds` (0: until stopped).
   bool scan(bool on, const BtScanFilter& f, unsigned seconds, std::string* err);
 
@@ -225,6 +236,9 @@ class BtManager {
   void set_error(std::string e);
   void changed(bool request);
   void restore_adapters(const nlohmann::json& objs);
+  void note_connected(const nlohmann::json& objs, const std::string& apath);
+  void reconnect_tick(uint64_t now);
+  void forget_reconnect(const std::string& address);
   void save_state_locked() const;
 
   // iface: nullptr for Device1; a bearer's (Bearer.LE1, .BREDR1) for its Connect and Disconnect.
@@ -259,6 +273,11 @@ class BtManager {
   std::string agent_capability_ = "KeyboardDisplay";
   nlohmann::json kept_adapters_ = nlohmann::json::object();  // by hci name: bt_keep_adapter_settings
   std::string state_file_;  // set before start()
+  bool reconnect_on_ = true;
+  std::vector<std::string> reconnect_;  // bt_bredr_connected as last seen, less what was disconnected here
+  // Disconnected here and not yet seen down: not re-added meanwhile (a re-read can come before the
+  // link is gone), and added again by the next connection after.
+  std::set<std::string> forgotten_;
   bool agent_registered_shared_ = false;
   std::vector<std::string> discovery_filters_;  // the adapter's GetDiscoveryFilters
   bool scanning_ = false;
@@ -289,6 +308,8 @@ class BtManager {
   uint64_t last_refresh_ns_ = 0;
   std::string ready_adapter_;  // the adapter BusUsers were last told is ready
   std::set<std::string> restored_;  // adapter paths given their kept settings since BlueZ showed them
+  uint64_t reconnect_at_ns_ = 0;  // the next try at reconnect_ (0: none due)
+  int reconnect_tries_ = 0;
   std::map<std::string, std::string> started_here_;  // device path -> the PIN to offer
   Pending* pending_ = nullptr;
   uint64_t next_request_id_ = 1;

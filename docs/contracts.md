@@ -65,8 +65,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     shuffle of its own now playing list: `{"enabled": true, "repeat": "off", "shuffle": false}`.
   - `/data/btbench/bluetooth.json` — btbenchd's agent and what `PUT /api/bluetooth` set on each
     adapter, by hci name: `{"agent": "auto", "agent_capability": "KeyboardDisplay", "adapters":
-    {"hci0": {"powered", "alias", "pairable", "discoverable", "discoverable_timeout_s"}}}` (only
-    the keys ever set). Applied to an adapter each time BlueZ shows it: at boot, after a bluetoothd
+    {"hci0": {"powered", "alias", "pairable", "discoverable", "discoverable_timeout_s"}},
+    "reconnect": true, "reconnect_devices": ["AA:BB:..."]}` (adapter keys only once set). Applied to an adapter each time BlueZ shows it: at boot, after a bluetoothd
     restart. A discoverable with a timeout is kept as off.
   - `/data/btbench/obex.json` — the OBEX server's push policy, `{"policy": "auto|ask|reject"}`.
   - `/data/btbench/wireplumber/` — WirePlumber's state (the profile picked per device, routes,

@@ -55,6 +55,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
  "devices": [ ...see below... ],
  "request": null,
  "agent": {"policy": "auto", "capability": "KeyboardDisplay", "registered": true},
+ "reconnect": {"on": true, "devices": ["50:1E:2D:95:16:34"]},
  "discovery": {"on": false, "ours": false,
                "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": true,
                           "uuids": [], "pattern": null, "discoverable": false, "auto_connect": false},
@@ -97,10 +98,18 @@ by alias.
 
 Any of: `powered`, `alias`, `discoverable`, `discoverable_timeout_s`, `pairable` (on `adapter`,
 e.g. `"hci1"`; default the primary), `agent` (`"auto"` or `"ask"`), `agent_capability`
-(`DisplayOnly`, `DisplayYesNo`, `KeyboardOnly`, `NoInputNoOutput`, `KeyboardDisplay`). Answers with
+(`DisplayOnly`, `DisplayYesNo`, `KeyboardOnly`, `NoInputNoOutput`, `KeyboardDisplay`), `reconnect`
+(bool). Answers with
 the new state. What is set is kept in `/data/btbench/bluetooth.json` and put back on the adapter
 whenever BlueZ shows it (a reboot, a bluetoothd restart), since BlueZ powers adapters on at start
 and forgets Pairable; a discoverable with a timeout is kept as off.
+
+`reconnect` (on by default): when BlueZ appears with an adapter (a boot, a bluetoothd restart),
+btbenchd connects again, over BR/EDR, the paired devices that were connected over BR/EDR when it
+went: up to three tries, 35 s apart, after 5 s. A peer that saw the board shut down cleanly does
+not call back by itself, and BlueZ reconnects only after a link loss. `reconnect.devices` is that
+list; a device leaves it when it is disconnected or removed through the API, or unpaired. LE
+devices are BlueZ's auto-connect's.
 
 The agent is BlueZ's default agent. With `auto` it accepts every pairing and every service
 authorization by itself, the way a device with no screen would, and only a passkey to type goes to

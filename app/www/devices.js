@@ -42,7 +42,7 @@ function renderAdapter(b) {
   setText($('ad-name'), a ? `${a.name} ${a.address}` : '');
   const on = !!(b.available && a);
   ['ad-powered', 'ad-discoverable', 'ad-pairable', 'ad-disc-timeout', 'ad-alias', 'ag-policy', 'ag-cap',
-    'sc-toggle'].forEach(id => { $(id).disabled = !on; });
+    'ad-reconnect', 'sc-toggle'].forEach(id => { $(id).disabled = !on; });
   if (a) {
     if (idle($('ad-powered'))) $('ad-powered').checked = a.powered;
     if (idle($('ad-discoverable'))) $('ad-discoverable').checked = a.discoverable;
@@ -54,6 +54,7 @@ function renderAdapter(b) {
     if (idle($('ag-policy'))) $('ag-policy').value = b.agent.policy;
     if (idle($('ag-cap'))) $('ag-cap').value = b.agent.capability;
   }
+  if (b.reconnect && idle($('ad-reconnect'))) $('ad-reconnect').checked = b.reconnect.on;
   const d = b.discovery || {};
   setText($('sc-toggle'), d.on ? 'Stop' : 'Scan');
   const how = renderScanOptions(b);
@@ -284,6 +285,7 @@ function setupDevices() {
   $('ad-powered').onchange = e => send({powered: e.target.checked});
   $('ad-discoverable').onchange = e => send({discoverable: e.target.checked});
   $('ad-pairable').onchange = e => send({pairable: e.target.checked});
+  $('ad-reconnect').onchange = e => send({reconnect: e.target.checked});
   $('ad-disc-timeout').onchange = e => send({discoverable_timeout_s: Math.max(0, parseInt(e.target.value, 10) || 0)});
   $('ad-alias').onchange = e => send({alias: e.target.value});
   $('ag-policy').onchange = e => send({agent: e.target.value});

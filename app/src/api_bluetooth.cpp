@@ -142,12 +142,16 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   });
 
   // Body: any of powered, alias, discoverable, discoverable_timeout_s, pairable (on `adapter`, the
-  // primary by default), agent ("auto"|"ask"), agent_capability.
+  // primary by default), agent ("auto"|"ask"), agent_capability, reconnect (bool).
   svr.Put("/api/bluetooth", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     std::string err;
     if (j.contains("agent") || j.contains("agent_capability")) {
       if (!d.bt.set_agent(j.value("agent", std::string{}), j.value("agent_capability", std::string{}), &err))
         return send_error(res, 400, err);
+    }
+    if (j.contains("reconnect")) {
+      if (!j["reconnect"].is_boolean()) return send_error(res, 400, "reconnect is true or false");
+      d.bt.set_reconnect(j["reconnect"].get<bool>());
     }
     json props = json::object();
     for (const char* k : {"powered", "alias", "discoverable", "discoverable_timeout_s", "pairable"})
