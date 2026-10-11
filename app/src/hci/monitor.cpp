@@ -297,6 +297,12 @@ void Monitor::Impl::seed_journal() {
     if (i == from) n += journal.replay(path + ".ctx");
     n += journal.replay(path);
   }
+  // The decoder learns the same: a link that was open before this start is then known with its
+  // channels and its AVDTP stream (RTP loss and jitter), not as "already connected" with bare CIDs.
+  journal.each([this](int64_t ts, uint16_t index, uint16_t mon, const uint8_t* d, size_t len) {
+    dec.packet(ts, index, mon, d, len);
+  });
+  dec.forget_in_flight();
   spdlog::info("HCI monitor: context from {} file(s) since {} ({} packets, {} kept, {} ms)", from + 1, files[from], n,
                journal.size(), (mono_us() - t0) / 1000);
 }

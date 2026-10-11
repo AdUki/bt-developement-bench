@@ -7,6 +7,15 @@
 const isLe = d => d.address_type === 'random' || d.advertising_flags != null ||
   Object.keys(d.manufacturer_data).length || Object.keys(d.service_data).length;
 
+// The services' JSON is as tall as its lines on a desktop (style.css): no box scrolling in the page.
+function gsGrow() {
+  const t = $('gs-json');
+  if (!t.offsetParent) return;  // hidden: sized when it shows (the observer below)
+  if (!window.matchMedia('(min-width: 901px) and (min-height: 560px)').matches) { t.style.height = ''; return; }
+  t.style.height = 'auto';
+  t.style.height = t.scrollHeight + 2 + 'px';
+}
+
 function leOnBt(b) {
   if (currentTab !== 'le' || !b) return;
   const les = b.devices.filter(isLe);
@@ -198,7 +207,7 @@ function renderServer(s) {
   setHTML($('gs-values'), s.values.length ? `<div class="kv">${s.values.map(v =>
     `<span class="mono">${esc(v.uuid)}</span><span class="mono">${esc(v.value || '(empty)')}${v.text ? ' “' + esc(v.text) + '”' : ''}${v.notifying ? ' · notifying' : ''}</span>`).join('')}</div>`
     : '<div class="muted">Nothing registered: Apply a service definition.</div>');
-  if (s.app && !$('gs-json').value.trim()) $('gs-json').value = JSON.stringify(s.app, null, 2);
+  if (s.app && !$('gs-json').value.trim()) { $('gs-json').value = JSON.stringify(s.app, null, 2); gsGrow(); }
 }
 const refreshServer = () => api('/le/gatt-server').then(renderServer).catch(fail);
 
@@ -237,13 +246,15 @@ function setupLe() {
     if (b) del(`/le/adv/${b.dataset.adv}`).then(refreshAdv).catch(fail);
   };
   $('gs-example').onclick = () => api('/le/gatt-server/example')
-    .then(j => { $('gs-json').value = JSON.stringify(j, null, 2); }).catch(fail);
+    .then(j => { $('gs-json').value = JSON.stringify(j, null, 2); gsGrow(); }).catch(fail);
   $('gs-apply').onclick = () => {
     let j;
     try { j = JSON.parse($('gs-json').value); } catch (e) { return toast('Not JSON: ' + e.message); }
     put('/le/gatt-server', j).then(renderServer).catch(e => { fail(e); if (e.body && e.body.state) renderServer(e.body); });
   };
   $('gs-clear').onclick = () => del('/le/gatt-server').then(refreshServer).catch(fail);
+  $('gs-json').addEventListener('input', gsGrow);
+  new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) gsGrow(); }).observe($('gs-json'));
   $('gs-log-clear').onclick = () => logClear($('gs-log'));
 }
 

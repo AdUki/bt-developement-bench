@@ -137,12 +137,25 @@ function logLine(el, line) {
     el._pending = true;
     requestAnimationFrame(() => {
       el._pending = false;
-      const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
-      el.textContent = el._lines.join('\n');
-      if (atEnd) el.scrollTop = el.scrollHeight;
+      logRender(el);
     });
   }
 }
+
+// What a log shows. On a desktop a log does not scroll inside the scrolling page: one marked
+// data-tail shows only its newest lines (all of them once its card is full screen, or where it
+// is the list of a view that fills the window, which scroll there), any other shows them all and
+// the page holds them (style.css).
+const LOG_DESK = window.matchMedia('(min-width: 901px) and (min-height: 560px)');
+function logRender(el) {
+  const lines = el._lines || [];
+  const scrolls = !LOG_DESK.matches || el.closest('.is-full, .fit-main');
+  const tail = !scrolls && el.dataset.tail ? Number(el.dataset.tail) : 0;
+  const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+  el.textContent = (tail && lines.length > tail ? [`… ${lines.length - tail} earlier lines (full screen shows them)`].concat(lines.slice(-tail)) : lines).join('\n');
+  if (atEnd) el.scrollTop = el.scrollHeight;
+}
+LOG_DESK.addEventListener('change', () => document.querySelectorAll('pre.log').forEach(el => { if (el._lines) logRender(el); }));
 function logClear(el) {
   el._lines = [];
   el.textContent = '';
@@ -540,6 +553,7 @@ function setFull(card, on) {
     b.title = on ? 'Back to the page (Esc)' : 'Full screen';
     b.setAttribute('aria-pressed', String(on));
   }
+  card.querySelectorAll('pre.log').forEach(el => { if (el._lines) logRender(el); });
   window.dispatchEvent(new Event('resize'));
 }
 

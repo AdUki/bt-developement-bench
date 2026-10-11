@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -40,6 +41,9 @@ class ContextJournal {
 
   // The context now, as a btsnoop file: header, then the records in the order they happened.
   std::string snapshot() const;
+  // The same records, in order, as packets: how the live decoder learns at start what the links
+  // already open are (their channels, the AVDTP stream), instead of meeting them mid-stream.
+  void each(const std::function<void(int64_t ts_us, uint16_t index, uint16_t mon, const uint8_t* d, size_t len)>& fn) const;
   size_t size() const;  // records held
 
   // Writes snapshot() to path (through a temporary file and a rename, so a reader never sees half

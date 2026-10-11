@@ -193,6 +193,31 @@ void test_context() {
   btb::hci::ContextJournal j;
   for (size_t i = 0; i < split; ++i) j.packet(pkts[i].ts, pkts[i].index, pkts[i].opcode, pkts[i].data.data(), pkts[i].data.size());
   CHECK(j.size() > 0);
+  // each() hands back what snapshot() holds, in order, as packets (the live decoder's seed).
+  {
+    size_t n = 0;
+    int64_t last = 0;
+    bool ordered = true;
+    j.each([&](int64_t ts, uint16_t, uint16_t, const uint8_t*, size_t) {
+      ordered = ordered && ts >= last;
+      last = ts;
+      ++n;
+    });
+    CHECK_EQ(n, j.size());
+    CHECK(ordered);
+    // A controller that closes (powered off) takes its links with it, as the decoder does: a
+    // journal that kept them seeded links that were gone.
+    btb::hci::ContextJournal off;
+    for (size_t i = 0; i < split; ++i) off.packet(pkts[i].ts, pkts[i].index, pkts[i].opcode, pkts[i].data.data(), pkts[i].data.size());
+    off.packet(pkts[split].ts, 0, kMonCloseIndex, nullptr, 0);
+    auto is_link = [](uint16_t mon) { return mon != kMonNewIndex && mon != kMonIndexInfo && mon != kMonOpenIndex && mon != kMonCloseIndex; };
+    size_t before = 0;
+    j.each([&](int64_t, uint16_t, uint16_t mon, const uint8_t*, size_t) { before += is_link(mon); });
+    CHECK(before > 0);
+    size_t links = 0;
+    off.each([&](int64_t, uint16_t, uint16_t mon, const uint8_t*, size_t) { links += mon != kMonNewIndex && mon != kMonIndexInfo && mon != kMonOpenIndex && mon != kMonCloseIndex; });
+    CHECK_EQ(links, size_t(0));
+  }
   const std::vector<Pkt> rest(pkts.begin() + static_cast<long>(split), pkts.end());
   const std::string later = tmp_path("ctx-later.btsnoop");
   write_file(later, rest);

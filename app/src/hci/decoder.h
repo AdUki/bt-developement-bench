@@ -57,6 +57,11 @@ class Decoder {
   // Closes the current window early (end of a replay), so its packets show up in stats.
   void flush(int64_t now_us);
 
+  // After a context was fed in (the links open before a start): its TX packets were completed
+  // long ago, but the context keeps no Number Of Completed Packets, so they would count as in
+  // flight for ever and the first live completions would match them, hours "late".
+  void forget_in_flight();
+
   // A mark from POST /api/hci/mark: appended to the events ring. (The kernel echoes the logging
   // frame back on the monitor channel; that echo is recognised by its ident and not duplicated.)
   void add_mark(int64_t ts_us, const std::string& text);

@@ -141,9 +141,9 @@
       </div>
     </div>
     <div id="hh-devices" class="rows-cards"></div>
-    <div class="card">
+    <div class="card" data-full>
       <div class="card-head"><h3>Key presses</h3><button class="small-btn" id="hh-clear">Clear</button></div>
-      <pre id="hh-log" class="log tall" data-empty="Press a key on a connected keyboard or remote: it shows here."></pre>
+      <pre id="hh-log" class="log tall" data-tail="40" data-empty="Press a key on a connected keyboard or remote: it shows here."></pre>
     </div>
   </section>
 
@@ -163,7 +163,7 @@
         <div id="gx-tree"></div>
         <details class="log-box">
           <summary>Notifications <button class="small-btn" id="gx-clear">Clear</button></summary>
-          <pre id="gx-log" class="log"></pre>
+          <pre id="gx-log" class="log" data-tail="40"></pre>
         </details>
       </div>
       <h2>Advertisers in range</h2>
@@ -215,9 +215,9 @@
       </div>
       <div class="cols">
         <div class="card"><h3>Values</h3><div id="gs-values" class="small"></div></div>
-        <div class="card">
+        <div class="card" data-full>
           <div class="card-head"><h3>Events</h3><button class="small-btn" id="gs-log-clear">Clear</button></div>
-          <pre id="gs-log" class="log" data-empty="Reads, writes and subscriptions by connected devices show here."></pre>
+          <pre id="gs-log" class="log" data-tail="40" data-empty="Reads, writes and subscriptions by connected devices show here."></pre>
         </div>
       </div>
     </div>
@@ -434,7 +434,7 @@
   </section>
 
   <!-- ======================================================== Traffic: links -->
-  <section id="monitor" class="panel">
+  <section id="monitor" class="panel fit">
     <div id="mon-msg" class="small bad-text"></div>
     <div class="card flush">
       <div class="card-head pad"><h3>Connections</h3><span id="mon-source" class="small muted"></span></div>
@@ -454,7 +454,7 @@
         <div id="mon-channels"></div>
       </details>
     </div>
-    <div class="card">
+    <div class="card fit-main" data-full>
       <div class="card-head">
         <h3>Events</h3>
         <div class="acts mark">

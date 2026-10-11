@@ -938,7 +938,11 @@ body.has-full { overflow: hidden; }
 @media (min-width: 901px) and (min-height: 560px) {
   body.fit { overflow: hidden; }
   body.fit #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
-  body.fit main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0.8rem; }
+  /* Should the view still not fit (a short window), the page scrolls rather than cutting it off. */
+  body.fit main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0.8rem; overflow-y: auto; }
+  body.fit #mon-detail canvas.graph { height: 96px; }
+  body.fit #mon-detail h4 { margin-top: 0.5rem; }
+  body.fit #monitor .fit-main > .log { min-height: 5rem; }
   body.fit .panel.active { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   body.fit .panel.active > .pane.fit:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   body.fit .panel.active > *, body.fit .pane.fit > * { flex: none; }
@@ -974,7 +978,7 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
   html:has(body.fit-player) { scrollbar-gutter: auto; }
   body.fit-player #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
   body.fit-player main { flex: 1; min-height: 0; max-width: none; display: flex; padding-bottom: 0; }
-  #player.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 5fr) minmax(0, 7fr); gap: 0 1rem; }
+  #player.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 560px) minmax(0, 1fr); gap: 0 1rem; }
   #player > .pane, #player > .pane[hidden] { display: block !important; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
   #player #np-mini { display: none !important; }
   #player .tracklist { max-height: none; }
@@ -987,3 +991,14 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 }
 /* A very wide screen: the pages may use more of it. */
 @media (min-width: 1700px) { main { max-width: 1560px; } }
+
+/* A desktop: no log scrolls inside the scrolling page (app.js logRender). They take the height of
+   their lines; the list of a view that fills the window, and a log in a full-screen card, scroll. */
+@media (min-width: 901px) and (min-height: 560px) {
+  .log, .log.tall, .tracklist, .pl-items, .ob-session .result { max-height: none; overflow: visible; }
+  body.fit .fit-main > .log { flex: 1; min-height: 6rem; overflow: auto; }
+  .is-full .log { flex: 1; min-height: 6rem; overflow: auto; }
+}
+
+/* The GATT server's JSON grows with what is in it on a desktop rather than scrolling in the page. */
+@media (min-width: 901px) and (min-height: 560px) { #gs-json { overflow: hidden; resize: none; } }

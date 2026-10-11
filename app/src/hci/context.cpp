@@ -55,6 +55,13 @@ void ContextJournal::packet(int64_t ts_us, uint16_t index, uint16_t mon, const u
     case kCtxIndex:
       // A controller that goes takes its links with it. (Not New Index: the kernel repeats it for
       // every controller to each monitor socket that opens, btmon's at every ring file.)
+      // A controller that closes (powered off: bluetoothd restarting, an adapter power cycle)
+      // ends its links without a Disconnection Complete for each; the decoder drops them too.
+      if (mon == kMonCloseIndex) {
+        for (auto it = links_.begin(); it != links_.end();) {
+          it = (it->first >> 16) == index ? links_.erase(it) : std::next(it);
+        }
+      }
       if (mon == kMonDelIndex) {
         index_.erase(index);
         for (auto it = links_.begin(); it != links_.end();) {
@@ -112,6 +119,22 @@ std::string ContextJournal::snapshot() const {
   std::string out(hdr, sizeof hdr);
   for (const Rec* r : all) out += r->bytes;
   return out;
+}
+
+void ContextJournal::each(
+    const std::function<void(int64_t ts_us, uint16_t index, uint16_t mon, const uint8_t* d, size_t len)>& fn) const {
+  const std::string all = snapshot();
+  const auto* p = reinterpret_cast<const uint8_t*>(all.data());
+  auto be32 = [](const uint8_t* b) { return uint32_t{b[0]} << 24 | uint32_t{b[1]} << 16 | uint32_t{b[2]} << 8 | b[3]; };
+  for (size_t at = 16; at + 24 <= all.size();) {
+    const uint32_t incl = be32(p + at + 4);
+    if (at + 24 + incl > all.size()) break;
+    const uint32_t flags = be32(p + at + 8);
+    const uint64_t raw = uint64_t{be32(p + at + 16)} << 32 | be32(p + at + 20);
+    fn(static_cast<int64_t>(raw) - kBtsnoopEpochDelta, static_cast<uint16_t>(flags >> 16),
+       static_cast<uint16_t>(flags & 0xffff), p + at + 24, incl);
+    at += 24 + incl;
+  }
 }
 
 size_t ContextJournal::replay(const std::string& path) {

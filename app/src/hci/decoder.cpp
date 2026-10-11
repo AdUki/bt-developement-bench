@@ -1517,6 +1517,17 @@ int Decoder::advance(int64_t now_us) {
   return closed;
 }
 
+void Decoder::forget_in_flight() {
+  for (auto& a : adapters_) {
+    for (uint32_t& o : a->outstanding) o = 0;
+    for (uint32_t& o : a->outstanding_max) o = 0;
+    for (auto& c : a->conns) {
+      c->in_flight = c->in_flight_max = 0;
+      c->fifo_head = c->fifo_n = 0;
+    }
+  }
+}
+
 void Decoder::flush(int64_t now_us) {
   if (window_start_us_ < 0) return;
   if (now_us <= window_start_us_) now_us = window_start_us_ + 1000;

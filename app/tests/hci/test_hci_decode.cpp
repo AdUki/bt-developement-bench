@@ -433,6 +433,29 @@ void test_mid_trace() {
   CHECK_EQ(d.stats()["adapters"][0]["name"], "hci0");
 }
 
+// A context fed in at start (links open before it) leaves no packet in flight: its TX packets were
+// completed long ago, and the first live completion must not be matched to one of them.
+void test_context_forgotten() {
+  Decoder d;
+  const Bytes cc = evt(0x03, cat(cat(Bytes{0x00, 7, 0}, kPeer), Bytes{0x01, 0x00}));
+  d.packet(kT0, 0, kMonEvent, cc.data(), cc.size());
+  const Bytes req = acl(7, 2, l2cap(0x0001, conn_req(1, 0x0019, 0x0040)));
+  for (int i = 0; i < 3; ++i) d.packet(kT0 + 1000 + i, 0, kMonAclTx, req.data(), req.size());
+  d.forget_in_flight();
+  // Live, an hour later: one packet out, its completion 20 ms after.
+  const int64_t live = kT0 + 3600LL * 1000000;
+  const Bytes data = acl(7, 2, l2cap(0x0040, Bytes{1, 2, 3}));
+  d.packet(live, 0, kMonAclTx, data.data(), data.size());
+  const Bytes n = nocp(7, 1);
+  d.packet(live + 20000, 0, kMonEvent, n.data(), n.size());
+  d.advance(live + 1000000);
+  const json* c = find_conn(d.stats(), 7);
+  CHECK(c != nullptr);
+  if (!c) return;
+  CHECK_EQ((*c)["in_flight"], 0);
+  CHECK((*c)["lat_ms"]["max"].get<double>() < 100);
+}
+
 // BR/EDR channel close via Disconnection Response, and refusal.
 void test_l2cap_close() {
   Decoder d;
@@ -610,6 +633,7 @@ int main() {
   test_a2dp_session();
   test_le_att();
   test_mid_trace();
+  test_context_forgotten();
   test_l2cap_close();
   test_history_ring();
   test_event_ring();

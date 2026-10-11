@@ -356,7 +356,7 @@ So btbenchd's reader thread, which sees every packet anyway, keeps a **context j
 | Kept | Until |
 |---|---|
 | New/Open/Close Index, Index Info (the controllers) | Delete Index |
-| connection complete events: BR/EDR, SCO/eSCO, LE, CIS, BIG | the link's Disconnection Complete, or a new connection on its handle |
+| connection complete events: BR/EDR, SCO/eSCO, LE, CIS, BIG | the link's Disconnection Complete, a new connection on its handle, or its controller's Close Index (a power-off, a bluetoothd restart: the kernel ends every link without a Disconnection Complete) |
 | L2CAP signalling, fragments included (which PSM and mode a channel is) | the link goes; the newest 400 per link |
 | AVDTP signalling (which codec a stream carries) | the link goes; the newest 200 per link |
 | ATT discovery: Exchange MTU, Find Information, Read By (Group) Type, their errors (btmon's att.c names characteristics from them) | the link goes; the newest 1500 per link |
@@ -374,11 +374,16 @@ rename. Context files whose capture is gone are deleted at the next rotation.
 live stream is read. It replays the ring files, oldest first, from the newest file that has a
 context file (that file's context included) to the file being written. Normally that is one
 file, about 0.4 s on the Zero W. The first start on a ring without context files reads all of
-them: about 3 s for eight full files.
+them: about 3 s for eight full files. The live decoder is then fed the journal too, so a link
+open before the start keeps its peer, its named channels and its AVDTP stream (RTP loss and
+jitter in Graphs) instead of reappearing "already connected" with bare CIDs. The context keeps
+no Number Of Completed Packets, so after it the decoder forgets what it counted as in flight:
+otherwise those packets would stay in flight and the first live completions would match them,
+hours late.
 
 **The index reads `<name>.ctx` first**, then resets the per-link counts, so a file's links count
 only its own traffic. Links known only from the context, with nothing in the file, are left out
-of the graph's list. The btmon view and an export with context put the same records first.
+of the graph's list. An export with context puts the same records first.
 
 Without a context file (a capture from elsewhere, a link older than every ring file), two
 protocols are still recognised by their payload. The channel is then remembered with its likely
