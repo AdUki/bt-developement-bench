@@ -768,6 +768,33 @@ cmd_logs() {
   done
 }
 
+# BlueZ's D-Bus traffic (GET /api/bluetooth/dbus), a message a line as bluez-dbus.log has it;
+# a word keeps only the messages that contain it; -f follows (once a second, from the last seq).
+cmd_dbus() {
+  local follow=0 word=""
+  for a in "$@"; do
+    case "$a" in -f|--follow) follow=1 ;; *) word=$a ;; esac
+  done
+  local fmt='.entries[]
+    | (if .args == null then "" elif (.args|type) == "string" then .args elif .args == [] then "" else (.args|tojson) end) as $a
+    | ((.ts / 1000 | strftime("%H:%M:%S")) + " " + (.type + "      ")[0:6] + " " + ((.sender_name // "") | if . == "" then "?" else . end)
+       + (if .dest then " → " + ((.dest_name // "") | if . == "" then "?" else . end) else "" end) + "  "
+       + (if .type == "call" or .type == "signal" then (.path + " " + .iface + "." + .member + (if $a != "" then " " + $a else "" end))
+          else ((.call // "?") + (if .latency_ms != null then " \(.latency_ms) ms" else "" end)
+                + (if .type == "error" then ": " + .error_name + ": " + (.error // "") elif $a != "" then ": " + $a else "" end)) end))
+    | select($w == "" or (ascii_downcase | contains($w | ascii_downcase)))'
+  local j seq
+  j=$(get "/api/bluetooth/dbus?limit=200") || exit 1
+  jq -r --arg w "$word" "$fmt" <<<"$j"
+  [ "$follow" = 1 ] || return 0
+  seq=$(jq '.seq' <<<"$j")
+  while sleep 1; do
+    j=$(get "/api/bluetooth/dbus?since=$seq&limit=2000") || continue
+    jq -r --arg w "$word" "$fmt" <<<"$j"
+    seq=$(jq '.seq' <<<"$j")
+  done
+}
+
 cmd_bt_args() {
   if [ $# -eq 0 ]; then
     get /api/system/bluetoothd-args | show '"bluetoothd args: " + (if .args == "" then "(none)" else .args end) + "   (" + .file + ")"'
@@ -814,7 +841,7 @@ cmd_completion() {
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
   local cmds="status scan devices info pair connect disconnect trust untrust block unblock cancel remove
-    discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel btdebug sys logs bt-args run ssh help completion"
+    discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel btdebug sys logs dbus bt-args run ssh help completion"
   if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
@@ -898,6 +925,7 @@ ${bold}Board${off}
                                   rfcomm bnep hidp driver all (bench logs kernel -f to follow)
   sys                             versions, services, health
   logs [unit] [-f]                the journal (default bluetooth; kernel: the kernel's log)
+  dbus [WORD] [-f]                BlueZ's D-Bus traffic (calls, replies, errors, signals), only lines with WORD
   bt-args ["-d -E ..."]           show / set bluetoothd's arguments (restarts bluetooth)
   run TOOL ARGS...                l2ping, l2test, btgatt-client, iperf3, ... on the board
   ssh [CMD]                       root@$HOST
@@ -940,6 +968,7 @@ case "$cmd" in
   btdebug) cmd_btdebug "$@" ;;
   sys) cmd_sys ;;
   logs) cmd_logs "$@" ;;
+  dbus) cmd_dbus "$@" ;;
   bt-args) cmd_bt_args "$@" ;;
   run) cmd_run "$@" ;;
   ssh) cmd_ssh "$@" ;;
