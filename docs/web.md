@@ -191,7 +191,9 @@ viewer:
 - a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
   [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
   ATT, SMP, AVDTP, media, AVRCP, RFCOMM, MGMT (what bluetoothd asks the kernel, by name), errors,
-  marks and logs, slow TX;
+  marks and logs, slow TX. They combine: a click adds one or takes it away, and the ones picked are
+  joined with `||` (ATT and media: `proto:att || proto:rtp`); *all* clears them, and a time range
+  dragged on the graph goes into each;
 - a graph strip of the whole capture: packets per time bucket of the filtered set, and for a chosen
   connection its TX/RX throughput and TX latency p50/p95. Drag across it to keep only that time
   range (it becomes `t>=… t<…` in the filter, and the graph zooms to it); click to jump the table

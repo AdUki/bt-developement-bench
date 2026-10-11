@@ -246,8 +246,7 @@ const livePkts = (() => {
   }
 
   function renderChips() {
-    setHTML($('lp-chips'), CHIPS.map(([label, f]) =>
-      `<button class="small-btn cv-chip${lp.filter === f ? ' on' : ''}" data-chip="${esc(f)}">${esc(label)}</button>`).join(''));
+    setHTML($('lp-chips'), chipsHTML(lp.filter, CHIPS));
   }
 
   const atBottom = el => el.scrollTop + el.clientHeight >= el.scrollHeight - ROW * 2;
@@ -499,7 +498,7 @@ const livePkts = (() => {
     $('lp-apply').onclick = () => applyFilter($('lp-filter').value);
     $('lp-chips').onclick = e => {
       const b = e.target.closest('button[data-chip]');
-      if (b) applyFilter(b.dataset.chip);
+      if (b) applyFilter(chipToggle(lp.filter, b.dataset.chip, CHIPS));
     };
     $('lp-run').onclick = () => setPaused(!lp.paused);
     $('lp-clear').onclick = () => { clear(); renderStatus(); };

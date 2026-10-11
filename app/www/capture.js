@@ -87,6 +87,13 @@
   const base = () => `/capture/files/${enc(cv.name)}`;
   const tTerms = f => f.split(/\s+/).filter(w => /^t(>=|<=|>|<|=)/.test(w));
   const nonT = f => f.split(/\s+/).filter(w => w && !/^t(>=|<=|>|<|=)/.test(w)).join(' ');
+  // A time range goes into every group of a "||" filter: each group is matched on its own.
+  const withT = (f, t) => {
+    const tt = [...new Set(t)].join(' ');
+    if (!tt) return f;
+    const groups = splitGroups(f);
+    return groups.length ? groups.map(g => `${g} ${tt}`).join(' || ') : tt;
+  };
   const fmtT = t => t == null ? '' : t.toFixed(6);
   // "08:03:41.476915": the capture's own clock, to the µs it was stamped with.
   const fmtTod = ms => {
@@ -162,9 +169,7 @@
   }
 
   function renderChips() {
-    const cur = nonT(cv.filter);
-    setHTML($('cv-chips'), CHIPS.map(([label, f]) =>
-      `<button class="small-btn cv-chip${cur === f ? ' on' : ''}" data-chip="${esc(f)}">${esc(label)}</button>`).join('') +
+    setHTML($('cv-chips'), chipsHTML(nonT(cv.filter), CHIPS) +
       (tTerms(cv.filter).length ? '<button class="small-btn cv-chip on" data-unzoom="1">whole capture ✕</button>' : ''));
   }
 
@@ -719,8 +724,7 @@
         return;
       }
       const a = tAt(Math.min(d.x0, d.x1)), b = tAt(Math.max(d.x0, d.x1));
-      const rest = nonT(cv.filter);
-      applyFilter(`${rest ? rest + ' ' : ''}t>=${a.toFixed(3)} t<${b.toFixed(3)}`.trim());
+      applyFilter(withT(nonT(cv.filter), [`t>=${a.toFixed(3)}`, `t<${b.toFixed(3)}`]));
     });
     c.addEventListener('pointercancel', () => { cv.drag = null; drawGraph(); });
   }
@@ -788,8 +792,7 @@
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.unzoom) return applyFilter(nonT(cv.filter));
-      const t = tTerms(cv.filter).join(' ');
-      applyFilter(`${b.dataset.chip}${t ? ' ' + t : ''}`.trim());
+      applyFilter(withT(chipToggle(nonT(cv.filter), b.dataset.chip, CHIPS), tTerms(cv.filter)));
     };
     $('cv-conn').onchange = e => { cv.conn = e.target.value; fetchGraph(); };
     $('cv-time').onchange = e => setTimeMode(e.target.value);

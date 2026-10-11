@@ -488,7 +488,7 @@
         <p>The capture viewer's: <code>type:</code> <code>dir:</code> <code>proto:</code> <code>handle:</code> <code>cid:</code>
           <code>psm:</code> <code>opcode:</code> <code>evt:</code> <code>is:err|mark|cont|lat</code> <code>len&gt;100</code>
           <code>lat&gt;20</code> (TX → NOCP, ms; such a filter shows a TX packet once its completion came, up to a second late),
-          <code>!term</code>, <code>a|b</code>, and any other word or <code>"quoted phrase"</code> searched in the summaries.
+          <code>!term</code>, <code>a|b</code> (either value), <code>… || …</code> (either filter: the quick filters combine this way, click several), and any other word or <code>"quoted phrase"</code> searched in the summaries.
           The board keeps the last 2048 packets while someone watches: changing the filter re-filters those, and a row
           says where packets were dropped (the page fell behind) or skipped (more matched than it sends, the newest kept).</p>
       </details>
@@ -596,7 +596,7 @@
       <details class="small muted cv-hint more-fields">
         <summary>Filter syntax</summary>
         <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value;
-          <code>a b || c</code> matches either group.
+          <code>a b || c</code> matches either group; the quick filters combine this way (click several).
           <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
           <code>proto:hci|l2cap|att|smp|sdp|rfcomm|avdtp|rtp|avctp|bnep|hid|sco|iso</code> ·
           <code>handle:11</code> <code>cid:0x40</code> <code>psm:25</code> <code>index:0</code> ·

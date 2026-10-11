@@ -475,6 +475,38 @@ function renderRequest(r) {
 
 // ---------------------------------------------------------------- start
 
+// ---------------------------------------------------------------- quick filters that combine
+
+// The packet views' quick filters (Packets, a capture): each chip is a group of the filter
+// language, and the chips picked are joined with "||", any of them — ATT and media is
+// "proto:att || proto:rtp". A click adds a chip or takes it away again; "all" (the empty chip)
+// clears; a filter typed by hand that is not such a combination starts over from the chip clicked.
+// chips: [[label, filter], ...].
+const splitGroups = f => f.split(/\s+\|\|\s+/).map(g => g.trim()).filter(Boolean);
+
+function chipGroups(filter, chips) {
+  const known = chips.map(c => c[1]).filter(Boolean);
+  const groups = splitGroups(filter);
+  return groups.every(g => known.includes(g)) ? groups : null;
+}
+
+function chipToggle(filter, chip, chips) {
+  if (!chip) return '';
+  const cur = chipGroups(filter, chips);
+  if (!cur) return chip;
+  const next = cur.includes(chip) ? cur.filter(g => g !== chip) : cur.concat(chip);
+  return chips.map(c => c[1]).filter(f => f && next.includes(f)).join(' || ');
+}
+
+function chipsHTML(filter, chips) {
+  const cur = chipGroups(filter, chips) || [];
+  return chips.map(([label, f]) => {
+    const on = f ? cur.includes(f) : !filter.trim();
+    return `<button class="small-btn cv-chip${on ? ' on' : ''}" data-chip="${esc(f)}" aria-pressed="${on}"` +
+      ` title="${f ? esc(f) + (on ? ' — click to take it away' : ' — click to add it') : 'every packet'}">${esc(label)}</button>`;
+  }).join('');
+}
+
 // ---------------------------------------------------------------- one scrollbar on a desktop
 
 // A view built around one long list (packets, D-Bus, the log, an open capture) fills the window
