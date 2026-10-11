@@ -304,6 +304,12 @@ function lgWhoClass(who) {
 
 const LG_PRIO = ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug'];
 
+// A debug build names its source files by where it was built: bluetoothd -d prints
+// "/home/…/src/bluez/src/adapter.c:…", a Yocto build "/usr/src/debug/bluez5/5.86/src/adapter.c:…".
+// Shown from the source tree on ("src/adapter.c"), which is what is read; the search still sees
+// the whole path.
+const lgShortSrc = m => m.replace(/(^|[\s(])\/(?:[^\s:]*\/)?(?:src|debug)\/(?:bluez5?|pipewire|wireplumber)(?:-[\d.]+)?\/(?:[\d.]+\/)?(?=[\w-]+\/)/g, '$1');
+
 function lgLineHTML(e, marks) {
   const cls = `lg-line p${Math.min(7, Math.max(0, e.prio))}${e.note ? ' lg-note' : ''}`;
   if (e.note) return `<div class="${cls}">${esc(e.msg)}</div>`;
@@ -316,7 +322,7 @@ function lgLineHTML(e, marks) {
   if (e.pid) head += `<span class="lg-pid" title="${esc(e.tid ? 'pid.tid ' + e.tid : 'pid')}">[${e.tid || e.pid}]</span>`;
   if (head && !head.endsWith(' ')) head += ' ';
   if (e.topic) head += `<span class="lg-topic">${lgMark(e.topic, marks)}</span> `;
-  return `<div class="${cls}" title="${LG_PRIO[e.prio] || e.prio}">${head}${lgColour(e.msg, marks)}</div>`;
+  return `<div class="${cls}" title="${LG_PRIO[e.prio] || e.prio}">${head}${lgColour(lgShortSrc(e.msg), marks)}</div>`;
 }
 
 // ---------------------------------------------------------------- drawing

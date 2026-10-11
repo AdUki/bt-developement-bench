@@ -57,7 +57,7 @@
     <!-- The library on a page of its own: long folders get the screen, and the bar at the bottom
          keeps what plays in reach while browsing. -->
     <div class="pane" data-pane="library">
-      <div class="card np-libcard">
+      <div class="card np-libcard" data-full>
         <div class="card-head"><div class="segs" id="np-lib-tabs"></div></div>
         <div class="row" id="np-search-row" hidden><input type="search" id="np-search" class="grow" placeholder="Search the phone"></div>
         <div id="np-crumbs" class="small crumbs"></div>
@@ -441,7 +441,7 @@
       <div class="scroll-x"><table id="mon-conns" class="tbl"></table></div>
       <div id="mon-adapters" class="small muted pad"></div>
     </div>
-    <div class="card" id="mon-detail" hidden>
+    <div class="card" id="mon-detail" data-full hidden>
       <div class="card-head"><h3 id="mon-title"></h3><span id="mon-now" class="small muted"></span></div>
       <h4>Throughput, kbit/s <span class="legend"><i class="c-tx"></i>TX <i class="c-rx"></i>RX</span></h4>
       <canvas id="mon-tput" class="graph"></canvas>
@@ -467,8 +467,8 @@
   </section>
 
   <!-- ======================================================== Traffic: packets -->
-  <section id="packets" class="panel">
-    <div class="card" id="lp">
+  <section id="packets" class="panel fit">
+    <div class="card fit-main" id="lp" data-full>
       <div class="card-head">
         <span id="lp-status" class="small muted"></span>
         <div class="acts">
@@ -510,8 +510,8 @@
   </section>
 
   <!-- ======================================================== Traffic: BlueZ's D-Bus -->
-  <section id="dbus" class="panel">
-    <div class="card">
+  <section id="dbus" class="panel fit">
+    <div class="card fit-main" data-full>
       <div class="card-head">
         <span id="db-status" class="small muted"></span>
         <div class="acts">
@@ -567,7 +567,7 @@
       <pre id="cap-an-text" class="log tall"></pre>
     </div>
 
-    <div class="card" id="cv" hidden>
+    <div class="card fit-main" id="cv" data-full hidden>
       <div class="card-head">
         <h3 class="mono" id="cv-title"></h3>
         <div class="acts">
@@ -668,26 +668,8 @@
       </div>
     </div>
 
-    <div class="pane" data-pane="logs">
-      <div class="card">
-        <div class="card-head"><h3>Log files</h3><span id="lf-dir" class="small muted mono"></span></div>
-        <p class="hint">Each program's log in its own format (btbench-logd), for clog: <span class="mono">clog -t /tmp/logs/bluez.log</span> on the board, or download one here.</p>
-        <div id="lf-list" class="lf-list"></div>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <h3>Kernel Bluetooth logs</h3>
-          <div class="acts">
-            <button class="small-btn" id="kd-off">All off</button>
-            <button class="small-btn" id="kd-show">Show in the journal</button>
-          </div>
-        </div>
-        <p class="hint">The kernel's own debug messages (BT_DBG) by area, through dynamic debug. They are chatty: a streaming link logs thousands of lines a second and the logging changes the timing, so switch on only what you are looking at.</p>
-        <div id="kd-areas" class="kd-areas"></div>
-        <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
-        <div id="kd-msg" class="small muted"></div>
-      </div>
-      <div class="card" id="lg">
+    <div class="pane fit" data-pane="logs">
+      <div class="card fit-main" id="lg" data-full>
         <div class="card-head">
           <h3>Logs</h3>
           <div class="acts">
@@ -710,6 +692,27 @@
         </div>
         <div class="small muted lg-status"><span id="lg-count"></span> <span id="lg-err" class="bad-text"></span></div>
         <div id="lg-view" class="lg-view wrap" tabindex="0" aria-label="Log lines"></div>
+      </div>
+    </div>
+
+    <div class="pane" data-pane="tools">
+      <div class="card">
+        <div class="card-head"><h3>Log files</h3><span id="lf-dir" class="small muted mono"></span></div>
+        <p class="hint">Each program's log in its own format (btbench-logd), for clog: <span class="mono">clog -t /tmp/logs/bluez.log</span> on the board, or download one here.</p>
+        <div id="lf-list" class="lf-list"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Kernel Bluetooth logs</h3>
+          <div class="acts">
+            <button class="small-btn" id="kd-off">All off</button>
+            <button class="small-btn" id="kd-show">Show in the journal</button>
+          </div>
+        </div>
+        <p class="hint">The kernel's own debug messages (BT_DBG) by area, through dynamic debug. They are chatty: a streaming link logs thousands of lines a second and the logging changes the timing, so switch on only what you are looking at.</p>
+        <div id="kd-areas" class="kd-areas"></div>
+        <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
+        <div id="kd-msg" class="small muted"></div>
       </div>
       <div class="card">
         <div class="card-head"><h3>Run a tool</h3></div>

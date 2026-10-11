@@ -195,10 +195,12 @@ function grLayout() {
     const el = document.createElement('div');
     el.className = 'card gr-chart';
     el.id = 'gr-c-' + c.id;
+    el.dataset.full = '';
     el.innerHTML = `<h4>${esc(c.title)} <span class="muted">(${esc(c.unit)})</span> <span class="legend muted">${grStyleKey(c.styles)}</span></h4><canvas class="graph"></canvas><div class="gr-tip" hidden></div>`;
     // Keep page order whatever order the data arrived in.
     const after = GR_CHARTS.slice(0, GR_CHARTS.indexOf(c)).reverse().map(x => $('gr-c-' + x.id)).find(Boolean);
     if (after) after.after(el); else box.prepend(el);
+    initFull(el.parentNode);
     const cv = el.querySelector('canvas');
     cv.onmousemove = e => {
       const r = cv.getBoundingClientRect();
@@ -267,7 +269,8 @@ function grDraw(force) {
     for (let back = 0; back <= win; back += step) {
       const px = Math.round(x(now - back)) + 0.5;
       g.beginPath(); g.moveTo(px, T); g.lineTo(px, h - B); g.stroke();
-      g.fillText(back ? `-${back >= 60000 ? back / 60000 + ' min' : back / 1000 + ' s'}` : (gr.paused ? 'paused' : 'now'), px - (back ? 14 : 24), h - 4);
+      const ago = back >= 60000 ? `-${Math.floor(back / 60000)}:${String(Math.round(back % 60000 / 1000)).padStart(2, '0')}` : `-${back / 1000} s`;
+      g.fillText(back ? ago : (gr.paused ? 'paused' : 'now'), px - (back ? 14 : 24), h - 4);
     }
     // The lines. A gap of more than 3 s between points is drawn as a gap.
     g.save();

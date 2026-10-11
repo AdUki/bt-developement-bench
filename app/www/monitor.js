@@ -78,9 +78,13 @@ function canvasCtx(cv) {
   return {g, w, h};
 }
 
-// Series share one x axis (the history's timestamps) and one y scale from 0 to the max.
+// Series share one x axis (the history's timestamps) and one y scale from 0 to a round maximum,
+// read off a scale in four bands and time ticks every 15 s counting back from the newest sample:
+// the Graphs view's axes, so the same link reads the same in both. (niceCeil and fmtAxis are
+// graphs.js's.)
 function plot(cv, t, series, unitScale) {
   const {g, w, h} = canvasCtx(cv);
+  g.font = '10.5px system-ui';
   if (!t || t.length < 2) {
     g.fillStyle = css('--muted');
     g.fillText('no data yet', 8, 16);
@@ -88,16 +92,25 @@ function plot(cv, t, series, unitScale) {
   }
   let max = 0;
   for (const s of series) for (const v of s.data) if (v != null && isFinite(v)) max = Math.max(max, v * (s.scale || unitScale));
-  max = max > 0 ? max * 1.1 : 1;
+  max = max > 0 ? niceCeil(max * 1.1) : 1;
+  const L = 40, R = 6, T = 6, B = 16;
   const t0 = t[0], t1 = t[t.length - 1] || t0 + 1;
-  const x = v => 4 + (w - 8) * (v - t0) / Math.max(1, t1 - t0);
-  const y = v => h - 14 - (h - 22) * v / max;
+  const x = v => L + (w - L - R) * (v - t0) / Math.max(1, t1 - t0);
+  const y = v => T + (h - T - B) * (1 - v / max);
   g.strokeStyle = css('--line');
-  g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w, y(0)); g.stroke();
   g.fillStyle = css('--muted');
-  g.font = '11px system-ui';
-  g.fillText(max.toFixed(max < 10 ? 1 : 0), 4, 11);
-  g.fillText(`${Math.round((t1 - t0) / 1000)} s`, w - 34, h - 2);
+  g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4, py = Math.round(y(v)) + 0.5;
+    g.beginPath(); g.moveTo(L, py); g.lineTo(w - R, py); g.stroke();
+    g.fillText(fmtAxis(v), 2, py + 3.5);
+  }
+  for (let back = 0; back <= t1 - t0; back += 15000) {
+    const px = Math.round(x(t1 - back)) + 0.5;
+    g.beginPath(); g.moveTo(px, T); g.lineTo(px, h - B); g.stroke();
+    const label = !back ? 'now' : back >= 60000 ? `-${Math.floor(back / 60000)}:${String(back % 60000 / 1000).padStart(2, '0')}` : `-${back / 1000} s`;
+    g.fillText(label, px - (back ? 14 : 22), h - 3);
+  }
   for (const s of series) {
     g.strokeStyle = css(s.color);
     g.lineWidth = 1.5;
@@ -105,7 +118,7 @@ function plot(cv, t, series, unitScale) {
     let pen = false;
     s.data.forEach((v, i) => {
       if (v == null || !isFinite(v)) { pen = false; return; }
-      const px = x(t[i]), py = y(v * (s.scale || unitScale));
+      const px = x(t[i]), py = y(Math.min(max, v * (s.scale || unitScale)));
       if (pen) g.lineTo(px, py); else g.moveTo(px, py);
       pen = true;
     });

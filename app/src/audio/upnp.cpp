@@ -380,6 +380,72 @@ double parse_duration(const std::string& s) {
   return parts ? total : -1;
 }
 
+namespace {
+
+// DLNA sizes a cover with its profile: _TN 160 px, _SM 640, _MED 1024, _LRG above. A list row
+// wants the smallest, the picture the largest; one without a profile counts as medium.
+int art_rank(const XmlNode& a) {
+  const auto p = a.attrs.find("profileID");
+  const std::string id = p == a.attrs.end() ? "" : p->second;
+  if (id.find("_TN") != std::string::npos) return 0;
+  if (id.find("_SM") != std::string::npos) return 1;
+  if (id.find("_LRG") != std::string::npos) return 3;
+  return 2;
+}
+
+// An object's cover: its upnp:albumArtURIs, or failing those an image <res> (some servers give
+// the picture as another resource of the item). Into j as "thumb" (for a row) and "art".
+void didl_art(const XmlNode& n, json* j) {
+  const XmlNode *small = nullptr, *big = nullptr;
+  for (const XmlNode* a : n.all("albumArtURI")) {
+    if (trim(a->text).empty()) continue;
+    if (!small || art_rank(*a) < art_rank(*small)) small = a;
+    if (!big || art_rank(*a) > art_rank(*big)) big = a;
+  }
+  std::string thumb = small ? trim(small->text) : "", art = big ? trim(big->text) : "";
+  if (art.empty()) {
+    for (const XmlNode* r : n.all("res")) {
+      const auto pi = r->attrs.find("protocolInfo");
+      if (pi != r->attrs.end() && lower(pi->second).find(":image/") != std::string::npos && !trim(r->text).empty()) {
+        art = thumb = trim(r->text);
+        break;
+      }
+    }
+  }
+  (*j)["thumb"] = thumb;
+  (*j)["art"] = art;
+}
+
+// The album artist of a container (upnp:artist role="AlbumArtist"), else its first artist, else
+// dc:creator.
+std::string didl_artist(const XmlNode& n) {
+  std::string first;
+  for (const XmlNode* a : n.all("artist")) {
+    const auto role = a->attrs.find("role");
+    if (role != a->attrs.end() && role->second == "AlbumArtist") return trim(a->text);
+    if (first.empty() && (role == a->attrs.end() || role->second.empty() || role->second == "Performer"))
+      first = trim(a->text);
+  }
+  return first.empty() ? n.child_text("creator") : first;
+}
+
+// "2014-01-01" → "2014"; anything that does not start with a year → "".
+std::string didl_year(const std::string& date) {
+  return date.size() >= 4 && std::all_of(date.begin(), date.begin() + 4, [](char c) { return c >= '0' && c <= '9'; })
+             ? date.substr(0, 4) : "";
+}
+
+json attr_num(const XmlNode* r, const char* key) {
+  if (!r) return nullptr;
+  const auto it = r->attrs.find(key);
+  if (it == r->attrs.end() || it->second.empty()) return nullptr;
+  char* end = nullptr;
+  const unsigned long v = std::strtoul(it->second.c_str(), &end, 10);
+  return end && *end == '\0' ? json(v) : json(nullptr);
+}
+
+}  // namespace
+
 json parse_didl(const std::string& didl) {
   json containers = json::array(), items = json::array();
   const XmlNode doc = parse_xml(didl);
@@ -387,12 +453,17 @@ json parse_didl(const std::string& didl) {
   if (!root) return json{{"containers", containers}, {"items", items}};
   for (const XmlNode* c : root->all("container")) {
     const auto cc = c->attrs.find("childCount");
-    containers.push_back(json{{"id", c->attrs.count("id") ? c->attrs.at("id") : ""},
-                              {"title", c->child_text("title")},
-                              {"class", c->child_text("class")},
-                              {"child_count", cc == c->attrs.end() || cc->second.empty()
-                                                  ? json(nullptr)
-                                                  : json(std::strtoul(cc->second.c_str(), nullptr, 10))}});
+    json j{{"id", c->attrs.count("id") ? c->attrs.at("id") : ""},
+           {"title", c->child_text("title")},
+           {"class", c->child_text("class")},
+           {"artist", didl_artist(*c)},
+           {"genre", c->child_text("genre")},
+           {"year", didl_year(c->child_text("date"))},
+           {"child_count", cc == c->attrs.end() || cc->second.empty()
+                               ? json(nullptr)
+                               : json(std::strtoul(cc->second.c_str(), nullptr, 10))}};
+    didl_art(*c, &j);
+    containers.push_back(std::move(j));
   }
   for (const XmlNode* it : root->all("item")) {
     const XmlNode* res = nullptr;
@@ -425,16 +496,26 @@ json parse_didl(const std::string& didl) {
     }
     std::string artist = it->child_text("artist");
     if (artist.empty()) artist = it->child_text("creator");
-    items.push_back(json{{"id", it->attrs.count("id") ? it->attrs.at("id") : ""},
-                         {"title", it->child_text("title")},
-                         {"artist", artist},
-                         {"album", it->child_text("album")},
-                         {"class", it->child_text("class")},
-                         {"duration_s", duration},
-                         {"url", url},
-                         {"mime", mime},
-                         {"size", size},
-                         {"art", it->child_text("albumArtURI")}});
+    const std::string track = it->child_text("originalTrackNumber");
+    json j{{"id", it->attrs.count("id") ? it->attrs.at("id") : ""},
+           {"title", it->child_text("title")},
+           {"artist", artist},
+           {"album", it->child_text("album")},
+           {"class", it->child_text("class")},
+           {"genre", it->child_text("genre")},
+           {"year", didl_year(it->child_text("date"))},
+           {"track", track.empty() ? json(nullptr) : json(std::strtoul(track.c_str(), nullptr, 10))},
+           {"duration_s", duration},
+           {"url", url},
+           {"mime", mime},
+           {"size", size},
+           // The audio resource's format, where the server says: what a test needs to know it is
+           // sending 24-bit, 96 kHz into a 16-bit, 48 kHz Bluetooth link.
+           {"rate", attr_num(res, "sampleFrequency")},
+           {"bits", attr_num(res, "bitsPerSample")},
+           {"channels", attr_num(res, "nrAudioChannels")}};
+    didl_art(*it, &j);
+    items.push_back(std::move(j));
   }
   return json{{"containers", containers}, {"items", items}};
 }

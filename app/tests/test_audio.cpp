@@ -471,6 +471,34 @@ void test_upnp() {
   CHECK_EQ(it["mime"].get<std::string>(), std::string("audio/flac"));
   CHECK_NEAR(it["duration_s"].get<double>(), 205.5, 1e-9);
   CHECK_EQ(it["size"].get<int>(), 31337);
+  // No albumArtURI: the image resource is the cover.
+  CHECK_EQ(it["art"].get<std::string>(), std::string("http://10.0.0.2:8200/art.jpg"));
+  CHECK_EQ(it["thumb"].get<std::string>(), std::string("http://10.0.0.2:8200/art.jpg"));
+
+  // MinimServer's album and track: the album artist, the year, sized covers (smallest for the row,
+  // largest for the picture), the track number and the resource's format.
+  const json m = parse_didl(R"(<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns:dlna="urn:schemas-dlna-org:metadata-1-0/">
+<container id="0$albums$*a2" childCount="14"><dc:title>3Teeth</dc:title><upnp:genre>Industrial</upnp:genre><dc:date>2014-01-01</dc:date>
+<upnp:artist>Guest</upnp:artist><upnp:artist role="AlbumArtist">3TEETH</upnp:artist>
+<upnp:albumArtURI dlna:profileID="JPEG_LRG">http://s/big.jpg</upnp:albumArtURI><upnp:albumArtURI dlna:profileID="JPEG_TN">http://s/tn.jpg</upnp:albumArtURI>
+<upnp:class>object.container.album.musicAlbum</upnp:class></container>
+<item id="0$albums$*a2$*i1"><dc:title>Nihil</dc:title><upnp:artist>3TEETH</upnp:artist><upnp:originalTrackNumber>1</upnp:originalTrackNumber><dc:date>2014</dc:date>
+<upnp:albumArtURI dlna:profileID="JPEG_MED">http://s/med.jpg</upnp:albumArtURI>
+<res duration="0:04:02" bitsPerSample="24" sampleFrequency="96000" nrAudioChannels="2" protocolInfo="http-get:*:audio/x-flac:*">http://s/1.flac</res>
+<upnp:class>object.item.audioItem.musicTrack</upnp:class></item></DIDL-Lite>)");
+  const json& al = m["containers"][0];
+  CHECK_EQ(al["artist"].get<std::string>(), std::string("3TEETH"));
+  CHECK_EQ(al["year"].get<std::string>(), std::string("2014"));
+  CHECK_EQ(al["genre"].get<std::string>(), std::string("Industrial"));
+  CHECK_EQ(al["thumb"].get<std::string>(), std::string("http://s/tn.jpg"));
+  CHECK_EQ(al["art"].get<std::string>(), std::string("http://s/big.jpg"));
+  const json& tr = m["items"][0];
+  CHECK_EQ(tr["track"].get<int>(), 1);
+  CHECK_EQ(tr["rate"].get<int>(), 96000);
+  CHECK_EQ(tr["bits"].get<int>(), 24);
+  CHECK_EQ(tr["channels"].get<int>(), 2);
+  CHECK_EQ(tr["thumb"].get<std::string>(), std::string("http://s/med.jpg"));
+  CHECK_EQ(tr["year"].get<std::string>(), std::string("2014"));
 
   CHECK(!parse_browse_response(R"(<s:Envelope><s:Body><s:Fault><faultstring>UPnPError</faultstring><detail><UPnPError>
       <errorCode>701</errorCode><errorDescription>No such object</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>)",

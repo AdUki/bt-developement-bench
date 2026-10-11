@@ -192,7 +192,8 @@ const NAV = [
   // (#setup/profiles) still land, since a view is found by its tab.
   {id: 'system', label: 'System', icon: 'M4 5h16v10H4zM9 19h6M12 15v4', views: [
     {tab: 'system', pane: 'overview', label: 'Overview'},
-    {tab: 'system', pane: 'logs', label: 'Logs and tools'},
+    {tab: 'system', pane: 'logs', label: 'Logs'},
+    {tab: 'system', pane: 'tools', label: 'Tools'},
     {tab: 'setup', pane: 'profiles', label: 'Profiles'},
     {tab: 'setup', pane: 'bluetooth', label: 'Bluetooth settings'},
     {tab: 'setup', pane: 'audio', label: 'Audio settings'},
@@ -263,6 +264,7 @@ function showPane(name, pane) {
 function showTab(name, pane) {
   if (!tabs[name] && !$(name)) name = 'player';
   showPane(name, pane);
+  if (fullCard) setFull(fullCard, false);
   if (currentTab !== name) {
     const old = tabs[currentTab];
     if (old && old.hide) old.hide();
@@ -277,6 +279,7 @@ function showTab(name, pane) {
   // A pane can want topics of its own (Audio → PipeWire: pipewire), so a pane switch asks too.
   updateTopics();
   renderNav();
+  updateFit();
 }
 
 window.addEventListener('hashchange', () => { if (location.hash.length > 1) go(location.hash.slice(1)); });
@@ -472,7 +475,68 @@ function renderRequest(r) {
 
 // ---------------------------------------------------------------- start
 
+// ---------------------------------------------------------------- one scrollbar on a desktop
+
+// A view built around one long list (packets, D-Bus, the log, an open capture) fills the window
+// on a desktop: the page stops scrolling and only the list does, instead of a scrolling box inside
+// a scrolling page. A view marks itself with class "fit" (its panel, or a pane of it) and the card
+// that holds the list with "fit-main"; the CSS does the rest, and only on a screen big enough.
+function updateFit() {
+  document.body.classList.toggle('fit', !!document.querySelector('.panel.active.fit, .panel.active > .pane.fit:not([hidden])'));
+  // Listen on a wide screen: what plays and the library side by side, each column scrolling
+  // (style.css; a narrower screen keeps them as two views).
+  document.body.classList.toggle('fit-player', currentTab === 'player');
+}
+
+// ---------------------------------------------------------------- full screen
+
+// A card marked data-full gets a button that lays it over the whole window, and Esc or the button
+// puts it back: the packet tables, the D-Bus and log views, the library and each graph are boxes
+// in the page's flow, and reading one wants all the room there is. A resize event follows, for
+// the tables that draw only their visible rows and the canvases that draw at their size.
+const FULL_SVG = {on: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5', off: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5'};
+let fullCard = null;
+
+function setFull(card, on) {
+  if (on && fullCard && fullCard !== card) setFull(fullCard, false);
+  card.classList.toggle('is-full', on);
+  document.body.classList.toggle('has-full', on);
+  fullCard = on ? card : null;
+  const b = card.querySelector(':scope .full-btn');
+  if (b) {
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${on ? FULL_SVG.off : FULL_SVG.on}"/></svg>`;
+    b.title = on ? 'Back to the page (Esc)' : 'Full screen';
+    b.setAttribute('aria-pressed', String(on));
+  }
+  window.dispatchEvent(new Event('resize'));
+}
+
+function initFull(root) {
+  for (const card of (root || document).querySelectorAll('.card[data-full]:not([data-full-ready])')) {
+    card.dataset.fullReady = '1';
+    const b = document.createElement('button');
+    b.className = 'icon-btn full-btn';
+    b.type = 'button';
+    b.onclick = () => setFull(card, !card.classList.contains('is-full'));
+    const head = card.querySelector(':scope > .card-head');
+    const acts = head && head.querySelector('.acts');
+    // In the head's actions, else at the end of the head or of the title (a graph's), else in the
+    // corner.
+    const title = !head && card.querySelector(':scope > h4, :scope > h3');
+    if (acts) acts.append(b);
+    else if (head) head.append(b);
+    else if (title) { title.classList.add('with-full'); title.append(b); }
+    else { card.classList.add('full-abs'); card.prepend(b); }
+    setFull(card, false);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && fullCard && !document.querySelector('.modal:not([hidden])')) setFull(fullCard, false);
+});
+
 function startConsole() {
+  initFull();
   api('/system/health').then(renderHealthPills).catch(() => {});
   api('/bluetooth').then(renderBtPill).catch(() => {});
   refreshRequest();

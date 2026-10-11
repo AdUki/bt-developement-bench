@@ -421,23 +421,45 @@ function upnpServers(search) {
   api('/audio/upnp/servers' + (search ? '?search=1' : '')).then(r => {
     // None known yet (the board only remembers what a search found): search now.
     if (!search && !r.servers.length) return upnpServers(true);
-    pl.libItems = r.servers.map(s => ({kind: 'server', title: s.name, id: s.id, sub: [s.manufacturer, s.model].filter(Boolean).join(' ')}));
+    pl.libItems = r.servers.map(s => ({kind: 'server', title: s.name, id: s.id, thumb: s.icon,
+      sub: [s.manufacturer, s.model].filter(Boolean).join(' ')}));
     renderLib(r.servers.length ? '' : `<div class="empty-line">No media servers found. <button class="small-btn" data-lib-search="1">Search the network</button></div>`);
   }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
 }
 
-function upnpFolder(server, id, title, push) {
-  pl.libSeq++;
+// What a media server says about a folder's contents, as library rows: albums with their cover,
+// artist and year; tracks with their number, cover and format. A track without a cover of its own
+// takes its album's (meta: the folder opened, as its row had it).
+function upnpFolder(server, id, title, push, meta) {
+  const seq = ++pl.libSeq;
   pl.upnpServer = server;
-  if (push !== false) pl.libPath.push({id, title});
+  if (push !== false) pl.libPath.push({id, title, meta: meta || null});
+  const here = pl.libPath[pl.libPath.length - 1];
+  const folderArt = here && here.meta ? here.meta.art : '';
   renderCrumbs();
   setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
-  api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&count=200`).then(r => {
-    pl.libItems = r.containers.map(c => ({kind: 'folder', title: c.title, id: c.id, sub: c.child_count != null ? c.child_count + ' items' : ''}))
-      .concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url, art: it.art,
-        sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s, artist: it.artist, album: it.album})));
+  api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&count=500`).then(r => {
+    if (seq !== pl.libSeq) return;
+    pl.libItems = r.containers.map(c => {
+      const album = /album/.test(c.class || '');
+      const n = c.child_count != null ? `${c.child_count} ${album ? 'tracks' : 'items'}` : '';
+      return {kind: 'folder', title: c.title, id: c.id, album, thumb: c.thumb, art: c.art, artist: c.artist, year: c.year,
+        genre: c.genre, count: c.child_count, sub: (album ? [c.artist, c.year, n] : [n]).filter(Boolean).join(' · ')};
+    }).concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url,
+      art: it.art || folderArt, thumb: it.thumb || '', track: it.track, year: it.year, genre: it.genre,
+      sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s, artist: it.artist, album: it.album,
+      format: upnpFormat(it)})));
     renderLib();
-  }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
+  }).catch(e => { if (seq === pl.libSeq) setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`); });
+}
+
+// "FLAC 24/96": the codec from the MIME type, then bits and kHz where the server gave them.
+function upnpFormat(it) {
+  const m = (it.mime || '').toLowerCase();
+  const codec = /flac/.test(m) ? 'FLAC' : /mpeg|mp3/.test(m) ? 'MP3' : /wav/.test(m) ? 'WAV' : /aiff/.test(m) ? 'AIFF'
+    : /dsf|dsd|dff/.test(m) ? 'DSD' : /ogg|vorbis|opus/.test(m) ? 'OGG' : /mp4|m4a|aac/.test(m) ? 'AAC/ALAC' : '';
+  const q = it.bits && it.rate ? `${it.bits}/${+(it.rate / 1000).toFixed(1)}` : it.rate ? `${+(it.rate / 1000).toFixed(1)} kHz` : '';
+  return [codec, q].filter(Boolean).join(' ');
 }
 
 // A phone's item as a library row. A folder's name is its path in the phone's tree
@@ -467,18 +489,65 @@ function renderCrumbs() {
   setHTML($('np-crumbs'), root + pl.libPath.map((c, i) => `${root || i ? ' / ' : ''}<a href="#" data-crumb="${i}">${esc(c.title)}</a>`).join(''));
 }
 
+// A cover over the row's icon: the icon stays when the image cannot be had (a server on another
+// network than this browser, a broken link).
+const libArt = (it, icon) => `${svg(icon)}${it.thumb || it.art ? `<img alt="" loading="lazy" decoding="async" src="${esc(it.thumb || it.art)}" onerror="this.remove()">` : ''}`;
+
 function renderLib(empty) {
   const icon = {station: PL_SVG.radio, server: PL_SVG.folder, folder: PL_SVG.folder, pfolder: PL_SVG.folder, track: PL_SVG.note, ptrack: PL_SVG.note};
-  setHTML($('np-lib'), pl.libItems.map((it, i) => {
+  const items = pl.libItems;
+  const tracks = items.filter(x => x.kind === 'track');
+  const here = pl.lib === 'upnp' ? pl.libPath[pl.libPath.length - 1] : null;
+  const meta = here && here.meta;
+  // An album opened: its cover and what it is at the top, the tracks under it by number.
+  let head = '';
+  if (tracks.length) {
+    const total = tracks.reduce((a, t) => a + (t.duration_s || 0), 0);
+    const facts = [meta && meta.artist, meta && meta.year, meta && meta.genre,
+      `${tracks.length} track${tracks.length > 1 ? 's' : ''}${total ? ', ' + fmtMs(total * 1000) : ''}`].filter(Boolean).join(' · ');
+    const cover = meta && (meta.art || meta.thumb) ? `<span class="lib-cover">${libArt({art: meta.art || meta.thumb}, PL_SVG.note)}</span>` : '';
+    head = `<div class="lib-head${cover ? ' has-cover' : ''}">${cover}<div class="lib-head-t">${meta ? `<b>${esc(here.title)}</b>` : ''}
+      <span class="muted small">${esc(facts)}</span>
+      <div class="row"><button class="primary small-btn" data-lib-all="play">${svg(PL_SVG.play)} Play all</button>
+        <button class="small-btn" data-lib-all="add" title="Add every track to the queue">${svg(PL_SVG.plus)} Add all</button></div></div></div>`;
+  }
+  const inAlbum = !!(meta && meta.album);
+  // A folder of albums with covers is shown as covers.
+  const folders = items.filter(x => x.kind === 'folder');
+  const grid = !tracks.length && folders.length >= 4 && folders.filter(f => f.album && f.thumb).length >= folders.length / 2;
+  if (grid) {
+    setHTML($('np-lib'), `<div class="lib-grid">${items.map((it, i) => `<button class="lib-tile" data-lib-i="${i}" title="${esc(it.title)}">
+      <span class="lib-tile-art">${libArt(it, icon[it.kind])}</span><b>${esc(it.title)}</b><span class="muted">${esc([it.artist, it.year].filter(Boolean).join(' · '))}</span></button>`).join('')}</div>`);
+    return;
+  }
+  setHTML($('np-lib'), head + (items.map((it, i) => {
     const open = it.kind === 'server' || it.kind === 'folder' || it.kind === 'pfolder';
     const add = it.kind === 'track' || (it.kind === 'ptrack' && it.playable);
+    // Inside an album the tracks show their number (the cover is at the top); elsewhere their cover.
+    const lead = it.kind === 'track' && inAlbum && it.track != null ? `<span class="tr-n">${it.track}</span>`
+      : `<span class="tr-n tr-art">${libArt(it, icon[it.kind])}</span>`;
     return `<div class="tr lib" data-lib-i="${i}">
-      <span class="tr-n">${svg(icon[it.kind])}</span>
-      <span class="tr-t">${esc(it.title)}${it.sub ? `<span class="muted">${esc(it.sub)}</span>` : ''}</span>
+      ${lead}
+      <span class="tr-t">${esc(it.title)}${it.sub && !(inAlbum && it.kind === 'track') ? `<span class="muted">${esc(it.sub)}</span>` : ''}</span>
+      ${it.format ? `<span class="tr-fmt">${esc(it.format)}</span>` : ''}
       ${it.duration_s ? `<span class="tr-d">${fmtMs(it.duration_s * 1000)}</span>` : ''}
       ${add ? `<button class="icon-btn" data-lib-add="${i}" title="Add to the queue" aria-label="Add to the queue">${svg(PL_SVG.plus)}</button>` : ''}
       ${open ? '<span class="chev"></span>' : ''}</div>`;
-  }).join('') || empty || '<div class="empty-line">Empty.</div>');
+  }).join('') || empty || '<div class="empty-line">Empty.</div>'));
+}
+
+// Play every track of the folder, or add them all to the queue.
+function libAll(add) {
+  const tracks = pl.libItems.filter(x => x.kind === 'track');
+  if (!tracks.length) return;
+  const items = tracks.map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s, artist: x.artist, album: x.album}));
+  const b = boardStream();
+  if (add && b) {
+    items.forEach(t => { pl.art[t.url] = t; });
+    return put(`/audio/streams/${b.id}`, {enqueue: items.map(playlistItem)})
+      .then(() => toast(`Added ${items.length} tracks to the queue`)).catch(fail);
+  }
+  playOnBoard(items);
 }
 
 // A library row: open a folder, or play — a station on its own, a track with the rest of its
@@ -487,7 +556,7 @@ function libClick(i, add) {
   const it = pl.libItems[i];
   if (!it) return;
   if (it.kind === 'server') return upnpFolder(it.id, '0', it.title);
-  if (it.kind === 'folder') return upnpFolder(pl.upnpServer, it.id, it.title);
+  if (it.kind === 'folder') return upnpFolder(pl.upnpServer, it.id, it.title, true, it);
   if (it.kind === 'pfolder') return phoneFolder(phones().find(p => p.path === it.player), it.path, it.title);
   if (it.kind === 'ptrack') {
     if (!it.playable) return;
@@ -641,6 +710,8 @@ function setupPlayer() {
   };
   $('np-lib').onclick = e => {
     if (e.target.closest('[data-lib-search]')) return upnpServers(true);
+    const all = e.target.closest('[data-lib-all]');
+    if (all) return libAll(all.dataset.libAll === 'add');
     const add = e.target.closest('[data-lib-add]');
     if (add) return libClick(parseInt(add.dataset.libAdd, 10), true);
     const r = e.target.closest('[data-lib-i]');

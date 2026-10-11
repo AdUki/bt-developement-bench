@@ -14,6 +14,13 @@ name and agent, scan options, an advertisement's intervals, a stream's rate) sit
 *Settings*, *Options* or *More fields* disclosure, and raw values (configuration bytes, object
 paths, capability hex) behind *Details* or in a tooltip.
 
+On a desktop the page scrolls only where it has to. A view built around one long list — *Packets*,
+*D-Bus*, *Logs*, an open capture — fills the window and only the list scrolls; *Listen* on a wide
+screen (from 1400 px) shows Now playing and the library side by side, each column scrolling on its
+own. The cards worth reading big (the library, the packet tables, the D-Bus and log views, a
+link's graphs, each chart in *Graphs*) have a full-screen button; Esc puts them back. On a very
+wide screen (1700 px) the pages are allowed wider.
+
 The foot of the rail (the top bar on a phone) shows the board's name, the adapter (on / visible /
 scanning), the WebSocket (live / offline; it reconnects by itself), temperature, CPU and — in red
 — undervoltage, which on a Zero W corrupts the Bluetooth UART long before anything else notices.
@@ -41,7 +48,12 @@ them when there are several. *Up next* is the phone's now-playing list, or the b
 click plays that track. *Library*, a page of its own so long folders get the screen, has the
 phone's own folders and search (for a browsable player), the radio stations, and the media servers
 on the LAN: a station plays on its own, a track plays with the rest of its folder after it as the
-queue, and **+** adds a track to the end of the queue. A bar at the bottom of the library keeps the
+queue, and **+** adds a track to the end of the queue. Media servers show their covers: a folder of
+albums is a grid of them (title, artist, year), an album opens with its cover, artist, year, genre,
+track count and length, *Play all* and *Add all*, and its tracks by number with their format
+(`FLAC 24/96`, `MP3 44.1 kHz`); a track without a cover of its own shows its album's in Now
+playing. Covers load from the server itself, so a browser on another network than the server
+shows the plain icons. A bar at the bottom of the library keeps the
 track playing, play/pause and next in reach. The board plays to
 the output chosen in *Play to* — this browser, or a speaker the board has — and keeps playing its
 queue with the page closed. The volume slider sets what a person means: the Bluetooth speaker's
@@ -201,12 +213,14 @@ kernel, the stack's services with restart buttons, bluetoothd's command line und
 disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
 bluetooth), reboot, and under a disclosure a factory reset (every setting back to the image's,
 optionally the paired devices and the Wi-Fi networks too; it reboots, and clears the console's own
-preferences in this browser). *Logs and tools*: the log files in `/tmp/logs` (each program's own format, to open or
-download; `clog` reads them on the board), the kernel's Bluetooth debug messages by area (HCI core,
-management, L2CAP, SMP, ISO, SCO, RFCOMM, BNEP, HIDP, the controller drivers; each says how many of
-its messages print, *keep from boot*, *all off*, *show in the journal*), the journal of a unit or
-of the kernel (the last 200 lines, and live with *follow*) and the jobs runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted
-tools, with live output and kill).
+preferences in this browser). *Logs*: one viewer for the journal of a unit or of the kernel and
+the files in `/tmp/logs` (each program's own, `bluez-dbus.log` among them), live with *follow*;
+a debug build's source paths are shown from the source tree on (`src/adapter.c`). *Tools*: the log
+files to download (`clog` reads them on the board), the kernel's Bluetooth debug messages by area
+(HCI core, management, L2CAP, SMP, ISO, SCO, RFCOMM, BNEP, HIDP, the controller drivers; each says
+how many of its messages print, *keep from boot*, *all off*, *show in the journal*) and the jobs
+runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted tools, with live output and
+kill).
 
 How the stack is configured (these four views were an area of their own, *Setup*, and their
 old addresses still work). *Profiles*: every profile the board offers, on and off

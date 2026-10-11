@@ -886,3 +886,104 @@ label.set-row { cursor: pointer; }
 .db-sig { opacity: 0.9; }
 .db-args { color: var(--muted); }
 .db-full { margin: 0.2rem 0 0.4rem 1.5rem; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); font: inherit; }
+
+/* Media servers in the library: covers on rows, an album's head, a folder of albums as covers. */
+.tr-n.tr-art { width: 2.6rem; height: 2.6rem; border-radius: 5px; background: var(--well); position: relative; overflow: hidden; align-items: center; }
+.tr-art img, .lib-cover img, .lib-tile-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tr-fmt { flex: none; font-size: 0.72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3rem; white-space: nowrap; }
+.lib-head { display: flex; gap: 0.9rem; align-items: flex-end; padding: 0.4rem 0.4rem 0.8rem; }
+.lib-head-t { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.lib-head-t b { font-size: 1.15rem; overflow-wrap: anywhere; }
+.lib-head .row { gap: 0.4rem; }
+.lib-head .small-btn svg { width: 13px; height: 13px; vertical-align: -2px; fill: currentColor; stroke: currentColor; stroke-width: 1; }
+.lib-cover { flex: none; width: 7.5rem; height: 7.5rem; border-radius: 8px; background: var(--well); position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+.lib-cover svg, .lib-tile-art svg { width: 32px; height: 32px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.9rem 0.8rem; padding: 0.3rem 0.4rem; }
+.lib-tile { display: flex; flex-direction: column; gap: 0.15rem; text-align: left; border: 0; background: transparent; padding: 0.3rem; border-radius: 8px; color: inherit; min-width: 0; }
+.lib-tile:hover { background: var(--well); }
+.lib-tile b { font-size: 0.86rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-tile .muted { font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-tile-art { aspect-ratio: 1; border-radius: 6px; background: var(--well); position: relative; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; color: var(--muted); margin-bottom: 0.25rem; }
+@media (max-width: 760px) {
+  .lib-grid { grid-template-columns: repeat(auto-fill, minmax(7.2rem, 1fr)); }
+  .lib-cover { width: 5.5rem; height: 5.5rem; }
+}
+
+/* Full screen (app.js initFull): a card laid over the window, its scrolling part taking the room. */
+.full-btn { flex: none; }
+.full-btn svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.card.full-abs { position: relative; }
+.card.full-abs > .full-btn { position: absolute; top: 0.35rem; right: 0.35rem; z-index: 2; }
+body.has-full { overflow: hidden; }
+.card.is-full {
+  position: fixed; inset: 0; z-index: 60; margin: 0; border-radius: 0; max-width: none;
+  display: flex; flex-direction: column; overflow: auto; padding: 0.8rem 1rem;
+}
+.is-full > .cv-split { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.is-full .cv-table { display: flex; flex-direction: column; }
+.is-full .cv-body { flex: 1; height: auto; min-height: 12rem; }
+.is-full .cv-detail, #lp.is-full .cv-detail { max-height: none; }
+.is-full > .lg-view { flex: 1; height: auto; min-height: 12rem; }
+.is-full .tracklist { max-height: none; }
+.gr-chart.is-full canvas.graph { flex: 1; height: auto; min-height: 220px; }
+#mon-detail.is-full canvas.graph { height: 32vh; }
+@media (max-width: 900px) {
+  .is-full > .cv-split { grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
+}
+
+/* One scrollbar on a desktop (app.js updateFit): the view fills the window below the view bar,
+   the card with the list takes what the others leave, and the list scrolls inside it. */
+@media (min-width: 901px) and (min-height: 560px) {
+  body.fit { overflow: hidden; }
+  body.fit #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
+  body.fit main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0.8rem; }
+  body.fit .panel.active { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  body.fit .panel.active > .pane.fit:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  body.fit .panel.active > *, body.fit .pane.fit > * { flex: none; }
+  body.fit .panel.active > .fit-main, body.fit .pane.fit > .fit-main,
+  body.fit .panel.active > .pane.fit:not([hidden]) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  body.fit .fit-main > .lg-view { flex: 1; height: auto; min-height: 6rem; }
+  body.fit .fit-main > .cv-split { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  body.fit .fit-main .cv-table { display: flex; flex-direction: column; }
+  body.fit .fit-main .cv-body { flex: 1; height: auto; min-height: 6rem; }
+  body.fit .fit-main .cv-detail, body.fit #lp .cv-detail { max-height: none; }
+  /* The page does not scroll: no room kept for its scrollbar, and the lists use the whole width. */
+  html:has(body.fit) { scrollbar-gutter: auto; }
+  body.fit main { max-width: none; }
+  /* An open capture is the page: the file list comes back when it is closed. */
+  body.fit #capture.fit > .card:not(#cv) { display: none; }
+}
+.card-head > .full-btn { margin-left: auto; }
+
+h4.with-full, h3.with-full { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1.7rem; height: 1.7rem; }
+/* Graphs: two columns on a desktop, one chart over the window when it is opened full screen. */
+@media (min-width: 1100px) {
+  #gr-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 0 0.8rem; }
+  #gr-charts > .gr-chart { margin: 0.4rem 0; min-width: 0; }
+}
+.gr-chart > h4:first-child { margin-top: 0; }
+#gr-charts > .gr-chart.is-full { margin: 0; }
+
+/* Listen on a wide screen (app.js updateFit): Now playing and the library side by side, both
+   views shown whichever was picked, each column scrolling on its own and the page not at all. */
+@media (min-width: 1400px) and (min-height: 560px) {
+  body.fit-player { overflow: hidden; }
+  html:has(body.fit-player) { scrollbar-gutter: auto; }
+  body.fit-player #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
+  body.fit-player main { flex: 1; min-height: 0; max-width: none; display: flex; padding-bottom: 0; }
+  #player.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 5fr) minmax(0, 7fr); gap: 0 1rem; }
+  #player > .pane, #player > .pane[hidden] { display: block !important; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
+  #player #np-mini { display: none !important; }
+  #player .tracklist { max-height: none; }
+  /* The playing column is narrow: the cover over the title and controls, as a player's is. */
+  #player > .pane { overflow-x: hidden; }
+  #player .np { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; }
+  #player .np-art { width: min(100%, 300px); height: auto; aspect-ratio: 1; }
+  #player .np-main { width: 100%; }
+  #player .np-src, #player .np-ctl, #player .np-row { justify-content: center; }
+}
+/* A very wide screen: the pages may use more of it. */
+@media (min-width: 1700px) { main { max-width: 1560px; } }

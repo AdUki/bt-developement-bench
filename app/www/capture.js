@@ -111,6 +111,8 @@
     const f = capState && capState.files.find(x => x.name === name);
     cv.active = !!(f && f.active);
     $('cv').hidden = false;
+    $('capture').classList.add('fit');
+    updateFit();
     $('cv-follow-wrap').hidden = !cv.active;
     setText($('cv-title'), name);
     setFollow(false);
@@ -129,6 +131,8 @@
     setFollow(false);
     clearTimeout(cv.progressTimer);
     $('cv').hidden = true;
+    $('capture').classList.remove('fit');
+    updateFit();
     if (capState) renderCapture(capState);
   }
 

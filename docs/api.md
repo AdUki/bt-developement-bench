@@ -561,7 +561,7 @@ empty and says why.
 | route | what |
 |---|---|
 | `GET /api/audio/upnp/servers?search=1` | SSDP search of the LAN (~2.5 s; `timeout_ms`): `{servers: [{id, name, manufacturer, model, location, icon}], searched_ms, error}`; without `search`, the last search's |
-| `GET /api/audio/upnp/browse?server=<id>&object=0&start=0&count=100` | ContentDirectory `Browse` of a container (`0` the root): `{containers: [{id, title, child_count, class}], items: [{id, title, artist, album, class, duration_s, url, mime, size, art}], returned, total, object, server}`. 502 with the server's own fault ("No such object (UPnP error 701)") |
+| `GET /api/audio/upnp/browse?server=<id>&object=0&start=0&count=100` | ContentDirectory `Browse` of a container (`0` the root): `{containers: [{id, title, child_count, class, artist, genre, year, thumb, art}], items: [{id, title, artist, album, class, genre, year, track, duration_s, url, mime, size, rate, bits, channels, thumb, art}], returned, total, object, server}`. `art` and `thumb` are the cover's URLs on the server (`upnp:albumArtURI`, the largest and the smallest DLNA size, or an image `<res>`; "" when none); a container's `artist` is its album artist; `rate`, `bits`, `channels` are the audio resource's, null where the server does not say. 502 with the server's own fault ("No such object (UPnP error 701)") |
 
 An item's `url` is played as a `url` source (FLAC, WAV, AAC and the like need ffmpeg on the
 board; MP3 plays with mpg123). `tools/fake-upnp/server.py` is a media server to try it with.
