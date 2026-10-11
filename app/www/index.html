@@ -509,6 +509,32 @@
     </details>
   </section>
 
+  <!-- ======================================================== Traffic: BlueZ's D-Bus -->
+  <section id="dbus" class="panel">
+    <div class="card">
+      <div class="card-head">
+        <span id="db-status" class="small muted"></span>
+        <div class="acts">
+          <label class="switch inline small" title="Keep the newest message in view as they come"><input type="checkbox" id="db-follow" checked><i></i> Follow</label>
+          <button class="small-btn" id="db-run">Pause</button>
+          <button class="small-btn" id="db-clear">Clear</button>
+          <a class="small-btn btn-link" id="db-file" href="/api/system/logs/bluez-dbus.log?download=1" download title="The whole log the board keeps (bluez-dbus.log, also under System → Logs)">Download log</a>
+        </div>
+      </div>
+      <div class="row wrap lg-bar">
+        <input id="db-filter" class="mono grow" spellcheck="false" autocomplete="off" aria-label="Filter"
+               placeholder="words to match (path, member, program, arguments) · !word to hide">
+        <div class="segs" id="db-types" role="group" aria-label="Kinds shown">
+          <button class="seg on" data-t="call">calls</button><button class="seg on" data-t="return">replies</button>
+          <button class="seg on" data-t="signal">signals</button><button class="seg on" data-t="error">errors</button>
+        </div>
+        <label class="check small" title="btbenchd re-reads BlueZ's object tree every few seconds (GetManagedObjects); hidden unless asked for"><input type="checkbox" id="db-poll"> show polling</label>
+      </div>
+      <div id="db-view" class="lg-view wrap db-view" tabindex="0" aria-label="D-Bus messages"></div>
+      <p class="hint">Everything to and from BlueZ (<span class="mono">org.bluez</span>) and obexd on the system bus: calls with their arguments, replies with the call they answer and how long it took, errors, signals. Click a message for its arguments in full.</p>
+    </div>
+  </section>
+
   <!-- ======================================================== Traffic: graphs -->
   <section id="graphs" class="panel">
     <div class="card toolbar">
@@ -598,15 +624,10 @@
           <div class="cv-body" id="cv-body"><div id="cv-spacer"></div><div class="cv-rows" id="cv-rows"></div></div>
         </div>
         <div class="cv-detail">
-          <div class="cv-dtabs"><div class="segs" id="cv-dtabs" role="tablist" aria-label="Detail">
-            <button class="seg on" data-dtab="fields" role="tab" aria-selected="true">Fields</button>
-            <button class="seg" data-dtab="btmon" role="tab" aria-selected="false" title="BlueZ's own decoder: btmon -r on the board, over this packet and the context it needs">btmon</button>
-          </div></div>
           <div id="cv-dfields">
             <div id="cv-fields" class="cv-fields"></div>
             <pre id="cv-hex" class="cv-hex"></pre>
           </div>
-          <pre id="cv-btmon" class="cv-btmon" hidden></pre>
         </div>
       </div>
     </div>
@@ -754,6 +775,7 @@
 <script src="audio.js"></script>
 <script src="monitor.js"></script>
 <script src="graphs.js"></script>
+<script src="dbus.js"></script>
 <script src="obex.js"></script>
 <script src="player.js"></script>
 <script src="hid.js"></script>

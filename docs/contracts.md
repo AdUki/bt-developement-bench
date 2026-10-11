@@ -57,6 +57,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     program's own format (for clog, `app/clog`): `bluez.log`, `pipewire.log`, `wireplumber.log`,
     `wpasupplicant.log`, `btbenchd.log`, `kernel.log`, `system.log` (the rest); each rotated once
     (`.1`) at 2 MiB; `btsnoop` → `/tmp/btsnoop`. RAM (tmpfs), gone at reboot, like the journal.
+    `bluez-dbus.log` is btbenchd's, not logd's: BlueZ's D-Bus traffic, a message a line (dbus_log.h),
+    rotated the same way.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
@@ -175,7 +177,6 @@ Routes:
   - `GET /api/capture/files/<name>/packets/<n>` — one packet as above plus `"fields":[{"name","value","off","len","children":[...]}]` and `"hex"`
   - `GET /api/capture/files/<name>/graph?filter=&bucket_ms=&points=&from=&to=&conn=INDEX:HANDLE` — `{"from","to","bucket_ms","buckets","matches","complete","filtered":{"pkts":[],"tx_bytes":[],"rx_bytes":[]},"conns":[{"index","handle","type","peer","tx_bytes","rx_bytes",...}],"conn":{"index","handle","tx_bps":[],"rx_bps":[],"lat_p50":[],"lat_p95":[],"lat_max":[]}|null}`
   - `GET /api/capture/files/<name>/stats?filter=` — `{"total":{"pkts","bytes","tx","rx","err"},"marks","cont","span_s","protos":[{"proto",...}],"types":[{"type",...}],"links":[{"index","handle","type","peer",...}],"latency":{...}|null,"complete",...}`
-  - `GET /api/capture/files/<name>/packets/<n>/btmon` — `{"frames":[n,...],"context":N,"text":"..."}` (btmon -r over the frame and its context; 503 without btmon)
   - `GET /api/capture/files/<name>/export?filter=&context=0|1` — btsnoop (datalink 2001) of the matches; header `X-Packets`; 409 until the filter is complete
 - WebSocket topics: `hci.stats` (the stats object, 1 Hz while subscribed), `hci.event` (one event).
 

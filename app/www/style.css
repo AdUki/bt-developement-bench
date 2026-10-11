@@ -873,3 +873,16 @@ label.set-row { cursor: pointer; }
 .lg-good { color: var(--good); }
 .lg-line.p7 .lg-addr, .lg-line.p7 .lg-path, .lg-line.p7 .lg-hex { opacity: 0.85; }
 .lg-view mark { background: var(--lg-mark); color: inherit; border-radius: 2px; }
+
+/* Traffic → D-Bus: the log viewer's lines, a message a row; a kind tag, the arguments muted on the
+   line and in full under it once clicked. */
+.db-view { height: 34rem; }
+.db-row.db-has { cursor: pointer; }
+.db-type { display: inline-block; min-width: 3.4em; font-size: 10px; text-transform: lowercase; opacity: 0.8; }
+.db-call { color: var(--accent); }
+.db-signal { color: var(--lg-c3); }
+.db-return { color: var(--good); }
+.db-error { color: var(--bad); font-weight: 600; }
+.db-sig { opacity: 0.9; }
+.db-args { color: var(--muted); }
+.db-full { margin: 0.2rem 0 0.4rem 1.5rem; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); font: inherit; }

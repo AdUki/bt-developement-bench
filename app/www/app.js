@@ -184,6 +184,7 @@ const NAV = [
   {id: 'traffic', label: 'Traffic', icon: 'M3 12h4l3-8 4 16 3-8h4', views: [
     {tab: 'monitor', label: 'Links'},
     {tab: 'packets', label: 'Packets'},
+    {tab: 'dbus', label: 'D-Bus'},
     {tab: 'graphs', label: 'Graphs'},
     {tab: 'capture', label: 'Captures'}]},
   // The board itself: its state and logs first, then what it is set up to be. Setup's settings

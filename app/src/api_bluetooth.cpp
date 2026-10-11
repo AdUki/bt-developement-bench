@@ -6,7 +6,9 @@
 #include <systemd/sd-bus.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -136,6 +138,13 @@ std::string strip_ansi(const std::string& s) {
 
 void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   // ---- The adapter and the agent ----------------------------------------------------------------
+
+  // BlueZ's D-Bus traffic (dbus_log.h): ?since=SEQ for what came after it, ?limit (default 500).
+  svr.Get("/api/bluetooth/dbus", [&d](const httplib::Request& req, httplib::Response& res) {
+    const long long since = std::max(0LL, std::atoll(query(req, "since", "0").c_str()));
+    const long long limit = std::clamp(std::atoll(query(req, "limit", "500").c_str()), 1LL, 2000LL);
+    send_json(res, d.dbus_log.entries(static_cast<uint64_t>(since), static_cast<size_t>(limit)));
+  });
 
   svr.Get("/api/bluetooth", [&d](const httplib::Request&, httplib::Response& res) {
     send_json(res, d.bt.state());

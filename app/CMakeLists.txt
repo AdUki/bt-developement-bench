@@ -107,6 +107,7 @@ add_library(btbench_core STATIC
   src/bench_player.cpp
   src/bluetooth.cpp
   src/bluez_model.cpp
+  src/dbus_log.cpp
   src/dbus_util.cpp
   src/gatt_server.cpp
   src/hid_device.cpp

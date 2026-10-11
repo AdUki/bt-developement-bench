@@ -359,22 +359,10 @@ class PacketStore {
   // Wireshark read it). 409 while the filter is not worked out to the end of the file yet: the
   // client lists until "complete" first. *count is the number of matches in it. With context,
   // the packets btmon needs to decode them (the file's .ctx, then the context packets of the
-  // file among the matches, as btmon_input picks them) are in it too, in order.
+  // file among the matches) are in it too, in order.
   bool export_filtered(const std::string& name, const std::string& filter, bool context,
                        std::string* out, size_t* count, int* status, std::string* err);
 
-  // What `btmon -r` needs to decode frame n the way it would in the whole file, as a small
-  // btsnoop file: first the context (the controllers, the links' connection events, L2CAP
-  // signalling, AVDTP signalling and ATT discovery — the state btmon keeps to name channels,
-  // codecs and characteristics), then the frame with the other fragments of its L2CAP packet.
-  struct BtmonInput {
-    std::string bytes;            // the file
-    size_t context = 0;           // records before the frames
-    std::vector<uint32_t> frames;  // the frame numbers of the records after them, in order
-  };
-  static constexpr size_t kMaxContext = 4000;
-  bool btmon_input(const std::string& name, uint32_t n, BtmonInput* out, int* status,
-                   std::string* err);
 
  private:
   std::string dir_;

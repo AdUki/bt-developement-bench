@@ -12,6 +12,7 @@
 #include "bench_player.h"
 #include "obex/obex.h"
 #include "bluetooth.h"
+#include "dbus_log.h"
 #include "gatt_server.h"
 #include "hid_device.h"
 #include "hid_host.h"
@@ -57,6 +58,7 @@ struct Deps {
   HidHost& hid_host;
   Setup& setup;
   BenchPlayer& player;
+  DbusLog& dbus_log;
 };
 
 // Route installers, one per file (api_*.cpp).

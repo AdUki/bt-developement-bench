@@ -133,7 +133,8 @@ search, pull one or all; list message folders and messages, fetch one; an image'
 thumbnail or full image, and the transfers with progress (pause, resume, cancel). *On the board*:
 the files — `out/` (upload what to send), `in/` (download what arrived), `shared/`.
 
-**Traffic** — four views, in the order of looking closer: *Links*, *Packets*, *Graphs*, *Captures*.
+**Traffic** — five views, in the order of looking closer: *Links*, *Packets*, *D-Bus*, *Graphs*,
+*Captures*.
 
 *Links*: the HCI monitor's connections: throughput, TX latency p50/p95/max (HCI send to
 Number Of Completed Packets), packets in flight against the controller's credits, RTP loss. Click
@@ -152,6 +153,14 @@ them), *Open as capture* opens the file btmon is writing in the capture viewer w
 filter. The stream runs only while this view is on screen and the browser tab is visible. Under
 the table, the command for a live capture in Wireshark on your PC.
 
+*D-Bus*: BlueZ's D-Bus traffic as it happens — the calls to BlueZ and obexd with their arguments,
+the replies with the call they answer and how long it took, errors in red, the signals
+(`PropertiesChanged` read as what changed: `Device1 RSSI=-58`). It opens with the last messages the
+board kept and follows the new ones; filter by words (`!word` hides), by kind, and with *show
+polling* btbenchd's re-reading of the object tree every few seconds. Click a message for its
+arguments in full. The board writes everything to `bluez-dbus.log`, downloadable here and open in
+System → Logs, whether or not this view is open.
+
 *Graphs*: live, scrolling graphs on one time axis (30 s, 2 min, 5 min or 15 min): per connection the
 throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the
 controller's free credits, and for an AVDTP media stream its RTP packets, losses and jitter;
@@ -169,7 +178,8 @@ written), open, download, delete, and *Summary* (`btmon -a` on the board). *Open
 viewer:
 - a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
   [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
-  ATT, SMP, AVDTP, media, AVRCP, RFCOMM, errors, marks and logs, slow TX;
+  ATT, SMP, AVDTP, media, AVRCP, RFCOMM, MGMT (what bluetoothd asks the kernel, by name), errors,
+  marks and logs, slow TX;
 - a graph strip of the whole capture: packets per time bucket of the filtered set, and for a chosen
   connection its TX/RX throughput and TX latency p50/p95. Drag across it to keep only that time
   range (it becomes `t>=… t<…` in the filter, and the graph zooms to it); click to jump the table

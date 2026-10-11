@@ -303,7 +303,6 @@ one: its [context](#context), `<name>.ctx`.
 | `GET /api/capture/files/<name>/packets/<n>` | one packet decoded field by field, with its bytes |
 | `GET /api/capture/files/<name>/graph` | time series over the capture, for the graph strip |
 | `GET /api/capture/files/<name>/stats` | what a filter matches, counted by protocol, packet kind and link |
-| `GET /api/capture/files/<name>/packets/<n>/btmon` | btmon's own decode of one packet |
 | `GET /api/capture/files/<name>/export` | the packets a filter matches, as a btsnoop file |
 
 `<name>` must be a bare file name ending in `.btsnoop`: no slashes, no leading dot.
@@ -536,20 +535,6 @@ beyond what the filter needs):
 
 Busiest first; `proto` is `"other"` for packets with none (notes, index records); `latency` is
 `null` without TX latencies. It has the same progress fields as the list.
-
-`GET /api/capture/files/<name>/packets/<n>/btmon`: **BlueZ's own decoder** for one packet. btbenchd
-writes a small btsnoop file to `/tmp` and runs `btmon -r` over it. The file holds:
-1. the file's context (`.ctx`);
-2. the context packets of the file before the frame (the same kinds the journal keeps; at most
-   4000, the newest);
-3. the frame, together with the other fragments of its L2CAP packet, since btmon decodes once
-   the last fragment is in.
-
-btmon runs with `-T -S -A -I -C 110 -c never`: dates; the SCO, A2DP and ISO data; a fixed width;
-no colour. A btmon without those options gets plain `-T`. The answer is
-`{"frames": [4711], "context": 26, "text": "...", "timed_out": false}`. `text` is btmon's output
-for those frames, with btmon's `#N` replaced by the capture's frame numbers: btmon counts only
-HCI packets. A btmon that cannot run answers 503.
 
 `GET /api/capture/files/<name>/export?filter=&context=1`: the matches as a btsnoop file of
 datalink 2001, whatever the source's datalink, named `<name>-filtered.btsnoop` (`-copy` without

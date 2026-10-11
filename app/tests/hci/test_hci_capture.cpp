@@ -67,32 +67,9 @@ void test_plot_errors() {
 
 }  // namespace
 
-// btmon -r's output for two context records and a frame split over two fragments: the last two
-// records, renumbered with the capture's frame numbers, the columns kept.
-void test_btmon_pick() {
-  const std::string out =
-      "Bluetooth monitor ver 5.72\n"
-      "= New Index: B8:27:EB:8F:D1:56 (Primary,UART,hci0)                [hci0] 08:03:41.476906\n"
-      "> HCI Event: Connect Complete (0x03) plen 11                    #1 [hci0] 08:03:41.500000\n"
-      "        Status: Success (0x00)\n"
-      "< ACL Data TX: Handle 12 flags 0x00 dlen 48                     #2 [hci0] 08:03:41.680094\n"
-      "< ACL Data TX: Handle 12 flags 0x01 dlen 8                      #3 [hci0] 08:03:41.680100\n"
-      "      AVRCP: GetFolderItems\n";
-  size_t found = 0;
-  const std::string t = btb::hci::btmon_pick(out, {4711, 4712}, &found);
-  CHECK_EQ(found, 2u);
-  CHECK_EQ(t,
-           "< ACL Data TX: Handle 12 flags 0x00 dlen 48                  #4711 [hci0] 08:03:41.680094\n"
-           "< ACL Data TX: Handle 12 flags 0x01 dlen 8                   #4712 [hci0] 08:03:41.680100\n"
-           "      AVRCP: GetFolderItems\n");
-  CHECK_EQ(btb::hci::btmon_pick("Bluetooth monitor ver 5.72\n", {1}, &found), std::string(""));
-  CHECK_EQ(found, 0u);
-}
-
 int main() {
   test_names();
   test_run_command();
   test_plot_errors();
-  test_btmon_pick();
   return report("test_hci_capture");
 }

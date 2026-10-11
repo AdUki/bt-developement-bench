@@ -38,6 +38,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 | `job.<id>` | `{stream: "out\|err", line}`, then `{exit, killed}` | a job's output |
 | `hci.stats` | the body of `GET /api/hci/stats` | 1 Hz |
 | `hci.event` | one entry of `GET /api/hci/events` | per event |
+| `bluez.dbus` | `{entries: [...]}`, entries as `GET /api/bluetooth/dbus` | BlueZ's D-Bus messages, in batches at most 4 Hz |
 
 ## Bluetooth
 
@@ -93,6 +94,31 @@ bearers went down and why (BlueZ's `Disconnected` signal: `unknown`, `timeout`, 
 `authentication`, `suspend`), kept until btbenchd restarts. `busy` is `pairing`, `connecting` or `disconnecting` while one of those runs; `error` is the
 last operation's failure in BlueZ's words, kept until the next one. Sorted: connected, paired, then
 by alias.
+
+### `GET /api/bluetooth/dbus?since=0&limit=500`
+
+BlueZ's D-Bus traffic: every method call, reply, error and signal to or from `org.bluez` and
+`org.bluez.obex` on the system bus, as btbenchd's monitor connection sees it
+(`org.freedesktop.DBus.Monitoring.BecomeMonitor`; not started with `--no-bluetooth`). It always
+runs; the last 2000 are kept for this route and every one goes to `/tmp/logs/bluez-dbus.log`
+(rotated once at 2 MiB, readable in the log viewer). The bus's own messages (NameAcquired, BlueZ's
+AddMatch) are left out.
+
+`{"running": true, "error": "", "seq": 412, "file": "/tmp/logs/bluez-dbus.log", "entries": [...]}`:
+the entries after `since`, oldest first, at most `limit` (1..2000, the newest). An entry:
+
+```json
+{"seq": 411, "ts": 1791715514331, "type": "call|return|error|signal",
+ "sender": ":1.112", "sender_name": "btbenchd", "dest": "org.bluez", "dest_name": "bluetoothd",
+ "path": "/org/bluez/hci0", "iface": "org.bluez.Adapter1", "member": "StartDiscovery", "sig": "",
+ "args": [], "cut": false}
+```
+
+`*_name` is the program behind the bus name (`/proc/<pid>/comm`). A reply or error has `call` (the
+member it answers) and `latency_ms`, an error `error_name` and `error`, and no `path`/`member`.
+`args` is the message's arguments as JSON; arguments longer than 1500 bytes are a string cut with
+`…` (`cut: true`), and the reply to `GetManagedObjects` (the whole tree, which btbenchd re-reads every
+5 s) is `"N objects"`.
 
 ### `PUT /api/bluetooth`
 
@@ -606,7 +632,6 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 | `GET /api/capture/files/{name}/packets/{n}` | one packet decoded: the same object plus `fields` (a tree of `{name, value, off, len, children}`) and `hex` |
 | `GET /api/capture/files/{name}/graph?filter=&bucket_ms=&points=&conn=INDEX:HANDLE` | per time bucket, the filtered packets and bytes, and one link's TX/RX bit/s and TX latency p50/p95/max; the list of links |
 | `GET /api/capture/files/{name}/stats?filter=` | what the filter matches, counted: `{total: {pkts, bytes, tx, rx, err}, marks, cont, span_s, protos: [{proto, ...}], types: [{type, ...}], links: [{index, handle, type, peer, ...}], latency: {n, avg_ms, p50_ms, p95_ms, max_ms}, complete}` |
-| `GET /api/capture/files/{name}/packets/{n}/btmon` | BlueZ's decoder for that packet: `btmon -r` on the board over it and the packets it depends on: `{frames, context, text}` |
 | `GET /api/capture/files/{name}/export?filter=&context=1` | the matching packets as a btsnoop file (datalink 2001); `context=1` adds what btmon needs to decode them. 409 until the filter has run over the whole file |
 
 The packet routes work against a time budget (400 ms a request on the board): an answer with

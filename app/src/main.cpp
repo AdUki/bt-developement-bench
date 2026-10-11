@@ -159,6 +159,12 @@ int main(int argc, char** argv) {
                           [&hub](const nlohmann::json& t) { hub.publish("pipewire", t); });
   btb::TargetScripts scripts(scripts_dir);
   btb::SystemInfo sys(data_dir);
+  // BlueZ's D-Bus traffic, watched from a monitor connection and written beside btbench-logd's
+  // files; not on a PC without BT=fake, whose system bus is the desktop's.
+  btb::DbusLog::Options dlopt;
+  dlopt.file = logs_dir + "/bluez-dbus.log";
+  btb::DbusLog dbus_log(dlopt, [&hub] { return hub.has_subscribers("bluez.dbus"); },
+                        [&hub](const nlohmann::json& b) { hub.publish("bluez.dbus", b); });
 
   btb::WebOptions wopt;
   wopt.www_dir = www;
@@ -243,7 +249,7 @@ int main(int argc, char** argv) {
   bt.add_user(&player);
 
   btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,
-                 player};
+                 player, dbus_log};
   btb::WebServer server(deps, wopt);
   bt.on_change([&server, &hid_host](bool request) {
     server.publish_bt(request);
@@ -269,6 +275,7 @@ int main(int argc, char** argv) {
   }
   journal.start();
   pwtop.start();
+  if (!no_bluetooth) dbus_log.start();
 
   g_server = &server;
   std::signal(SIGINT, on_signal);
@@ -283,6 +290,7 @@ int main(int argc, char** argv) {
   g_server = nullptr;
   journal.stop();
   pwtop.stop();
+  dbus_log.stop();
   jobs.stop_all();
   audio.stop_all();
   obex.stop();

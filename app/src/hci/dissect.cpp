@@ -14,6 +14,7 @@
 #include <string>
 
 #include "codec.h"
+#include "mgmt_names.h"
 #include "packet_view.h"
 #include "wire.h"
 
@@ -702,6 +703,127 @@ const char* addr_type_name(uint8_t t) {
     case 0x03: return "random identity";
     default: return "unknown";
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// MGMT: what bluetoothd (or btmgmt) asks the kernel and what the kernel tells it, carried on the
+// monitor channel as control commands and events. Named as btmon names them (mgmt_names.h), with
+// the fields read most: a mode switched on or off, the adapter settings after a change, the device
+// a command or event is about and why a link went down.
+
+const char* mgmt_addr_type(uint8_t t) {
+  switch (t) {
+    case 0: return "BR/EDR";
+    case 1: return "LE public";
+    case 2: return "LE random";
+    default: return "unknown";
+  }
+}
+
+std::string mgmt_settings(uint32_t v) {
+  static const char* const kBits[] = {"powered", "connectable", "fast-connectable", "discoverable", "bondable",
+                                      "link-security", "ssp", "br/edr", "hs", "le", "advertising", "secure-conn",
+                                      "debug-keys", "privacy", "configuration", "static-addr", "phy-configuration",
+                                      "wide-band-speech", "cis-central", "cis-peripheral", "iso-broadcaster",
+                                      "iso-sync-receiver", "ll-privacy", "past-sender", "past-receiver", "sci"};
+  std::string out;
+  for (unsigned i = 0; i < 32; i++)
+    if (v & (1u << i)) out += (out.empty() ? "" : " ") + std::string(i < sizeof kBits / sizeof *kBits ? kBits[i] : sf("bit%u", i));
+  return out.empty() ? "none" : out;
+}
+
+std::string mgmt_label(const char* name, uint16_t code) { return name ? std::string(name) : sf("0x%04x", code); }
+
+// An mgmt_addr_info (address, type) at p: the commands and events about one device start with it.
+bool mgmt_has_addr(bool cmd, uint16_t code) {
+  if (cmd) {
+    switch (code) {
+      case 0x0014: case 0x0016: case 0x0017: case 0x0019: case 0x001a: case 0x001b: case 0x001c:
+      case 0x001d: case 0x001e: case 0x001f: case 0x0021: case 0x0026: case 0x0027: case 0x0031:
+      case 0x0032: case 0x0033: case 0x0034: case 0x0044: case 0x0050: case 0x0055: case 0x0056:
+        return true;
+      default: return false;
+    }
+  }
+  switch (code) {
+    case 0x000b: case 0x000c: case 0x000d: case 0x000e: case 0x000f: case 0x0010: case 0x0011:
+    case 0x0012: case 0x0014: case 0x0015: case 0x0016: case 0x0017: case 0x001a: case 0x001b:
+    case 0x001c: case 0x002f: case 0x0030:
+      return true;
+    default: return false;
+  }
+}
+
+void dissect_mgmt(Out& o, bool cmd, const uint8_t* d, size_t len) {
+  const uint16_t code = le16(d + 4);
+  const uint8_t* p = d + 6;
+  size_t n = len - 6;
+  F("Cookie", sf("0x%08x", le32(d)), d, 4);
+  // Command Complete / Status answer an opcode: the summary names the command, then the outcome.
+  if (!cmd && (code == 0x0001 || code == 0x0002) && n >= 3) {
+    const uint16_t op = le16(p);
+    const char* st = mgmt_status_name(p[2]);
+    F("Event", mgmt_label(mgmt_event_name(code), code), d + 4, 2);
+    F("Command", sf("%s (0x%04x)", mgmt_label(mgmt_op_name(op), op).c_str(), op), p, 2);
+    F("Status", sf("0x%02x (%s)", p[2], st ? st : "unknown"), p + 2, 1);
+    o.summary = sf("MGMT %s: %s%s", code == 1 ? "Command Complete" : "Command Status", mgmt_label(mgmt_op_name(op), op).c_str(),
+                   p[2] ? sf(" — %s", st ? st : sf("status 0x%02x", p[2]).c_str()).c_str() : "");
+    p += 3;
+    n -= 3;
+    // The Set commands that change a setting answer with the settings in force after it.
+    if (code == 0x0001 && !p[-1] && n == 4 && ((op >= 0x0005 && op <= 0x000d) || op == 0x0029 || op == 0x002a ||
+                                               op == 0x002d || op == 0x002e || op == 0x002f)) {
+      F("Current settings", mgmt_settings(le32(p)), p, 4);
+      o.summary += " → " + mgmt_settings(le32(p));
+      return;
+    }
+    if (n) F("Return parameters", hexbytes(p, n, 64), p, n);
+    return;
+  }
+  const std::string name = mgmt_label(cmd ? mgmt_op_name(code) : mgmt_event_name(code), code);
+  F(cmd ? "Opcode" : "Event", sf("%s (0x%04x)", name.c_str(), code), d + 4, 2);
+  o.summary = std::string(cmd ? "MGMT " : "MGMT Event: ") + name;
+  if (mgmt_has_addr(cmd, code) && n >= 7) {
+    F("Address", bdaddr_str(p), p, 6);
+    F("Address type", mgmt_addr_type(p[6]), p + 6, 1);
+    o.summary += sf(" %s (%s)", bdaddr_str(p).c_str(), mgmt_addr_type(p[6]));
+    p += 7;
+    n -= 7;
+    if (!cmd && code == 0x000c && n >= 1) {
+      static const char* const kWhy[] = {"unknown", "timeout", "local host", "remote", "auth failure", "local host suspend"};
+      const char* why = p[0] < 6 ? kWhy[p[0]] : "?";
+      F("Reason", sf("0x%02x (%s)", p[0], why), p, 1);
+      o.summary += sf(", reason %s", why);
+      p++;
+      n--;
+    } else if (!cmd && (code == 0x000d || code == 0x0011) && n >= 1) {
+      const char* st = mgmt_status_name(p[0]);
+      F("Status", sf("0x%02x (%s)", p[0], st ? st : "unknown"), p, 1);
+      o.summary += sf(", %s", st ? st : "failed");
+      p++;
+      n--;
+    }
+  } else if (cmd && ((code >= 0x0005 && code <= 0x000d) || code == 0x0029 || code == 0x002a || code == 0x002d) && n >= 1) {
+    // Set Powered … Set LE, Set Advertising, Set BR/EDR, Set Secure Connections: a mode byte.
+    const char* mode = p[0] == 0 ? "off" : p[0] == 1 ? "on" : p[0] == 2 ? (code == 0x0006 ? "limited" : "only") : "?";
+    F("Mode", sf("0x%02x (%s)", p[0], mode), p, 1);
+    o.summary += sf(" %s", mode);
+    if (code == 0x0006 && n >= 3) {
+      F("Timeout", sf("%u s", le16(p + 1)), p + 1, 2);
+      if (le16(p + 1)) o.summary += sf(" for %u s", le16(p + 1));
+    }
+    return;
+  } else if (!cmd && code == 0x0006 && n >= 4) {
+    F("Current settings", mgmt_settings(le32(p)), p, 4);
+    o.summary += " " + mgmt_settings(le32(p));
+    return;
+  } else if (!cmd && code == 0x0013 && n >= 2) {
+    F("Address type", sf("0x%02x", p[0]), p, 1);
+    F("Discovering", p[1] ? "yes" : "no", p + 1, 1);
+    o.summary += p[1] ? " started" : " stopped";
+    return;
+  }
+  if (n) F("Data", hexbytes(p, n, 64), p, n);
 }
 
 const char* sig_name(uint8_t code) {
@@ -2899,21 +3021,8 @@ void monitor_note(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
       return;
     case kMonCtrlCommand:
     case kMonCtrlEvent:
-      if (len >= 6) {
-        const bool cmd = e.mon == kMonCtrlCommand;
-        F("Cookie", sf("0x%08x", le32(d)), d, 4);
-        F(cmd ? "Opcode" : "Event", sf("0x%04x", le16(d + 4)), d + 4, 2);
-        if (len > 6) F("Data", hexbytes(d + 6, len - 6, 64), d + 6, len - 6);
-        // MGMT Command Complete/Status carry the opcode they answer, then a status.
-        if (!cmd && (le16(d + 4) == 0x0001 || le16(d + 4) == 0x0002) && len >= 9) {
-          o.summary = sf("MGMT %s 0x%04x status 0x%02x", le16(d + 4) == 1 ? "Command Complete" : "Command Status",
-                         le16(d + 6), d[8]);
-        } else {
-          o.summary = sf("MGMT %s 0x%04x", cmd ? "Command" : "Event", le16(d + 4));
-        }
-      } else {
-        o.summary = "MGMT";
-      }
+      if (len >= 6) dissect_mgmt(o, e.mon == kMonCtrlCommand, d, len);
+      else o.summary = "MGMT";
       return;
     case kMonVendorDiag:
       F("Data", hexbytes(d, len, 64), d, len);

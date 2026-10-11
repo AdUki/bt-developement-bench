@@ -1712,68 +1712,6 @@ bool PacketStore::export_filtered(const std::string& name, const std::string& fi
   return true;
 }
 
-bool PacketStore::btmon_input(const std::string& name, uint32_t n, BtmonInput* out, int* status,
-                              std::string* err) {
-  std::shared_ptr<PacketIndex> idx = get(name, status, err);
-  if (!idx) return false;
-  std::lock_guard<std::mutex> lk(idx->mu);
-  const int64_t deadline = mono_us() + int64_t{budget_ms_} * 1000;
-  if (n > idx->size()) idx->extend(deadline);
-  if (n < 1 || n > idx->size()) {
-    *status = 404;
-    *err = n > idx->size() && !idx->at_end() ? "not indexed yet, try again" : "no such packet";
-    return false;
-  }
-  // The frame's L2CAP packet: btmon decodes it once the last fragment is in, so the start
-  // fragment and every continuation of that handle go in, in order.
-  size_t first = n - 1, last = n - 1;
-  const IndexEntry& e = idx->at(n - 1);
-  std::vector<uint32_t> frames;
-  const bool acl = e.mon == kMonAclTx || e.mon == kMonAclRx;
-  auto same_link = [&](const IndexEntry& o) { return o.mon == e.mon && o.index == e.index && o.handle == e.handle; };
-  if (acl) {
-    if (e.flags & kFlagCont) {
-      for (size_t j = first; j-- > 0 && first - j < 64;) {
-        if (!same_link(idx->at(j))) continue;
-        first = j;
-        if (!(idx->at(j).flags & kFlagCont)) break;
-      }
-    }
-    for (size_t j = n; j < idx->size() && j - last < 64; ++j) {
-      if (!same_link(idx->at(j))) continue;
-      if (!(idx->at(j).flags & kFlagCont)) break;
-      last = j;
-    }
-  }
-  for (size_t j = first; j <= last; ++j) {
-    if (j == n - 1 || !acl || same_link(idx->at(j))) frames.push_back(static_cast<uint32_t>(j));
-  }
-  // The context, newest first while collecting (the most recent state matters most), capped.
-  std::vector<uint32_t> ctx;
-  for (size_t j = first; j-- > 0 && ctx.size() < kMaxContext;) {
-    if (btmon_context(*idx, j)) ctx.push_back(static_cast<uint32_t>(j));
-  }
-  std::reverse(ctx.begin(), ctx.end());
-  out->bytes = monitor_header();
-  // The file's own context (what was open when it began) comes before what is in the file.
-  out->bytes += idx->context_records();
-  out->context = 0;
-  for (uint32_t j : ctx) {
-    if (idx->append_record(j, &out->bytes)) ++out->context;
-  }
-  out->frames.clear();
-  for (uint32_t j : frames) {
-    if (!idx->append_record(j, &out->bytes)) continue;
-    out->frames.push_back(j + 1);
-  }
-  if (out->frames.empty()) {
-    *status = 500;
-    *err = "cannot read the packet";
-    return false;
-  }
-  return true;
-}
-
 bool PacketStore::graph(const std::string& name, const GraphParams& p, json* out, int* status,
                         std::string* err) {
   Filter f;

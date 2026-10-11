@@ -204,6 +204,7 @@ const livePkts = (() => {
     ['media', 'proto:rtp'],
     ['AVRCP', 'proto:avctp'],
     ['RFCOMM', 'proto:rfcomm'],
+    ['MGMT', 'type:mgmt'],
     ['errors', 'is:err'],
     ['marks + logs', 'type:log'],
     ['slow TX', 'lat>20'],

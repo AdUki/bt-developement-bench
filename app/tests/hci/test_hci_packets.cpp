@@ -73,6 +73,12 @@ std::vector<Pkt> mixed_session() {
   at(kMonAclRx, acl(64, 2, l2cap(kCidAtt, Bytes{0x01, 0x0a, 0x03, 0x00, 0x05})));  // Error: insuff. auth
   at(kMonAclRx, acl(64, 2, l2cap(kCidAtt, Bytes{0x1b, 0x2a, 0x00, 'h', 'i'})));   // Notification
   at(kMonAclTx, acl(64, 0, l2cap(kCidSmp, Bytes{0x05, 0x08})));                    // Pairing Failed
+  // MGMT on the monitor's control channel: a Set command with its mode, the Command Complete with
+  // the settings after it, a failed Command Status, and a disconnect with its reason.
+  at(kMonCtrlCommand, Bytes{0x01, 0x00, 0x00, 0x00, 0x09, 0x00, 0x01});
+  at(kMonCtrlEvent, Bytes{0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x09, 0x00, 0x00, 0xd3, 0x02, 0x00, 0x00});
+  at(kMonCtrlEvent, Bytes{0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x19, 0x00, 0x0a});
+  at(kMonCtrlEvent, cat(cat(Bytes{0x02, 0x00, 0x00, 0x00, 0x0c, 0x00}, kPeer), Bytes{0x00, 0x03}));
   // A btbench mark on the logging channel.
   {
     Bytes m{6, 8, 'b', 't', 'b', 'e', 'n', 'c', 'h', 0};
@@ -222,14 +228,6 @@ void test_context() {
   uint32_t want = 0;
   for (const auto& p : rest) want += p.opcode == kMonAclTx;
   CHECK_EQ(with.tx_pkts, want);
-
-  // The btmon view's input starts with that context.
-  PacketStore store(g_tmp);
-  PacketStore::BtmonInput in;
-  int status = 0;
-  CHECK(store.btmon_input("ctx-later.btsnoop", 1, &in, &status, &err));
-  CHECK_EQ(in.frames.size(), 1u);
-  CHECK(in.bytes.size() > j.snapshot().size());
 }
 
 void test_filter() {
@@ -351,6 +349,12 @@ void test_summaries_and_detail() {
   CHECK(find_summary(idx, "Handle Value Notification handle 0x002a 6869 \"hi\"") != static_cast<size_t>(-1));
   CHECK(find_summary(idx, "Pairing Failed: Unspecified Reason") != static_cast<size_t>(-1));
   CHECK(find_summary(idx, "btbench: before the stall") != static_cast<size_t>(-1));
+  CHECK(find_summary(idx, "MGMT Set Bondable on") != static_cast<size_t>(-1));
+  CHECK(find_summary(idx, "MGMT Command Complete: Set Bondable → powered connectable bondable ssp br/edr le") !=
+        static_cast<size_t>(-1));
+  CHECK(find_summary(idx, "MGMT Command Status: Pair Device — Busy") != static_cast<size_t>(-1));
+  CHECK(find_summary(idx, "MGMT Event: Device Disconnected AA:BB:CC:DD:EE:FF (BR/EDR), reason remote") !=
+        static_cast<size_t>(-1));
   CHECK(find_summary(idx, "New Index hci0 06:05:04:03:02:01 (UART)") != static_cast<size_t>(-1));
   CHECK(find_summary(idx, "continuation, ") != static_cast<size_t>(-1));
 

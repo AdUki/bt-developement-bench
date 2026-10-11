@@ -65,6 +65,7 @@
     ['media', 'proto:rtp'],
     ['AVRCP', 'proto:avctp'],
     ['RFCOMM', 'proto:rfcomm'],
+    ['MGMT', 'type:mgmt'],
     ['errors', 'is:err'],
     ['marks + logs', 'type:log'],
     ['slow TX', 'lat>20'],
@@ -79,8 +80,6 @@
     progressTimer: null, follow: false, followTimer: null,
     // The time column: since the first packet, time of day, or since the row above.
     time: ['rel', 'tod', 'delta'].includes(lsGet('btbench.cv.time')) ? lsGet('btbench.cv.time') : 'rel',
-    dtab: lsGet('btbench.cv.dtab') === 'btmon' ? 'btmon' : 'fields',  // the detail: our fields, or btmon's
-    btmon: new Map(),      // frame → btmon's text, for the open file
     statsOpen: false, stats: null, statsGen: 0,
   };
 
@@ -118,7 +117,6 @@
     cv.selIdx = -1;
     cv.selN = null;
     cv.conn = '';
-    cv.btmon.clear();
     clearDetail();
     applyFilter($('cv-filter').value.trim(), false);
     if (capState) renderCapture(capState);
@@ -423,39 +421,6 @@
     drawGraph();
   }
 
-  // btmon's decode of frame n: fetched once per frame (it runs btmon on the board), kept while the
-  // file is open.
-  function showBtmon(n) {
-    const pre = $('cv-btmon');
-    const have = cv.btmon.get(n);
-    if (have != null) return setHTML(pre, have);
-    setHTML(pre, '<span class="muted">btmon is decoding…</span>');
-    const name = cv.name;
-    api(`${base()}/packets/${n}/btmon`).then(r => {
-      const note = r.context ? `<span class="muted">btmon -r, with ${fmtN(r.context)} packets of context${r.frames.length > 1 ? ` · frames ${r.frames.join(', ')} (one L2CAP packet)` : ''}</span>\n\n` : '';
-      const html = note + esc(r.text);
-      if (name !== cv.name) return;
-      cv.btmon.set(n, html);
-      if (cv.selN === n) setHTML(pre, html);
-    }).catch(e => { if (name === cv.name && cv.selN === n) setHTML(pre, `<span class="bad-text">${esc(e.message)}</span>`); });
-  }
-
-  function setDtab(tab) {
-    cv.dtab = tab;
-    lsSet('btbench.cv.dtab', tab);
-    for (const b of $('cv-dtabs').querySelectorAll('[data-dtab]')) {
-      const on = b.dataset.dtab === tab;
-      b.classList.toggle('on', on);
-      b.setAttribute('aria-selected', String(on));
-    }
-    $('cv-dfields').hidden = tab !== 'fields';
-    $('cv-btmon').hidden = tab !== 'btmon';
-    if (tab === 'btmon') {
-      if (cv.selN) showBtmon(cv.selN);
-      else setHTML($('cv-btmon'), '<span class="muted">Select a packet: click a row, or move with ↑ ↓.</span>');
-    }
-  }
-
   function setTimeMode(mode) {
     cv.time = mode;
     lsSet('btbench.cv.time', mode);
@@ -469,7 +434,6 @@
     cv.detail = null;
     cv.hexSpans = [];
     setHTML($('cv-fields'), '<div class="muted small">Select a packet: click a row, or move with ↑ ↓.</div>');
-    setHTML($('cv-btmon'), '<span class="muted">Select a packet: click a row, or move with ↑ ↓.</span>');
     setHTML($('cv-hex'), '');
   }
 
@@ -508,7 +472,6 @@
     const terms = termsOf(d).map(t => `<button class="cv-term" data-term="${esc(t)}" title="Add to the filter (shift: without it)">${esc(t)}</button>`).join('');
     const head = `<div class="cv-dhead"><b>#${d.n}</b> ${esc(d.summary)}</div><div class="cv-terms">${terms}</div>`;
     setHTML($('cv-fields'), head + fieldsHTML(d.fields));
-    if (cv.dtab === 'btmon') showBtmon(d.n);
     setHTML($('cv-hex'), d.hex ? hexHTML(d.hex) : '<span class="muted">(no bytes)</span>');
     cv.hexSpans = Array.from($('cv-hex').querySelectorAll('[data-o]'));
   }
@@ -826,7 +789,6 @@
     };
     $('cv-conn').onchange = e => { cv.conn = e.target.value; fetchGraph(); };
     $('cv-time').onchange = e => setTimeMode(e.target.value);
-    $('cv-dtabs').onclick = e => { const b = e.target.closest('[data-dtab]'); if (b) setDtab(b.dataset.dtab); };
     $('cv-ctx').onchange = renderSave;
     $('cv-save').onclick = e => { if ($('cv-save').classList.contains('disabled')) e.preventDefault(); };
     $('cv-stats-btn').onclick = () => {
@@ -874,7 +836,6 @@
     clearDetail();
     renderChips();
     setTimeMode(cv.time);
-    setDtab(cv.dtab);
   }
 
   registerTab('capture', {
