@@ -253,6 +253,10 @@ struct BtBus {
     const char *name = nullptr, *was = nullptr, *now = nullptr;
     if (sd_bus_message_read(m, "sss", &name, &was, &now) < 0 || !name) return 0;
     if (strcmp(name, kBluez) != 0) return 0;
+    // A re-read can find the new BlueZ (GetNameOwner) before this signal is handled; the signal
+    // then names the owner already adopted, with the agent and every BusUser set up for it.
+    // Treating it as yet another BlueZ registered the agent and the player twice.
+    if (now && *now && b->bluez_owner_ == now) return 0;
     b->bluez_owner_ = now ? now : "";
     b->agent_registered_ = false;
     b->clear_request(false);
@@ -734,7 +738,10 @@ void BtManager::refresh() {
     if (sd_bus_call_method(bus_, "org.freedesktop.DBus", "/org/freedesktop/DBus",
                            "org.freedesktop.DBus", "GetNameOwner", &e, &reply, "s", kBluez) >= 0) {
       const char* owner = nullptr;
-      if (sd_bus_message_read(reply, "s", &owner) >= 0 && owner) bluez_owner_ = owner;
+      if (sd_bus_message_read(reply, "s", &owner) >= 0 && owner) {
+        bluez_owner_ = owner;
+        LOG_INFO("bluetooth: BlueZ is on the bus ({})", bluez_owner_);
+      }
     }
     sd_bus_message_unref(reply);
     sd_bus_error_free(&e);
@@ -746,6 +753,16 @@ void BtManager::refresh() {
   const int r = sd_bus_call_method(bus_, kBluez, "/", "org.freedesktop.DBus.ObjectManager",
                                    "GetManagedObjects", &e, &reply, "");
   const bool ok = r >= 0 && read_json(reply, objs.get()) > 0 && objs->is_object();
+  // BlueZ can take its name between the GetNameOwner above and this call; then the answer's sender
+  // is the owner. Left unknown, the NameOwnerChanged that follows looked like another BlueZ, and the
+  // agent and every BusUser were set up a second time.
+  if (ok && bluez_owner_.empty()) {
+    const char* sender = sd_bus_message_get_sender(reply);
+    if (sender && *sender) {
+      bluez_owner_ = sender;
+      LOG_INFO("bluetooth: BlueZ is on the bus ({})", bluez_owner_);
+    }
+  }
   sd_bus_message_unref(reply);
   if (!ok) {
     const std::string why = is_error(&e, SD_BUS_ERROR_SERVICE_UNKNOWN) ||
