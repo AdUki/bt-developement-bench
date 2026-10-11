@@ -20,6 +20,8 @@ const pl = {
   upnpServer: null,
   queueItems: [],      // the phone's now-playing list
   queueAt: 0,          // when it was read
+  libMore: null,       // the UPnP folder's pages still to load (upnpPage)
+  libView: null,       // how the library is drawn, for the pages appended to it
   libSeq: 0,           // the library's latest request, and the phone folder it is loading
   libLoading: '',
   tick: null,
@@ -416,6 +418,7 @@ function openLib(kind, chosen) {
 }
 
 function upnpServers(search) {
+  pl.libMore = null;
   setHTML($('np-crumbs'), '');
   setHTML($('np-lib'), `<div class="empty-line loading-line"><span class="spin"></span>${search ? 'Searching the network…' : 'Loading…'}</div>`);
   api('/audio/upnp/servers' + (search ? '?search=1' : '')).then(r => {
@@ -430,6 +433,25 @@ function upnpServers(search) {
 // What a media server says about a folder's contents, as library rows: albums with their cover,
 // artist and year; tracks with their number, cover and format. A track without a cover of its own
 // takes its album's (meta: the folder opened, as its row had it).
+//
+// A big folder (Kodi's artists, thousands of them) comes a page at a time: the first page shows at
+// once, and the next is asked for as the end of the list scrolls into view. One page of 200 keeps
+// each answer quick for the board to parse and small on its Wi-Fi, which shares the radio with the
+// Bluetooth that may be playing.
+const UPNP_PAGE = 200;
+
+function upnpRows(r, folderArt) {
+  return r.containers.map(c => {
+    const album = /album/.test(c.class || '');
+    const n = c.child_count != null ? `${c.child_count} ${album ? 'tracks' : 'items'}` : '';
+    return {kind: 'folder', title: c.title, id: c.id, album, thumb: c.thumb, art: c.art, artist: c.artist, year: c.year,
+      genre: c.genre, count: c.child_count, sub: (album ? [c.artist, c.year, n] : [n]).filter(Boolean).join(' · ')};
+  }).concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url,
+    art: it.art || folderArt, thumb: it.thumb || '', track: it.track, year: it.year, genre: it.genre,
+    sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s, artist: it.artist, album: it.album,
+    format: upnpFormat(it)})));
+}
+
 function upnpFolder(server, id, title, push, meta) {
   const seq = ++pl.libSeq;
   pl.upnpServer = server;
@@ -438,19 +460,59 @@ function upnpFolder(server, id, title, push, meta) {
   const folderArt = here && here.meta ? here.meta.art : '';
   renderCrumbs();
   setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
-  api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&count=500`).then(r => {
+  pl.libMore = null;
+  upnpPage(server, id, 0, folderArt, seq);
+}
+
+// One page of the folder from `start`; what is left is in pl.libMore until the list's end shows.
+// A server that leaves TotalMatches at 0 (allowed when it does not know) has more while it fills
+// whole pages.
+function upnpPage(server, id, start, folderArt, seq) {
+  return api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&start=${start}&count=${UPNP_PAGE}`).then(r => {
     if (seq !== pl.libSeq) return;
-    pl.libItems = r.containers.map(c => {
-      const album = /album/.test(c.class || '');
-      const n = c.child_count != null ? `${c.child_count} ${album ? 'tracks' : 'items'}` : '';
-      return {kind: 'folder', title: c.title, id: c.id, album, thumb: c.thumb, art: c.art, artist: c.artist, year: c.year,
-        genre: c.genre, count: c.child_count, sub: (album ? [c.artist, c.year, n] : [n]).filter(Boolean).join(' · ')};
-    }).concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url,
-      art: it.art || folderArt, thumb: it.thumb || '', track: it.track, year: it.year, genre: it.genre,
-      sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s, artist: it.artist, album: it.album,
-      format: upnpFormat(it)})));
-    renderLib();
-  }).catch(e => { if (seq === pl.libSeq) setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`); });
+    const rows = upnpRows(r, folderArt);
+    const next = start + (r.returned || 0);
+    const more = r.returned > 0 && (r.total ? next < r.total : r.returned >= UPNP_PAGE);
+    pl.libMore = more ? {server, id, next, total: r.total || 0, folderArt, seq, busy: false} : null;
+    if (start === 0) {
+      pl.libItems = rows;
+      renderLib();
+    } else {
+      libAppend(rows);
+    }
+  }).catch(e => {
+    if (seq !== pl.libSeq) return;
+    if (start === 0) return setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`);
+    pl.libMore = {server, id, next: start, total: 0, folderArt, seq, busy: false, failed: e.message};
+    libMoreLine();
+  });
+}
+
+// The list's last line while more is to come: it asks for the next page when it scrolls into
+// view (an IntersectionObserver, whichever element scrolls), or on a tap after a failure.
+let libMoreSeen = null;
+function libMoreLine() {
+  const lib = $('np-lib');
+  const old = lib.querySelector('.lib-more');
+  if (old) old.remove();
+  if (libMoreSeen) { libMoreSeen.disconnect(); libMoreSeen = null; }
+  const m = pl.libMore;
+  if (!m || m.seq !== pl.libSeq) return;
+  const of = m.total ? ` of ${m.total.toLocaleString()}` : '';
+  lib.insertAdjacentHTML('beforeend', m.failed
+    ? `<div class="empty-line lib-more"><span class="bad-text">${esc(m.failed)}</span> <button class="small-btn" data-lib-more="1">Try again</button></div>`
+    : `<div class="empty-line loading-line lib-more"><span class="spin"></span>${pl.libItems.length.toLocaleString()}${of} shown, loading more…</div>`);
+  if (m.failed || !('IntersectionObserver' in window)) return;
+  libMoreSeen = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) libMoreLoad(); }, {rootMargin: '600px'});
+  libMoreSeen.observe(lib.querySelector('.lib-more'));
+}
+
+function libMoreLoad() {
+  const m = pl.libMore;
+  if (!m || m.busy || m.seq !== pl.libSeq) return;
+  m.busy = true;
+  m.failed = '';
+  upnpPage(m.server, m.id, m.next, m.folderArt, m.seq);
 }
 
 // "FLAC 24/96": the codec from the MIME type, then bits and kHz where the server gave them.
@@ -494,7 +556,6 @@ function renderCrumbs() {
 const libArt = (it, icon) => `${svg(icon)}${it.thumb || it.art ? `<img alt="" loading="lazy" decoding="async" src="${esc(it.thumb || it.art)}" onerror="this.remove()">` : ''}`;
 
 function renderLib(empty) {
-  const icon = {station: PL_SVG.radio, server: PL_SVG.folder, folder: PL_SVG.folder, pfolder: PL_SVG.folder, track: PL_SVG.note, ptrack: PL_SVG.note};
   const items = pl.libItems;
   const tracks = items.filter(x => x.kind === 'track');
   const here = pl.lib === 'upnp' ? pl.libPath[pl.libPath.length - 1] : null;
@@ -515,12 +576,28 @@ function renderLib(empty) {
   // A folder of albums with covers is shown as covers.
   const folders = items.filter(x => x.kind === 'folder');
   const grid = !tracks.length && folders.length >= 4 && folders.filter(f => f.album && f.thumb).length >= folders.length / 2;
+  // Pages after the first are appended in the same form (libAppend): a grid stays a grid.
+  pl.libView = {grid, inAlbum, tracks: tracks.length > 0};
   if (grid) {
-    setHTML($('np-lib'), `<div class="lib-grid">${items.map((it, i) => `<button class="lib-tile" data-lib-i="${i}" title="${esc(it.title)}">
-      <span class="lib-tile-art">${libArt(it, icon[it.kind])}</span><b>${esc(it.title)}</b><span class="muted">${esc([it.artist, it.year].filter(Boolean).join(' · '))}</span></button>`).join('')}</div>`);
-    return;
+    setHTML($('np-lib'), `<div class="lib-grid">${libTiles(items, 0)}</div>`);
+  } else {
+    setHTML($('np-lib'), head + (libRowsHTML(items, 0, inAlbum) || empty || '<div class="empty-line">Empty.</div>'));
   }
-  setHTML($('np-lib'), head + (items.map((it, i) => {
+  libMoreLine();
+}
+
+const libIcons = () => ({station: PL_SVG.radio, server: PL_SVG.folder, folder: PL_SVG.folder, pfolder: PL_SVG.folder, track: PL_SVG.note, ptrack: PL_SVG.note});
+
+function libTiles(items, from) {
+  const icon = libIcons();
+  return items.map((it, k) => `<button class="lib-tile" data-lib-i="${from + k}" title="${esc(it.title)}">
+      <span class="lib-tile-art">${libArt(it, icon[it.kind])}</span><b>${esc(it.title)}</b><span class="muted">${esc([it.artist, it.year].filter(Boolean).join(' · '))}</span></button>`).join('');
+}
+
+function libRowsHTML(items, from, inAlbum) {
+  const icon = libIcons();
+  return items.map((it, k) => {
+    const i = from + k;
     const open = it.kind === 'server' || it.kind === 'folder' || it.kind === 'pfolder';
     const add = it.kind === 'track' || (it.kind === 'ptrack' && it.playable);
     // Inside an album the tracks show their number (the cover is at the top); elsewhere their cover.
@@ -533,7 +610,29 @@ function renderLib(empty) {
       ${it.duration_s ? `<span class="tr-d">${fmtMs(it.duration_s * 1000)}</span>` : ''}
       ${add ? `<button class="icon-btn" data-lib-add="${i}" title="Add to the queue" aria-label="Add to the queue">${svg(PL_SVG.plus)}</button>` : ''}
       ${open ? '<span class="chev"></span>' : ''}</div>`;
-  }).join('') || empty || '<div class="empty-line">Empty.</div>'));
+  }).join('');
+}
+
+// The next page under what is shown, without redrawing it: the scroll position and the covers
+// already loaded stay. A page that brings the first tracks (or more of an album's) redraws, as the
+// album header counts them.
+function libAppend(rows) {
+  const from = pl.libItems.length;
+  pl.libItems = pl.libItems.concat(rows);
+  const v = pl.libView || {};
+  if (v.tracks || (!v.grid && rows.some(r => r.kind === 'track'))) {
+    const lib = $('np-lib'), top = lib.scrollTop, y = window.scrollY;
+    renderLib();
+    lib.scrollTop = top;
+    window.scrollTo(0, y);
+    return;
+  }
+  const lib = $('np-lib');
+  const old = lib.querySelector('.lib-more');
+  if (old) old.remove();
+  if (v.grid) lib.querySelector('.lib-grid').insertAdjacentHTML('beforeend', libTiles(rows, from));
+  else lib.insertAdjacentHTML('beforeend', libRowsHTML(rows, from, v.inAlbum));
+  libMoreLine();
 }
 
 // Play every track of the folder, or add them all to the queue.
@@ -710,6 +809,7 @@ function setupPlayer() {
   };
   $('np-lib').onclick = e => {
     if (e.target.closest('[data-lib-search]')) return upnpServers(true);
+    if (e.target.closest('[data-lib-more]')) return libMoreLoad();
     const all = e.target.closest('[data-lib-all]');
     if (all) return libAll(all.dataset.libAll === 'add');
     const add = e.target.closest('[data-lib-add]');
