@@ -87,6 +87,13 @@ upstream's system units (`-Dsystemd-system-service=enabled`):
 - **D-Bus.** BlueZ's policy lets anyone call `org.bluez`, and lets root (bluetoothd) call back
   into the `pipewire` user's `MediaEndpoint1`/`Profile1` objects. No extra policy is needed.
 - **Real-time.** The units grant `CAP_SYS_NICE`, so `module-rt` gets SCHED_FIFO without RTKit.
+- **Priorities.** PipeWire and WirePlumber run at nice -11, and WirePlumber's Lua (a rescan after
+  every volume change costs the Zero W ~250 ms) used to starve a btbenchd stream's nice-0 pw-cat
+  into xruns. A stream's pump, decoder and pw-cat now run at nice -15; what only records or shows
+  runs at nice 10: btbenchd's sampler, D-Bus log, HCI monitor, pw-top, journal view and pw-dumps,
+  and btmon (btbench-btsnoop.service). Kernel Bluetooth debug messages (`btbench-btdebug`, the
+  `driver` area especially) log hundreds of lines a second while audio streams and take most of
+  the core with journald: keep them off unless they are what is being looked at.
 - **What is not built.** pipewire-pulse (packaged apart, not installed), JACK, video,
   GStreamer, network audio and any desktop integration.
 - **ALSA plugin.** The pipewire-alsa plugin is installed, but PipeWire is *not* made the default

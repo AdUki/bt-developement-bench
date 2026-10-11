@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "util/log.h"
+#include "util/prio.h"
 
 using json = nlohmann::json;
 
@@ -111,6 +112,7 @@ std::string JournalFollower::unit() const {
 }
 
 void JournalFollower::run() {
+  set_thread_nice(kBackgroundNice);
   sd_journal* j = nullptr;
   std::string open_for;
   std::string logged;

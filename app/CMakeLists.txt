@@ -121,6 +121,7 @@ add_library(btbench_core STATIC
   src/system.cpp
   src/util/exec.cpp
   src/util/log.cpp
+  src/util/prio.cpp
   src/util/strings.cpp
   src/util/sysinfo.cpp
   src/uuids.cpp

@@ -19,6 +19,7 @@
 #include "audio/pcm.h"
 #include "util/exec.h"
 #include "util/log.h"
+#include "util/prio.h"
 #include "util/strings.h"
 
 using json = nlohmann::json;
@@ -766,6 +767,8 @@ struct AudioEngine::Stream {
 };
 
 void AudioEngine::Stream::run() {
+  // Before anything starts: the decoder and the sink inherit this (util/prio.h).
+  set_thread_nice(kAudioNice);
   StreamSpec sp;
   {
     std::lock_guard<std::mutex> lk(m);
@@ -814,6 +817,8 @@ void AudioEngine::Stream::run() {
       // playlist's tracks are files with their titles known: no polling.
       if (ok && !tools->curl.empty() && sp.source.playlist.size() <= 1 && lower(url).find(".m3u8") == std::string::npos) {
         titles = std::thread([this, url] {
+          // Track titles can wait; the pump is what this thread was forked from.
+          set_thread_nice(kBackgroundNice);
           for (int64_t next = mono_ms() + 2000; !stop.load(); std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs))) {
             if (mono_ms() < next) continue;
             next = mono_ms() + 15000;
@@ -1293,7 +1298,9 @@ json AudioEngine::endpoints(bool fresh) {
   std::string error;
   bool have_pw = false;
   if (!tools_.pw_dump.empty()) {
-    const ExecResult r = run_cmd({tools_.pw_dump}, 5000, 8 << 20);
+    // pw-dumps run below the audio (util/prio.h): one costs a Zero W about a second, and the
+    // console asks for this on every visit to the player.
+    const ExecResult r = run_cmd({"nice", "-n", std::to_string(kBackgroundNice), tools_.pw_dump}, 5000, 8 << 20);
     if (r.ok()) {
       try {
         out = endpoints_from_pw_dump(parse_pw_dump(r.out));
@@ -1332,7 +1339,7 @@ json AudioEngine::devices_uncached() {
   if (tools_.pw_dump.empty())
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "codecs are picked through PipeWire, which is not installed"}};
-  const ExecResult r = run_cmd({tools_.pw_dump}, 5000, 8 << 20);
+  const ExecResult r = run_cmd({"nice", "-n", std::to_string(kBackgroundNice), tools_.pw_dump}, 5000, 8 << 20);
   if (!r.ok())
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "PipeWire is not running (" + r.reason() + "): codecs are picked in pipewire mode"}};

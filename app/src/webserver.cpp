@@ -9,6 +9,7 @@
 #include "bluez_model.h"
 #include "http_util.h"
 #include "util/log.h"
+#include "util/prio.h"
 #include "util/strings.h"
 #include "util/sysinfo.h"
 
@@ -235,6 +236,7 @@ void WebServer::publish_bt(bool request_changed) {
 // Host health at 1 Hz. The CPU figure is a delta and has exactly one owner, this thread; the
 // System page and GET /api/system read what it last stored.
 void WebServer::run_sampler() {
+  set_thread_nice(kBackgroundNice);
   CpuSampler cpu;
   auto next = std::chrono::steady_clock::now();
   while (running_.load()) {

@@ -13,6 +13,7 @@
 
 #include "util/exec.h"
 #include "util/log.h"
+#include "util/prio.h"
 
 using json = nlohmann::json;
 
@@ -150,6 +151,7 @@ json PwTop::last() const {
 }
 
 void PwTop::run() {
+  set_thread_nice(kBackgroundNice);
   std::string logged;
   while (running_.load()) {
     if (!has_()) {

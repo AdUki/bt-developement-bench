@@ -11,6 +11,7 @@
 
 #include "dbus_util.h"
 #include "util/log.h"
+#include "util/prio.h"
 
 using json = nlohmann::json;
 
@@ -163,6 +164,7 @@ void DbusLog::close_bus() {
 }
 
 void DbusLog::run() {
+  set_thread_nice(kBackgroundNice);
   std::string logged;
   while (running_.load()) {
     std::string err;

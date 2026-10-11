@@ -9,6 +9,9 @@ After=local-fs.target
 [Service]
 EnvironmentFile=-/data/btbench/btsnoop.env
 ExecStart=/usr/bin/btbench-btsnoop
+# btmon writes every packet, A2DP's included: below the audio it is recording, so a busy core
+# delays the capture (the kernel's monitor socket buffers it), not the stream.
+Nice=10
 Restart=on-failure
 RestartSec=5
 

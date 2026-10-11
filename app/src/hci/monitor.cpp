@@ -2,6 +2,8 @@
 #include <poll.h>
 #include <dirent.h>
 #include <sys/inotify.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -308,6 +310,10 @@ void Monitor::Impl::seed_journal() {
 }
 
 void Monitor::Impl::run_live() {
+  // Below the audio and everything else (btbenchd's util/prio.h, which this standalone area does
+  // not link): the monitor socket buffers what arrives while it waits, and a stream starved by
+  // its own statistics is the very dropout they would then be recording.
+  (void)setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
   if (ino_fd >= 0) seed_journal();
   std::vector<uint8_t> buf(kMonHdrSize + 65536);
   alignas(cmsghdr) char ctrl[CMSG_SPACE(sizeof(timeval)) + CMSG_SPACE(sizeof(uint32_t)) + 64];
