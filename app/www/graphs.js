@@ -4,10 +4,14 @@
 // controller's credits, the AVDTP media stream's RTP rate, loss and jitter; PipeWire's DSP load,
 // cycle times and xruns per driver; the audio streams' levels; the board's CPU and temperature.
 // Fed by the WebSocket (hci.stats, pipewire and system once a second, audio.streams four times),
-// backfilled from /api/hci/history when the tab opens, and kept in the browser for five minutes.
-// Nothing is asked of the board while the tab is hidden (pw-top runs only while it is shown).
+// backfilled from /api/hci/history when the tab opens, and kept in the browser for 15 minutes.
+// With "Record in background" on (the default) the console keeps its topics while another tab is
+// on screen, because an issue is usually noticed elsewhere and the graphs must already hold it;
+// that keeps pw-top running on the board, so it can be switched off. Off, nothing is asked of the
+// board while the tab is hidden, and only the HCI monitor's own five minutes are backfilled.
 
-const GR_KEEP_MS = 300 * 1000;
+const GR_KEEP_MS = 900 * 1000;
+const GR_TOPICS = ['hci.stats', 'system', 'audio.streams', 'pipewire'];
 const GR_PALETTE = ['#1f6feb', '#1a8f5a', '#8250df', '#cf3a3a', '#b7791f', '#0e8a9b', '#c2185b', '#5d6b00'];
 const GR_PALETTE_DARK = ['#4da3ff', '#3ecf8e', '#b48cff', '#ef5b5b', '#f5a623', '#3fc6d6', '#f06292', '#b8c94a'];
 
@@ -29,6 +33,8 @@ const gr = {series: {}, order: [], skew: null, paused: false, frozenAt: 0, hover
   conns: {}, pw: {}, raf: null, last: 0, backfilled: new Set()};
 
 try { (JSON.parse(lsGet('btbench.gr.hidden-groups') || '[]')).forEach(k => gr.hidden.add(k)); } catch (e) { /* none */ }
+gr.background = lsGet('btbench.gr.background') !== '0';
+const grRecording = () => gr.background || currentTab === 'graphs';
 
 const grDark = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 function grColor(i) { const p = grDark() ? GR_PALETTE_DARK : GR_PALETTE; return p[i % p.length]; }
@@ -166,6 +172,7 @@ function grBackfill(stats) {
 }
 
 function grConnSelect() {
+  if (currentTab !== 'graphs') return;
   const sel = $('gr-conn');
   fillSelect(sel, [{value: '', label: 'all'}].concat(Object.entries(gr.conns).map(([k, n]) => ({value: k, label: n}))));
 }
@@ -366,6 +373,12 @@ function setupGraphs() {
   $('gr-window').onchange = () => grDraw();
   $('gr-conn').onchange = () => grDraw();
   $('gr-csv').onclick = grCsv;
+  $('gr-bg').checked = gr.background;
+  $('gr-bg').onchange = () => {
+    gr.background = $('gr-bg').checked;
+    lsSet('btbench.gr.background', gr.background ? '1' : '0');
+    updateTopics();
+  };
   $('gr-legend').onclick = e => {
     const sp = e.target.closest('span[data-k]');
     if (!sp) return;
@@ -378,8 +391,11 @@ function setupGraphs() {
 }
 
 registerTab('graphs', {
-  topics: () => ['hci.stats', 'system', 'audio.streams', 'pipewire'],
+  topics: () => GR_TOPICS,
+  background: () => gr.background ? GR_TOPICS : [],
   show() {
+    grConnSelect();
+    grLegend();
     api('/hci/stats').then(s => {
       setText($('gr-msg'), s.source && !s.source.available ? 'The HCI monitor is not reading: no connection graphs (see the daemon log).' : '');
       grFromStats(s);
@@ -392,13 +408,13 @@ registerTab('graphs', {
     gr.raf = null;
   },
   onMessage(topic, d) {
-    if (currentTab !== 'graphs') return;
+    if (!grRecording()) return;
     const before = gr.order.length;
     if (topic === 'hci.stats') { grFromStats(d); grBackfill(d); }
     else if (topic === 'system') grFromSystem(d);
     else if (topic === 'audio.streams') grFromAudio(d);
     else if (topic === 'pipewire') grFromPipewire(d);
-    if (gr.order.length !== before || topic === 'system' || topic === 'pipewire') grLegend();
+    if (currentTab === 'graphs' && (gr.order.length !== before || topic === 'system' || topic === 'pipewire')) grLegend();
   },
 });
 setupGraphs();

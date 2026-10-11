@@ -20,7 +20,7 @@ scanning), the WebSocket (live / offline; it reconnects by itself), temperature,
 
 The console keeps one WebSocket and subscribes only to what the view on screen shows, plus the
 pairing question (`bt.request`) and the health readout (`system`). A view in the background, or a
-console nobody looks at, costs the board nothing.
+console nobody looks at, costs the board nothing — except Graphs while *Record in background* is on.
 
 ## Pairing questions
 
@@ -152,14 +152,17 @@ them), *Open as capture* opens the file btmon is writing in the capture viewer w
 filter. The stream runs only while this view is on screen and the browser tab is visible. Under
 the table, the command for a live capture in Wireshark on your PC.
 
-*Graphs*: live, scrolling graphs on one time axis (30 s, 2 min or 5 min): per connection the
+*Graphs*: live, scrolling graphs on one time axis (30 s, 2 min, 5 min or 15 min): per connection the
 throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the
 controller's free credits, and for an AVDTP media stream its RTP packets, losses and jitter;
 the audio streams' levels; the board's CPU and temperature. Each connection (stream, the board)
 has one colour; click it in the legend to hide it, or pick one connection. Hovering shows the
 values at that instant on every chart. Pause freezes the picture (the data keeps coming), CSV
-downloads the samples. The last five minutes of a connection come from the monitor's history when
-the view opens; everything else is collected while it is open.
+downloads the samples. *Record in background* (on by default, remembered per browser) keeps the
+graphs' topics subscribed while another view is on screen, so the 15 minutes before an issue are
+there when you come back; it keeps pw-top running on the board, so switch it off to leave the board
+idle. Off, the samples are collected only while the view is open, and the last five minutes of a
+connection come from the monitor's history when it opens.
 
 *Captures*: the always-on btsnoop ring: start/stop recording, the files (the newest is being
 written), open, download, delete, and *Summary* (`btmon -a` on the board). *Open* opens a file in the packet

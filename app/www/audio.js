@@ -1103,7 +1103,8 @@ registerTab('audio', {
     au.lpTick = null;
   },
   onMessage(topic, data) {
-    if (topic === 'pipewire') return renderPipewire(data);
+    // Graphs can keep the pipewire topic while Audio is not on screen: no table to redraw then.
+    if (topic === 'pipewire') return currentTab === 'audio' && renderPipewire(data);
     if (currentTab !== 'audio') return;
     if (topic === 'media') {
       // The codec list changes when a device's transports do, not with every track position.

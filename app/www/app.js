@@ -2,7 +2,7 @@
 // The console's core: API helpers, the navigation, the one WebSocket and the pairing modal. Each
 // tab lives in its own file and registers itself with registerTab(); only the tab on screen gets its
 // topics and runs its polls, because the board is a single-core Zero W and a console left open in
-// a background tab must cost it nothing.
+// a background tab must cost it nothing — unless Graphs is told to record in the background.
 
 const api = (p, opt) => fetch('/api' + p, opt).then(async r => {
   const text = await r.text();
@@ -153,7 +153,9 @@ function logClear(el) {
 const tabs = {};
 let currentTab = null;
 
-// def: {topics(): [...], show(), hide(), onMessage(topic, data)}; all optional.
+// def: {topics(): [...], background(): [...], show(), hide(), onMessage(topic, data)}; all optional.
+// background() names the topics a tab wants even while another one is on screen: only Graphs
+// asks, and only while its recording is switched on, so the samples before an issue are there.
 function registerTab(name, def) { tabs[name] = def; }
 
 // The areas in the rail and the views in each. A view is a tab (what owns topics and polls) and
@@ -289,7 +291,8 @@ let wsTopics = '';
 
 function wantedTopics() {
   const t = tabs[currentTab];
-  return [...new Set(ALWAYS.concat(t && t.topics ? t.topics() : []))];
+  const bg = Object.values(tabs).flatMap(x => x.background ? x.background() : []);
+  return [...new Set(ALWAYS.concat(bg, t && t.topics ? t.topics() : []))];
 }
 
 function updateTopics() {

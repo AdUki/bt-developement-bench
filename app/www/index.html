@@ -512,9 +512,10 @@
   <section id="graphs" class="panel">
     <div class="card toolbar">
       <div class="tb-main">
-        <label class="inline-label small">Window <select id="gr-window"><option value="30">30 s</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></label>
+        <label class="inline-label small">Window <select id="gr-window"><option value="30">30 s</option><option value="120" selected>2 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label>
         <label class="inline-label small">Connection <select id="gr-conn"><option value="">all</option></select></label>
         <span id="gr-msg" class="small muted grow"></span>
+        <label class="switch small" title="Keep recording while another tab is on screen, so the minutes before an issue are there when you come back. It keeps pw-top running on the board."><input type="checkbox" id="gr-bg"><i></i> Record in background</label>
         <button id="gr-pause">Pause</button>
         <button id="gr-csv" title="The buffered samples as CSV">CSV</button>
       </div>
