@@ -162,6 +162,22 @@ void test_bredr_connected() {
   CHECK(bt_bredr_connected(json::object(), "/org/bluez/hci0").empty());
 }
 
+void test_connect_over_bredr() {
+  const json speaker = {{"org.bluez.Device1", {{"UUIDs", {"0000110b-0000-1000-8000-00805f9b34fb", "00001844-0000-1000-8000-00805f9b34fb"}}}},
+                        {"org.bluez.Bearer.BREDR1", {{"Connected", false}}},
+                        {"org.bluez.Bearer.LE1", {{"Connected", true}}}};
+  CHECK(bt_connect_over_bredr(speaker));
+  // No BR/EDR bearer (LE only, or a BlueZ without the bearers): BlueZ's own choice.
+  json le = speaker;
+  le.erase("org.bluez.Bearer.BREDR1");
+  CHECK(!bt_connect_over_bredr(le));
+  // Dual mode with only LE services worth connecting.
+  const json tag = {{"org.bluez.Device1", {{"UUIDs", {"0000180f-0000-1000-8000-00805f9b34fb"}}}},
+                    {"org.bluez.Bearer.BREDR1", json::object()}};
+  CHECK(!bt_connect_over_bredr(tag));
+  CHECK(!bt_connect_over_bredr(json::object()));
+}
+
 int main() {
   uuid_names().load_text(R"({"uuid16": {"110d": "Advanced Audio Distribution"}})", nullptr);
   test_agent_policy();
@@ -170,5 +186,6 @@ int main() {
   test_request_json();
   test_kept_adapter_settings();
   test_bredr_connected();
+  test_connect_over_bredr();
   return report("test_bluetooth");
 }

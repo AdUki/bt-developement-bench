@@ -55,6 +55,12 @@ nlohmann::json bt_keep_adapter_settings(nlohmann::json kept, const nlohmann::jso
 // left to BlueZ's own auto-connect. Addresses upper case.
 std::vector<std::string> bt_bredr_connected(const nlohmann::json& objs, const std::string& adapter_path);
 
+// Whether a plain Connect (no profile) of this device (its object: interface → properties) should go
+// over BR/EDR: a dual-mode device with a classic audio, HID or PAN profile and a BR/EDR bearer.
+// Device1.Connect follows BlueZ's PreferredBearer, "last-used" by default, so a speaker last used
+// over LE (an LE HID link to it, say) was connected over LE only, and the audio never came up.
+bool bt_connect_over_bredr(const nlohmann::json& obj);
+
 // The kept settings as the property writes that restore them, in the order BlueZ needs: Powered
 // first (it refuses Discoverable on an adapter that is off), the timeout before Discoverable.
 DDict bt_restore_adapter_props(const nlohmann::json& kept);

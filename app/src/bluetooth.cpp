@@ -111,6 +111,17 @@ std::vector<std::string> bt_bredr_connected(const json& objs, const std::string&
   return out;
 }
 
+bool bt_connect_over_bredr(const json& obj) {
+  if (!obj.is_object() || !obj.contains(kBearerBredrIface) || !obj.contains(kDeviceIface)) return false;
+  // A2DP source/sink, AVRCP, HFP and HSP both ways, HID, PAN.
+  static const char* const kClassic[] = {"0000110a", "0000110b", "0000110c", "0000110e", "0000111e", "0000111f",
+                                         "00001108", "00001112", "00001124", "00001115", "00001116"};
+  for (const std::string& u : strv_of(obj[kDeviceIface], "UUIDs"))
+    for (const char* c : kClassic)
+      if (u.compare(0, 8, c) == 0) return true;
+  return false;
+}
+
 DDict bt_restore_adapter_props(const json& kept) {
   DDict props;
   if (!kept.is_object()) return props;
@@ -1472,9 +1483,16 @@ bool BtManager::device_action(const std::string& address, Action action, const s
       case Action::CancelPairing:
         call_device(path, "CancelPairing", "", "", 5);
         break;
-      case Action::Connect:
-        call_device(path, uuid.empty() ? "Connect" : "ConnectProfile", uuid, "connecting", kConnectTimeoutS);
+      case Action::Connect: {
+        bool bredr = false;
+        if (uuid.empty()) {
+          std::lock_guard<std::mutex> lk(m_);
+          bredr = objs_->contains(path) && bt_connect_over_bredr((*objs_)[path]);
+        }
+        call_device(path, uuid.empty() ? "Connect" : "ConnectProfile", uuid, "connecting", kConnectTimeoutS,
+                    bredr ? kBearerBredrIface : nullptr);
         break;
+      }
       case Action::Disconnect:
         call_device(path, uuid.empty() ? "Disconnect" : "DisconnectProfile", uuid, "disconnecting",
                     kConnectTimeoutS);

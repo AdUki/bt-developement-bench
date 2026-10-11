@@ -146,7 +146,7 @@ auto_connect without a pattern, values out of range).
 | `GET /api/bluetooth/devices/{addr}` | | one device, plus `gatt_services`, `media_endpoints`, `media_transports` |
 | `POST /api/bluetooth/devices/{addr}/pair` | `{"pin": "1234"}` (optional) | `Pair()`; the PIN answers a legacy device's `RequestPinCode` |
 | `POST .../cancel-pairing` | | `CancelPairing()` |
-| `POST .../connect` | `{"uuid": "110b"}` or `{"bearer": "le\|bredr"}` (optional) | `Connect()`, `ConnectProfile(uuid)`, or that bearer's `Connect()`: one transport of a dual-mode device |
+| `POST .../connect` | `{"uuid": "110b"}` or `{"bearer": "le\|bredr"}` (optional) | `Connect()`, `ConnectProfile(uuid)`, or that bearer's `Connect()`: one transport of a dual-mode device. A plain connect of a dual-mode device with a classic audio, HID or PAN profile is its BR/EDR bearer's `Connect()`: `Device1.Connect` follows `PreferredBearer` ("last-used"), and a speaker last used over LE came up on LE alone |
 | `POST .../disconnect` | `{"uuid": "110b"}` or `{"bearer": "le\|bredr"}` (optional) | `Disconnect()`, `DisconnectProfile(uuid)`, or that bearer's `Disconnect()` (which also cancels its `Connect()` in progress) |
 | `GET .../link` | | a connected device's link as the controller measures it, per connected bearer: `{"bredr": {rssi, rssi_relative, tx_power, max_tx_power} \| {error} \| null, "le": ...}`, through `btmgmt conn-info` (mgmt Get Connection Information), asked when called. BR/EDR's `rssi` is relative (`rssi_relative`: dB from the controller's golden receive power range, 0 inside it), LE's in dBm; a null value is one the controller does not know |
 | `POST .../trust`, `.../untrust`, `.../block`, `.../unblock` | | the `Trusted` / `Blocked` property |
