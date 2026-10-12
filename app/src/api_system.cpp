@@ -60,6 +60,17 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     reply(res, d.scripts.json_cmd("btbench-audio", {"status"}, 10000));
   }));
 
+  // Body: {"enabled": bool}. Switches the audio stack (PipeWire, WirePlumber) on or off, kept
+  // across reboots (/data/btbench/audio.env): off is Bluetooth without audio, for a board that is
+  // only an LE remote or a GATT peripheral. Answered with the new status.
+  svr.Put("/api/audio", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
+    if (!j.is_object() || !j.contains("enabled") || !j["enabled"].is_boolean())
+      return send_error(res, 400, "body is {\"enabled\": bool}");
+    const TargetScripts::Result r = d.scripts.action("btbench-audio", {j["enabled"].get<bool>() ? "on" : "off"}, 60000);
+    if (r.http != 200) return reply(res, r);
+    reply(res, d.scripts.json_cmd("btbench-audio", {"status"}, 10000));
+  }));
+
   // ---- Wi-Fi (btbench-wifi) -----------------------------------------------------------------------
   //
   // Adding a network or changing the mode can take down the very link the request came over (the

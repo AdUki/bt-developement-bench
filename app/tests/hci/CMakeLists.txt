@@ -16,7 +16,12 @@ add_hci_test(hci_capture)
 add_hci_test(hci_replay)
 add_hci_test(hci_packets)
 add_hci_test(hci_live)
+add_hci_test(hci_dissect)
 
 # Not a test: runs a real capture through the decoder and prints a summary (docs/monitor.md).
 add_executable(hci_snoop_summary hci_snoop_summary.cpp)
 target_link_libraries(hci_snoop_summary PRIVATE btb_hci)
+
+# Not a test either: prints the packet view (summaries, optionally the field trees) of a capture.
+add_executable(hci_dissect hci_dissect.cpp)
+target_link_libraries(hci_dissect PRIVATE btb_hci)

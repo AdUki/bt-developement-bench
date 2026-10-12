@@ -464,15 +464,16 @@ Each packet has a **summary** (the list's one line, which the text filter search
 
 | Layer | What |
 |---|---|
-| HCI commands | 225 by name; parameters of connection management, scan/advertising enables, LE create connection/update/encryption, sniff mode, name/class/scan writes, pairing replies; the handle of every per-connection command |
+| HCI commands | 225 by name; parameters of connection management, scan/advertising enables, LE create connection/update/encryption, sniff mode, name/class/scan writes (the class of device as its major class and service classes, the EIR with the name it carries), pairing replies; the handle of every per-connection command |
 | HCI events | 55 events and 29 LE subevents by name, with status (the error by name). Command Complete/Status name their command; Command Complete decodes the common return values (version, address, name, buffer sizes, RSSI, key size). Connection, disconnection (reason), encryption, mode change, remote features/version/name, IO capability/user confirmation, NOCP, inquiry results and LE advertising reports (address, RSSI, name from the AD data; the AD structures in the detail) |
 | ACL / L2CAP | handle, packet boundary, length; CID, PSM; fragments. Signalling: every command by name, with its CIDs, PSM, result, configuration options (MTU, mode, FCS) and LE/enhanced credit-based parameters |
 | ATT | every opcode; handles, offsets, values (with text when printable), UUIDs of the read-by-type/group requests, find information, error responses (request, handle and error by name) |
-| SMP | every code; pairing request/response (IO capability, auth requirements, key size), Pairing Failed reason, identity address |
-| SDP | PDU type, transaction, the UUIDs of a search pattern, record handles, error codes |
-| RFCOMM | frame type, DLCI, P/F, credits, multiplexer commands (PN, MSC, ...), and the data as text when it is text (the AT commands of HFP) |
-| AVDTP | signalling: signal, message type, SEIDs, the capability list with the codec decoded (the monitor's `decode_media_codec`), DISCOVER's SEPs, delay reports, rejects with their error. Media: the RTP header, and SBC's frame count and first frame header (recognised by its syncword) |
-| AVCTP / AVRCP | the AV/C frame type; PASS THROUGH operations; vendor-dependent PDUs by name (RegisterNotification's event, SetAbsoluteVolume's volume, ...); browsing PDUs by name, behind the browsing channel's ERTM control field (I- and S-frames, SAR, SDU length, the FCS checked) |
+| SMP | every code; pairing request/response (IO capability, auth requirements, key size, OOB, the keys each side distributes), Pairing Failed reason, identity address |
+| SDP | PDU type, transaction, the search pattern and attribute ID list of requests, record handles, error codes, continuation state. Attribute responses: every record's attributes, named, with their values as text (UUIDs by name); the summary has each record's service class, service name, L2CAP PSM or RFCOMM channel and profile version (`Handsfree Audio Gateway "Hands-Free Voice gateway" channel 13 Handsfree 1.9`). A response split by a continuation state has its complete records decoded in the first part only |
+| RFCOMM | frame type, DLCI, P/F, credits, multiplexer commands (PN, MSC, ...), and the data as text when it is text: the AT commands of HFP, with the codec IDs of `AT+BAC`/`+BCS` named (CVSD, mSBC, LC3-SWB), the gains of `+VGS`/`+VGM` and the feature bits of `+BRSF` in the tree. OBEX when the data is an OBEX packet |
+| AVDTP | signalling: signal, message type, SEIDs, the capability list with the codec decoded (the monitor's `decode_media_codec`: SBC, MPEG-1,2, AAC with the A2DP 1.4 object types, aptX, aptX HD, aptX LL, aptX Adaptive, FastStream, LDAC, Opus from Google and from PipeWire (both directions, channels, audio location, frame durations, maximum bitrate), LC3plus HR; every field in the tree, and SBC's bitrate at the maximum bitpool), content protection (SCMS-T, DTCP), recovery, header compression, delay reporting, DISCOVER's SEPs, delay reports, rejects with the error by name (AVDTP and A2DP codes) and the failing category or SEID. Media: the RTP header, and SBC's frame count and first frame header (recognised by its syncword) |
+| AVCTP / AVRCP | AVCTP fragmentation (start/continue/end); the AV/C frame type; PASS THROUGH operations (every panel operation, vendor-unique next/previous group). Vendor-dependent PDUs with their parameters: GetCapabilities (the events or company IDs), the player application settings (repeat, shuffle, equalizer, scan by value), GetElementAttributes (the attributes asked for; the response's title, artist, album, track number, total, genre, playing time and cover art handle with their text), GetPlayStatus (status, position, length), RegisterNotification with each event's data in interim and changed responses (play status, track UID, position, battery, settings, addressed player, UIDs, volume with its percentage), SetAbsoluteVolume, SetAddressedPlayer, PlayItem, AddToNowPlaying, continuing responses; AVRCP packet types (a response's start is decoded as far as it goes); rejects with their status. Browsing (behind the channel's ERTM control field: I- and S-frames, SAR, SDU length, the FCS checked): SetBrowsedPlayer (items, folder path), GetFolderItems (scope and range; the items: players, folders and media elements with their names and attributes), ChangePath, GetItemAttributes, GetTotalNumberOfItems, Search, GeneralReject. Summaries carry the values: `RegisterNotification CHANGED VOLUME_CHANGED: 87 (69%)`, `GetElementAttributes STABLE: Title "…", Artist "…", Album "…", Track 3, Time 3:25` |
+| OBEX | over RFCOMM, and over L2CAP channels of their own (GOEP 2.0: recognised by a good ERTM FCS, the start of a segmented SDU included): opcode or response code, Connect's version and maximum packet length, SetPath flags, every header (Name, Type, Length, Target/Who with the service named — FTP, PBAP, MAP, BIP cover art —, Connection ID, SRM, Body sizes, ...) |
 | SCO / ISO | handle, packet status; ISO sequence number, SDU length, timestamp |
 | Monitor notices | new index (bus, address, name), index info, system notes, user logging (`ident: message`), management channel open/close/commands/events |
 
@@ -711,7 +712,7 @@ was most of the cost (4.5 µs a packet before, 0.8 µs after).
 ## Development
 
 - `app/tests/hci/`: synthetic packet tests, run by `make test`/ctest as `hci_decode`, `hci_pcap`,
-  `hci_capture`, `hci_replay`, `hci_packets` and `hci_live`. `hci_replay` writes btsnoop files and drives the
+  `hci_capture`, `hci_replay`, `hci_packets`, `hci_live` and `hci_dissect`. `hci_replay` writes btsnoop files and drives the
   whole module through its HTTP routes on a loopback server. `hci_packets` covers the packet view:
   the index (and its growth while a file is written), the filter language, the summaries and
   field trees of the common packet kinds, the graph's buckets and the packet routes, including
@@ -723,3 +724,9 @@ was most of the cost (4.5 µs a packet before, 0.8 µs after).
 - `hci_snoop_summary FILE.btsnoop` (built next to the tests) runs any capture through the decoder.
   It prints the events and each link's busiest second, which makes it the quick way to check the
   decoder against a real trace. Its latency figures should agree with `btmon -a`.
+- `hci_dissect FILE.btsnoop [FILTER] [--detail] [--hex]` (built next to the tests) prints the packet
+  view of a capture: each matching packet's number, protocol and summary, with `--detail` its field
+  tree and with `--hex` its bytes. The way to compare the dissector with `btmon -r` on a real
+  trace. `hci_dissect` (the ctest) checks the dissector on single packets, most of them taken from
+  the boards' captures: AVDTP codecs and errors, AVRCP control and browsing, SDP records, AT
+  commands and OBEX.

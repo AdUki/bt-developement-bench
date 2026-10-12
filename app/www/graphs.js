@@ -196,7 +196,7 @@ function grLayout() {
     el.className = 'card gr-chart';
     el.id = 'gr-c-' + c.id;
     el.dataset.full = '';
-    el.innerHTML = `<h4>${esc(c.title)} <span class="muted">(${esc(c.unit)})</span> <span class="legend muted">${grStyleKey(c.styles)}</span></h4><canvas class="graph"></canvas><div class="gr-tip" hidden></div>`;
+    el.innerHTML = `<h4>${esc(c.title)} <span class="muted">(${esc(c.unit)})</span> <span class="legend muted">${grStyleKey(c.styles)}</span><span class="gr-now"></span></h4><canvas class="graph"></canvas><div class="gr-tip" hidden></div>`;
     // Keep page order whatever order the data arrived in.
     const after = GR_CHARTS.slice(0, GR_CHARTS.indexOf(c)).reverse().map(x => $('gr-c-' + x.id)).find(Boolean);
     if (after) after.after(el); else box.prepend(el);
@@ -248,6 +248,12 @@ function grDraw(force) {
     const {g, w, h} = canvasCtx(cv);
     const L = 44, R = 8, T = 8, B = 18;
     const series = gr.order.map(k => gr.series[k]).filter(s => s.chart === c.id && grVisible(s));
+    // The latest value of each line, by the full-screen button: what the chart says now, without
+    // reading it off the axis. A line silent for more than 5 s has no "now".
+    setHTML(el.querySelector('.gr-now'), series.map(s => {
+      const p = s.data[s.data.length - 1];
+      return p && now - p[0] < 5000 ? `<span title="${esc(s.label)}"><i style="background:${grColor(s.colorIndex)}"></i>${+fmtVal(p[1])}</span>` : '';
+    }).filter(Boolean).slice(0, 6).join('') + (series.length ? ` <span class="muted">${esc(c.unit)}</span>` : ''));
     let lo = c.min != null ? c.min : 0, hi = c.max != null ? c.max : 0;
     if (c.max == null) {
       for (const s of series) for (const [t, v] of s.data) if (t >= t0 && v > hi) hi = v;

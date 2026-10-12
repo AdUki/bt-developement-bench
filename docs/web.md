@@ -22,7 +22,8 @@ link's graphs, each chart in *Graphs*) have a full-screen button; Esc puts them 
 wide screen (1700 px) the pages are allowed wider.
 
 The foot of the rail (the top bar on a phone) shows the board's name, the adapter (on / visible /
-scanning), the WebSocket (live / offline; it reconnects by itself), temperature, CPU and — in red
+scanning; *slow to answer*, in amber, when BlueZ missed a read — the devices stay as it last listed
+them), the WebSocket (live / offline; it reconnects by itself), temperature, CPU and — in red
 — undervoltage, which on a Zero W corrupts the Bluetooth UART long before anything else notices.
 
 The console keeps one WebSocket and subscribes only to what the view on screen shows, plus the
@@ -44,7 +45,9 @@ views. *Now playing* shows whichever source plays: a connected phone (its AVRCP 
 cover art, progress, previous / play / pause / next / stop, repeat and shuffle when the player has
 them, the link's volume) or the board itself (a radio station, or tracks from a UPnP media server
 with their artist, album and length, and repeat and shuffle for a playlist). Chips switch between
-them when there are several. *Up next* is the phone's now-playing list, or the board's queue; a
+them when there are several. Above the title it says where the sound comes from: *Bluetooth · from*
+a device (and whether its audio is streaming into the board, or only its player is known), or *On
+this board* · Internet radio or Media server, and the output it plays on. *Up next* is the phone's now-playing list, or the board's queue; a
 click plays that track. *Library*, a page of its own so long folders get the screen, has the
 phone's own folders and search (for a browsable player), the radio stations, and the media servers
 on the LAN: a station plays on its own, a track plays with the rest of its folder after it as the
@@ -53,7 +56,11 @@ albums is a grid of them (title, artist, year), an album opens with its cover, a
 track count and length, *Play all* and *Add all*, and its tracks by number with their format
 (`FLAC 24/96`, `MP3 44.1 kHz`); a track without a cover of its own shows its album's in Now
 playing. Covers load from the server itself, so a browser on another network than the server
-shows the plain icons. A bar at the bottom of the library keeps the
+shows the plain icons. On a wide screen both are on screen side by side, so the two view buttons are not shown. A
+phone shows here as soon as it is connected, before it has played anything: its play button is
+how the music is started from the console. *Listen in this browser* (a phone's audio) starts
+within a second while the phone plays into the board; one that does not is asked once to play,
+never paused. A bar at the bottom of the library keeps the
 track playing, play/pause and next in reach. The board plays to
 the output chosen in *Play to* — this browser, or a speaker the board has — and keeps playing its
 queue with the page closed. The volume slider sets what a person means: the Bluetooth speaker's
@@ -61,7 +68,7 @@ own volume when the link has one, else the stream's level, or this browser's.
 
 
 **Devices** — the adapter bar: powered, visible, pairable, and under *Settings* the name others
-see, how long it stays visible, how pairing questions are answered (automatically, or asked here)
+see (the board's hostname, `btbench-<mac>`, until one is typed; emptied, it goes back to that), how long it stays visible, how pairing questions are answered (automatically, or asked here)
 and the IO capability (which decides the pairing method a peer gets). *Scan* finds devices; its
 *Options* are every filter BlueZ has: the transport (dual: LE and BR/EDR, LE only, BR/EDR only),
 when to stop, a signal filter (RSSI at least, or path loss at most), services by UUID, a name or
@@ -71,9 +78,14 @@ and the options are remembered in the browser. While a scan runs its filter is s
 the button. A device is one row: a light (green connected, pale paired, amber busy), its name,
 address, kind, signal (bars and dBm, from the scan) and its transports (BR/EDR, LE; lit where
 connected), and the one action its state calls for — pair, connect, disconnect, or cancel a
-pairing. A click on the row opens the rest: each transport with its own state (connected, bonded
-or paired, connectable) and its own connect or disconnect, which transport a dual-mode device
-connects on first, why it last disconnected; for a connected device its live link (RSSI and TX
+pairing; a connected device also shows the profiles it has up (A2DP, AVRCP, HFP, HID, PAN, GATT; lit
+while streaming). A click on the row opens the rest: each transport with its own state (connected,
+bonded or paired, connectable) and its own connect or disconnect (whose progress and failure show
+on that transport's line, not the device's), which transport a dual-mode device
+connects on first, why it last disconnected; *Profiles*: each one connected — an A2DP link with
+its direction, codec and state, AVRCP and its player, HID, PAN, GATT with its service count, the
+battery level, and from PipeWire the profile its audio is on (the only place HFP shows: PipeWire's
+own HFP does not go through BlueZ); for a connected device its live link (RSSI and TX
 power per transport, read from the controller every two seconds); class, appearance, advertised TX
 power, services by name, manufacturer and service data, advertising flags; trust and remove (click twice); connect or
 disconnect one profile by UUID, and pair with a PIN for legacy devices; and shortcuts that open
@@ -103,47 +115,57 @@ sends text as key presses; *Battery* sets the level hosts show. *GATT server*: a
 heart-rate counter, a battery level and an echo characteristic), its live values, and a log of
 what remote devices read, wrote and subscribed to.
 
-**Audio** — three views. *Players*: each connected phone's AVRCP player, then the *Codec*: per
-connected device, the PipeWire profile —
-which is the codec — to use: send with SBC, SBC-XQ, AAC, aptX, LDAC, Opus (what the build has),
-both ways (duplex), receive, or HFP with CVSD/mSBC; the link renegotiates on a change. A player shows its track (title,
-artist, album, genre, track n of m), a progress bar that moves between the phone's updates,
-its cover art (AVRCP 1.6, pulled over BIP) when the phone offers it, previous / rewind /
-play–pause / stop / fast forward / next (the seeks run while the button is
-held), repeat (off, all, one) and shuffle buttons when the player offers them, the transport's
-absolute volume, *Listen here* (hear what the phone sends the board, in this browser) and, folded
-under one disclosure for a browsable player, a browser: the now-playing list, its files (folders open, back),
-search, and *play* or *add* (to now playing) per item. Under the phones, *This board's player*: what
-a car or speaker the board plays to sees (its track, play state and the adapters it is offered on),
-its controls, *Offer it* (on or off), and folded, its library (open a folder, *play* or *add*) and
-the now playing list. *Play and listen*, top to bottom: *Output*, where everything on the page
-plays — the connected Bluetooth sinks by name and codec first (the first one is chosen until you
-pick another), PipeWire's default output, the other sinks, or nowhere — with the codec picker for a
-Bluetooth one and *also listen in this browser*; *Playing now*, each running stream with its level
-meters (RMS bar, peak mark, per channel), the radio title, Pause (and Previous/Next for a playlist)
-for a URL stream, a live gain slider and, for a tone, its frequency and level, listening adding the
-buffered time, a volume and a spectrum (the console keeps listening when you change views); then
-what to play. *Test signal*: a tone (its own frequency on the right channel if wanted), a sweep,
-white/pink/brown noise, silence, a device's audio (capture — with a speaker as the output, that is
-a tunnel from one device to another) or what an output plays (its monitor); rate, channels, gain
-and the decoder are under *Format and gain*. *Internet radio*: the station list (edit it as
-`name | url` lines) and a URL field (a stream, a playlist, a file), each played to the output or
-listened to. *Media servers*: search the LAN, browse a server's folders and play or listen to its
-tracks. What plays to a Bluetooth output shows on the device's display through the board's player,
-and the device's buttons pause, skip and stop it. *PipeWire*: the services and a Restart (with a
-confirmation, optionally restarting bluetoothd), then BlueZ's view: transports (codec decoded, state, delay, an AVRCP absolute-volume slider; the
-raw configuration and path under *Details*) and the remote stream endpoints with their capabilities, and the *AVDTP probe*: a device's own
-DISCOVER / GET_ALL_CAPABILITIES answer, every stream endpoint with its role, codec and other
-capabilities.
+**Audio** — four views, from the links to the audio server. *Bluetooth*: a card per connected
+audio device — each audio link on it, which way it goes (*Receiving*: the device plays into the
+board; *Sending*: the board plays to it), its codec in words, its state (streaming or idle), the
+sink's reported delay and the AVRCP absolute volume, and *Listen here* on a receiving link; the
+PipeWire profile, which is the codec choice (send with SBC, SBC-XQ, AAC, aptX, LDAC, Opus — what
+the build has — both ways, receive, or HFP with CVSD/mSBC; the link renegotiates on a change);
+folded, the device's remote stream endpoints with their capabilities, and the raw configuration
+and paths. Under the cards the *AVDTP probe*: any device's own DISCOVER / GET_ALL_CAPABILITIES
+answer, connected or not, every stream endpoint with its role, codec and other capabilities.
+*Players*: AVRCP only — each connected device's player with its track (title, artist, album,
+genre, track n of m), a progress bar that moves between the phone's updates, its cover art (AVRCP
+1.6, pulled over BIP) when the phone offers it, previous / rewind / play–pause / stop / fast
+forward / next (the seeks run while the button is held), repeat (off, all, one) and shuffle when
+the player offers them, the link's volume, *Listen here* and, folded for a browsable player, a
+browser: the now-playing list, its files, search, and *play* or *add* per item. Under the phones,
+*This board's player*: what a car or speaker the board plays to sees (its track, play state and
+the adapters it is offered on), its controls, *Offer it* (on or off), and folded, its library and
+now-playing list. *Streams*: what the board plays itself. *Output*, where every stream started
+there plays — the connected Bluetooth sinks by name and codec first, PipeWire's default output,
+the other sinks, or nowhere — with the codec picker for a Bluetooth one and *also listen in this
+browser*; *Running*, each stream with its level meters (RMS bar, peak mark, per channel), the radio
+title, Pause (and Previous/Next for a playlist) for a URL stream, a live gain slider and, for a
+tone, its frequency and level, listening adding the buffered time, a volume and a spectrum (the
+console keeps listening when you change views); then *New stream*: a test signal (a tone, its own
+frequency on the right channel if wanted, a sweep, white/pink/brown noise, silence) or audio from a
+device (capture — with a speaker as the output, a tunnel from one device to another) or what an
+output plays (its monitor), with rate, channels, gain and the decoder under *Format and gain*; and
+*Internet radio and URLs*: the station list (edit it as `name | url` lines) and a URL field, each
+played to the output or listened to. A URL plays at 44.1 kHz unless a rate is chosen (a UPnP track
+from Listen plays at its own rate): decoding to another rate makes the decoder resample, at three
+times the CPU on a Zero W. Media servers are browsed in Listen → Library. What plays to a Bluetooth
+output shows on the device's display through the board's player, and the device's buttons pause,
+skip and stop it. *PipeWire*: the services, *Audio on* (the whole stack off and on, kept across reboots: off is
+Bluetooth without audio, for a board that is only an LE remote or a GATT peripheral), a Restart
+(with a confirmation, optionally restarting bluetoothd), and the graph from pw-top.
 
-**Files** — OBEX. The obexd bar on both views (start/stop; what the board's server does with an incoming push: accept into
-`in/`, ask, reject — an asked push comes up with its sender, name and size, and a name to save it
-as). *Sessions*: a new client session to a paired device (Object Push, File Transfer, Phonebook, Messages,
-cover art) and a card per session with its operations: send a file from `out/`, pull or exchange
-a business card; browse the device's folders, get, put, mkdir, delete; select a phonebook, list,
-search, pull one or all; list message folders and messages, fetch one; an image's properties,
-thumbnail or full image, and the transfers with progress (pause, resume, cancel). *On the board*:
-the files — `out/` (upload what to send), `in/` (download what arrived), `shared/`.
+**Files** — OBEX, three views. *Share* is the way a phone shares files: drop files (or choose
+them), pick a paired device (the ones without Object Push are greyed out), *Send* — the board
+uploads them, opens an Object Push session and sends them one after the other, each with its
+progress, "waiting for … to accept" while the device asks its user, and a tick when it is done.
+Beside it *Received*: what devices sent the board, newest first, images as thumbnails, with
+download and delete; *Receive files* switches the board's OBEX server (obexd) on or off, *Incoming*
+says whether a push is saved at once, asked about (the question comes up right there, Accept or
+Decline) or refused. The tester's views follow, under the obexd bar (start/stop and the same
+policy; an asked push with a name to save it as). *Sessions*: a new client session to a paired
+device (Object Push, File Transfer, Phonebook, Messages, cover art) and a card per session with its
+operations: send a file from `out/`, pull or exchange a business card; browse the device's
+folders, get, put, mkdir, delete; select a phonebook, list, search, pull one or all; list message
+folders and messages, fetch one; an image's properties, thumbnail or full image, and the transfers
+with progress (pause, resume, cancel). *On the board*: the files — `out/` (upload what to send),
+`in/` (download what arrived), `shared/`.
 
 **Traffic** — five views, in the order of looking closer: *Links*, *Packets*, *D-Bus*, *Graphs*,
 *Captures*.
@@ -177,8 +199,9 @@ System → Logs, whether or not this view is open.
 throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the
 controller's free credits, and for an AVDTP media stream its RTP packets, losses and jitter;
 the audio streams' levels; the board's CPU and temperature. Each connection (stream, the board)
-has one colour; click it in the legend to hide it, or pick one connection. Hovering shows the
-values at that instant on every chart. Pause freezes the picture (the data keeps coming), CSV
+has one colour; click it in the legend to hide it, or pick one connection. Each chart's latest
+values stand in its title, by the full-screen button. Hovering shows the values at that instant on
+every chart. Pause freezes the picture (the data keeps coming), CSV
 downloads the samples. *Record in background* (on by default, remembered per browser) keeps the
 graphs' topics subscribed while another view is on screen, so the 15 minutes before an issue are
 there when you come back; it keeps pw-top running on the board, so switch it off to leave the board

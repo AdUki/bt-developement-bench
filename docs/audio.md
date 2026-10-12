@@ -41,6 +41,11 @@ To work with your own endpoint code or BlueZ's `test/` scripts, `systemctl stop
 btbench-audio-pipewire.target` for the time: devices would otherwise connect to whichever
 registered first. A restart of the target, or a reboot, brings PipeWire back.
 
+To do without audio altogether — a board that is only a BLE remote or a GATT peripheral — switch
+the stack off: *Audio on* in Audio → PipeWire, `bench audio off`, or `btbench-audio off` on the
+board. That stops PipeWire and WirePlumber (dropping the audio links first) and keeps them stopped
+at boot (`AUDIO_STACK=off` in `/data/btbench/audio.env`), until `bench audio on` or the switch.
+
 ## Codecs and licensing
 
 | codec | switch | library, license |
@@ -51,19 +56,24 @@ registered first. A restart of the target, or a reboot, brings PipeWire back.
 | Opus (A2DP, PipeWire's vendor codec) | always | libopus (BSD) |
 | FastStream | always | built in |
 | G.722 (ASHA) | always | built in |
-| aptX, aptX HD | `BTBENCH_EXTRA_CODECS = "1"` | libfreeaptx (LGPL-2.1+), recipe in meta-btbench |
-| LDAC (encode only) | `BTBENCH_EXTRA_CODECS = "1"` | ldacbt / AOSP libldac (Apache-2.0), recipe in meta-btbench |
+| aptX, aptX HD | `BTBENCH_EXTRA_CODECS` (on; `"0"` leaves them out) | libfreeaptx (LGPL-2.1+), recipe in meta-btbench |
+| LDAC (encode only) | `BTBENCH_EXTRA_CODECS` (on) | ldacbt / AOSP libldac (Apache-2.0), recipe in meta-btbench |
 | AAC | `BTBENCH_AAC = "1"` | fdk-aac, `LICENSE_FLAGS = "commercial"` |
 
 Both switches live in `yocto/meta-btbench/conf/btbench-device.conf`. Run `make image` afterwards.
 
-- **aptX and LDAC are opt-in** because scarthgap's layers do not have them. The libraries
-  implement codecs whose owners license them for products. Building them for a bench on your
-  desk is your call, which is why they are off by default.
+- **aptX and LDAC are in by default**, from meta-btbench's own recipes (scarthgap's layers do not
+  have them). The libraries are free software, but they implement codecs whose owners license
+  them for products: a build that ships to someone else may want `BTBENCH_EXTRA_CODECS = "0"`.
 - **LDAC can only be sent.** No free decoder exists. Expect an ARM11 to manage LDAC's lower
   bitrates at best, and the 3 Mbaud UART to the BCM43430 limits the higher ones anyway.
 - **AAC needs fdk-aac**, which OE flags `commercial`. With `BTBENCH_AAC = "1"`, the distro adds
   `commercial` to `LICENSE_FLAGS_ACCEPTED`. Accepting it is your decision.
+
+- **LC3plus is not in the build.** PipeWire can use it (`lc3plus_hr`), but the only source is
+  ETSI's reference code (TS 103 634), licensed solely under ETSI's IPR policy rather than an
+  open-source licence, and its build makes a command-line tool, not the library PipeWire links.
+  LC3 itself (BAP, and HFP's LC3-SWB) is in every build.
 
 **Which codecs are offered at runtime:** WirePlumber's `bluez5.codecs` list (below). Delete a
 name to stop offering that codec.

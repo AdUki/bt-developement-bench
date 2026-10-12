@@ -27,6 +27,7 @@ const pl = {
   tick: null,
   ticks: 0,
   artDone: {},   // cover URL → true (shown) / false (failed)
+  artTries: {},  // a phone's cover URL → how many times it was asked for again
   artWait: {},   // player|track → when its cover handle was first waited for
 };
 
@@ -36,16 +37,27 @@ const PL_SVG = {
   vol: 'M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12',
   note: 'M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z',
   radio: 'M4 10h16v10H4zM7 10l10-5M8 15h.01M12 15h5',
+  bt: 'M7 7l10 10-5 5V2l5 5L7 17',
+  server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
   phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
   folder: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2z',
   plus: 'M12 5v14M5 12h14',
 };
 // A cover image's outcome, by URL: the art box stops showing it is loading, and a failed image
 // leaves the placeholder.
+// A phone's cover that failed is asked for again a few times, a little later each time: the first
+// one of a connection is often asked for while the phone's image channel is still opening.
 function npArtDone(img, ok) {
-  pl.artDone[img.getAttribute('src')] = ok;
+  const src = img.getAttribute('src');
+  pl.artDone[src] = ok;
   img.hidden = !ok;
   img.parentNode.classList.remove('loading');
+  const base = src.replace(/&r=\d+$/, '');
+  const n = (pl.artTries[base] || 0) + 1;
+  if (!ok && base.startsWith('/api/media/players/cover') && n <= 4) {
+    pl.artTries[base] = n;
+    setTimeout(renderNowPlaying, 1500 * n);
+  }
 }
 
 const svg = (d, cls) => `<svg viewBox="0 0 24 24" class="${cls || ''}" aria-hidden="true"><path d="${d}"/></svg>`;
@@ -59,8 +71,11 @@ function boardStream() {
   return urls.find(s => s.id === pl.boardId) || urls[0] || null;
 }
 // The players worth showing: BlueZ also makes an empty one for a phone's LE Audio media control
-// service (mcp_gmcs: no name, never a track), which would be a second, dead chip for the phone.
-const phones = () => (pl.media ? pl.media.players : []).filter(p => p.name || p.browsable || (p.track && p.track.title));
+// service (mcp_gmcs: no name, never a track), which would be a second, dead chip for the phone. An
+// AVRCP player is always one: right after pairing, before the phone has played anything, it has no
+// name and no track yet, and its play button is how the music gets started from here.
+const phones = () => (pl.media ? pl.media.players : []).filter(p => p.name || p.browsable || (p.track && p.track.title) ||
+  /\/avrcp\//.test(p.path));
 
 // The source on screen: the one chosen if it is still there, else the board if it plays, else a
 // phone that plays, else any phone.
@@ -84,8 +99,8 @@ function renderNowPlaying() {
   // Source chips: every phone, and the board when it plays.
   // A chip names the device and the player in it: one phone can have several (Samsung Music,
   // Spotify), and the device's name alone would make them look the same.
-  const chips = phones().map(p => ({key: p.path, label: devName(p.address) + (p.name ? ' · ' + p.name : ''),
-    icon: PL_SVG.phone, on: c.kind === 'phone' && c.p.path === p.path}));
+  const chips = phones().map(p => ({key: p.path, label: (p.device_name || devName(p.address)) + (p.name ? ' · ' + p.name : ''),
+    icon: PL_SVG.bt, on: c.kind === 'phone' && c.p.path === p.path}));
   if (b) chips.push({key: 'board', label: 'This board', icon: PL_SVG.radio, on: c.kind === 'board'});
   setHTML($('np-src'), chips.length > 1 ? chips.map(x =>
     `<button class="chip${x.on ? ' on' : ''}" data-src="${esc(x.key)}">${svg(x.icon)}${esc(x.label)}</button>`).join('') : '');
@@ -98,11 +113,15 @@ function renderNowPlaying() {
     playing = p.status === 'playing';
     title = t.title || 'Nothing playing';
     sub = [t.artist, t.album].filter(Boolean).join(' — ');
-    sub2 = `${p.name || 'Player'} on ${devName(p.address)}`;
+    sub2 = p.name ? `in ${p.name}` : '';
     pos = playerPosition(p);
     dur = t.duration_ms || 0;
     if (p.obex_port != null && t.img_handle) {
-      artSrc = `/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${encodeURIComponent(t.img_handle)}`;
+      // The track in the address too: a phone hands out the same handles again on its next
+      // connection, for other images.
+      const base = `/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${encodeURIComponent(t.img_handle)}` +
+        `&t=${encodeURIComponent([t.title, t.album].join('|'))}`;
+      artSrc = base + (pl.artTries[base] ? '&r=' + pl.artTries[base] : '');
     } else if (p.obex_port != null) {
       coverConnect(p);
       // The phone sends a cover's handle only once its image channel is up: a few seconds after
@@ -119,7 +138,7 @@ function renderNowPlaying() {
     title = s.meta.title || item.title || s.source.title || 'Internet radio';
     sub = list.length > 1 ? [item.artist, item.album, `track ${s.track + 1} of ${list.length}`].filter(Boolean).join(' — ')
       : (s.meta.name || s.source.title || '');
-    sub2 = s.sink ? 'Playing on ' + outLabel(s.sink.target) : 'Playing in this browser';
+    sub2 = '';
     pos = (s.track_seconds || 0) * 1000;
     dur = item.duration_ms || (item.duration_s || 0) * 1000;
     if (item.art) artSrc = item.art;
@@ -157,14 +176,37 @@ function renderNowPlaying() {
   setText($('np-mini-title'), title);
   setText($('np-mini-sub'), sub || sub2);
   setHTML($('np-mini-ctl'), btn(playing ? 'pause' : 'play', playing ? PL_SVG.pause : PL_SVG.play, can.play) + btn('next', PL_SVG.next, can.next));
+  setHTML($('np-from'), npFrom(c));
   renderTime(pos, dur);
   renderVolume(c);
   setMediaSession();
-  setText($('np-hear'), pl.hearId ? 'Stop listening here' : 'Listen in this browser');
+  setText($('np-hear'), pl.hearBusy ? 'Connecting…' : pl.hearId ? 'Stop listening here' : 'Listen in this browser');
+  $('np-hear').disabled = !!pl.hearBusy;
   // The output only means something for what the board plays.
   $('np-out-row').hidden = c.kind === 'phone';
   $('np-hear').hidden = c.kind !== 'phone';
   renderQueue(c);
+}
+
+// Where the sound comes from, said above the title: a Bluetooth device playing into the board (and
+// whether its audio actually streams in, or only its player is known), or the board itself playing
+// a station or a media server's tracks, and to which output.
+function npFrom(c) {
+  const tag = (icon, cls, text) => `<span class="np-tag ${cls}">${svg(icon)}${text}</span>`;
+  if (c.kind === 'phone') {
+    const ts = (pl.media ? pl.media.transports : []).filter(t => t.address === c.p.address && /^(110b|2bc9)$/i.test(t.uuid));
+    const live = ts.some(t => t.state === 'active');
+    return tag(PL_SVG.bt, 'bt', `Bluetooth · from ${esc(c.p.device_name || devName(c.p.address))}`) +
+      `<span class="np-state ${live ? 'good-text' : ''}">${live ? 'streaming into the board' : ts.length ? 'connected, not streaming' : 'remote control only, no audio link'}</span>`;
+  }
+  if (c.kind === 'board') {
+    const s = c.s, list = s.source.playlist || [];
+    const item = list[s.track] || {};
+    const what = list.length > 1 || item.duration_ms || item.duration_s ? 'Media server' : 'Internet radio';
+    return tag(what === 'Media server' ? PL_SVG.server : PL_SVG.radio, 'local', `On this board · ${what}`) +
+      `<span class="np-state">→ ${s.sink ? esc(outLabel(s.sink.target)) : 'this browser'}</span>`;
+  }
+  return '';
 }
 
 // Repeat or shuffle pressed: the phone's player's setting, or the board's playlist's.
@@ -499,7 +541,7 @@ function upnpRows(r, folderArt) {
     return {kind: 'folder', title: c.title, id: c.id, album, thumb: c.thumb, art: c.art, artist: c.artist, year: c.year,
       genre: c.genre, count: c.child_count, sub: (album ? [c.artist, c.year, n] : [n]).filter(Boolean).join(' · ')};
   }).concat(r.items.filter(it => it.url).map(it => ({kind: 'track', title: it.title, url: it.url,
-    art: it.art || folderArt, thumb: it.thumb || '', track: it.track, year: it.year, genre: it.genre,
+    art: it.art || folderArt, thumb: it.thumb || '', track: it.track, year: it.year, genre: it.genre, rate: it.rate,
     sub: [it.artist, it.album].filter(Boolean).join(' — '), duration_s: it.duration_s, artist: it.artist, album: it.album,
     format: upnpFormat(it)})));
 }
@@ -691,7 +733,7 @@ function libAppend(rows) {
 function libAll(add) {
   const tracks = pl.libItems.filter(x => x.kind === 'track');
   if (!tracks.length) return;
-  const items = tracks.map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s, artist: x.artist, album: x.album}));
+  const items = tracks.map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s, artist: x.artist, album: x.album, rate: x.rate}));
   const b = boardStream();
   if (add && b) {
     items.forEach(t => { pl.art[t.url] = t; });
@@ -718,7 +760,7 @@ function libClick(i, add) {
   const tracks = pl.libItems.filter(x => x.kind === 'track');
   const from = tracks.indexOf(it);
   const items = (add ? [it] : tracks.slice(from)).map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s,
-    artist: x.artist, album: x.album}));
+    artist: x.artist, album: x.album, rate: x.rate}));
   // "+" on a track while the board plays: onto the end of its queue.
   const b = boardStream();
   if (add && b) {
@@ -744,7 +786,7 @@ function playOnBoard(items) {
   const old = boardStream();
   const go = () => {
     return post('/audio/streams', {source: {type: 'url', url: items[0].url, title: items[0].title, playlist: items.map(playlistItem)},
-      sink, rate: 48000, channels: 2, label: items.length > 1 ? items[0].title + ' and ' + (items.length - 1) + ' more' : items[0].title})
+      sink, rate: streamRate(items[0].rate), channels: 2, label: items.length > 1 ? items[0].title + ' and ' + (items.length - 1) + ' more' : items[0].title})
       .then(s => {
         pl.boardId = s.id;
         pl.src = 'board';
@@ -762,6 +804,11 @@ function playOnBoard(items) {
   }
 }
 pl.art = {};
+
+// The rate the board decodes a track at: its own, in the family PipeWire's graph runs at (44.1 or
+// 48 kHz) — the decoder resampling a 44.1 kHz MP3 to 48 kHz costs a Zero W three times the CPU of
+// decoding it. Unknown (a radio station): 44.1 kHz, what nearly every MP3 stream is.
+const streamRate = r => r && r % 48000 === 0 ? 48000 : 44100;
 
 // The art and duration of the board's tracks, from what the library said about them.
 function decorate(s) {
@@ -832,10 +879,17 @@ function setupPlayer() {
   $('np-out').onchange = e => lsSet('btbench.pl.out', e.target.value);
   $('np-hear').onclick = () => {
     const c = current();
-    if (c.kind !== 'phone') return;
+    if (c.kind !== 'phone' || pl.hearBusy) return;
     // A toggle: the second press stops it.
-    if (pl.hearId) return del(`/audio/streams/${pl.hearId}`).catch(() => {}).then(hearStop);
-    listenToDevice(c.p.address, s => hear(s.id));
+    if (pl.hearId) {
+      const id = pl.hearId;
+      hearStop();
+      renderNowPlaying();
+      return del(`/audio/streams/${id}`).catch(() => {});
+    }
+    pl.hearBusy = true;
+    renderNowPlaying();
+    listenToDevice(c.p.address, s => hear(s.id)).finally(() => { pl.hearBusy = false; renderNowPlaying(); });
   };
   $('np-queue').onclick = e => {
     const r = e.target.closest('.tr');
@@ -897,7 +951,7 @@ registerTab('player', {
       (pl.lib !== 'phone' || phones().some(x => x.browsable));
     api('/media').then(m => { pl.media = m; notePlayers(m.players); renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); })
       .catch(() => { renderLibTabs(); if (!kept()) openLib(pl.lib); });
-    api('/bluetooth').then(b => { if (!btState) btState = b; }).catch(() => {});
+    api('/bluetooth').then(b => { btState = b; renderNowPlaying(); }).catch(() => {});
     api('/audio/endpoints').then(renderOutputs).catch(() => {});
     refreshPlayerStreams();
     clearInterval(pl.tick);

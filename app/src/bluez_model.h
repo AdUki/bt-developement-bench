@@ -40,7 +40,11 @@ nlohmann::json model_adapters(const nlohmann::json& objs);
 // {connected, paired, bonded, connectable|null}; null for a transport it has no bearer on.
 nlohmann::json model_device(const std::string& path, const nlohmann::json& dev,
                             const nlohmann::json* obj = nullptr);
-// All devices, optionally only those of one adapter path. Sorted: connected, paired, then by
+// What a connected device has up, by profile, from its object and its child objects (transports,
+// players, GATT services): [{id: a2dp|le-audio|avrcp|hid|pan|gatt|battery, name, detail, state}].
+// HFP is not there: PipeWire's own HFP does not go through BlueZ.
+nlohmann::json model_profiles(const nlohmann::json& dev_obj, const std::vector<const nlohmann::json*>& children);
+// All devices, each with its profiles while connected, optionally only those of one adapter path. Sorted: connected, paired, then by
 // name, so the list does not reshuffle as a scan adds devices.
 nlohmann::json model_devices(const nlohmann::json& objs, const std::string& adapter_path = "");
 

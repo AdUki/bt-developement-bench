@@ -9,8 +9,8 @@
 # =============================================================================
 
 # --- Identity ----------------------------------------------------------------
-# The board answers on <mac>-<hostname>.local (mDNS, on the USB link and Wi-Fi): the last three
-# bytes of its MAC address in front, so that several boards on one network each have a name of
+# The board answers on <hostname>-<mac>.local (mDNS, on the USB link and Wi-Fi): the last three
+# bytes of its MAC address after it, so that several boards on one network each have a name of
 # their own (btbench-hostname). BTBENCH_HOSTNAME_MAC = "0" answers on plain <hostname>.local.
 BTBENCH_HOSTNAME ?= "btbench"
 #BTBENCH_HOSTNAME_MAC = "0"
@@ -42,8 +42,8 @@ BTBENCH_GADGET ?= "ecm"
 
 # --- Audio -------------------------------------------------------------------
 # The audio stack is PipeWire with WirePlumber, always.
-# aptX and LDAC (libfreeaptx, ldacbt) in PipeWire.
-BTBENCH_EXTRA_CODECS ?= "0"
+# aptX, aptX HD and LDAC (libfreeaptx, LGPL; ldacbt, Apache-2.0) in PipeWire. "0" leaves them out.
+BTBENCH_EXTRA_CODECS ?= "1"
 # AAC (fdk-aac, LICENSE_FLAGS "commercial"; accepting it is yours to decide).
 BTBENCH_AAC ?= "0"
 # ffmpeg, for the web console's audio streams that are not MP3 (AAC internet radio, HLS, FLAC or

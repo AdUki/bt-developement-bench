@@ -49,6 +49,11 @@ constexpr uint64_t kCallTimeoutUs = 5 * 1000000ull;
 // daemon's whole CPU, so that chatter has a floor of its own (on_signal). The console polls at 1 Hz.
 constexpr uint64_t kRefreshDebounceNs = 300 * 1000000ull;
 constexpr uint64_t kRefreshDebounceScanNs = 1000 * 1000000ull;
+// The whole tree is read asynchronously, one read at a time, and may take this long: on a Zero W
+// scanning a busy room bluetoothd can need seconds for it, and a late answer is still an answer.
+// Only BlueZ leaving the bus (or not being there) clears the devices; a read that times out leaves
+// the last tree in place, marked stale.
+constexpr uint64_t kRefreshTimeoutUs = 20 * 1000000ull;
 // ...and reads anyway now and then, so a missed signal cannot leave the console stale for long.
 constexpr uint64_t kRefreshPeriodNs = 5 * 1000000000ull;
 // The "bt" topic at most this often; a pairing question goes out at once.
@@ -240,6 +245,7 @@ struct BtBus {
     BtManager* self;
     std::string path;
     std::string method;
+    std::string iface;  // empty: Device1
   };
 
   static int signal(sd_bus_message* m, void* self, sd_bus_error*) {
@@ -276,7 +282,7 @@ struct BtBus {
 
   static int async(sd_bus_message* m, void* data, sd_bus_error*) {
     auto* op = static_cast<AsyncOp*>(data);
-    op->self->on_reply(op->path, op->method, m);
+    op->self->on_reply(op->path, op->method, op->iface, m);
     return 0;
   }
 
@@ -304,6 +310,18 @@ BtManager::BtManager() : objs_(std::make_shared<const json>(json::object())) {}
 BtManager::~BtManager() { stop(); }
 
 void BtManager::set_adapter(std::string want) { want_adapter_ = std::move(want); }
+void BtManager::set_default_alias(bool on) { default_alias_ = on; }
+
+namespace {
+
+// The kernel's hostname: btbench-hostname has made it the board's own (btbench-257bfc).
+std::string host_name() {
+  char h[256] = {};
+  if (gethostname(h, sizeof h - 1) != 0) return {};
+  return h;
+}
+
+}  // namespace
 
 void BtManager::set_state_file(std::string path) {
   state_file_ = std::move(path);
@@ -415,6 +433,17 @@ void BtManager::reconnect_tick(uint64_t now) {
     reconnect_at_ns_ = now + s_to_ns(2);
     return;
   }
+  // Not before the board's own A2DP endpoints are there and have settled: a device connected
+  // while PipeWire is still registering them (a Zero W's boot, an audio restart) discovers only
+  // those registered so far — without SBC, say — and keeps that list for the connection. Its
+  // Audio Source/Sink UUIDs show the first endpoint; the rest follow within a second or two.
+  // An audio stack that does not come (switched off) is not waited for past 30 s.
+  const std::string& uu = adapter_uuids_;
+  const bool audio = uu.find("0000110a") != std::string::npos || uu.find("0000110b") != std::string::npos;
+  if (now - adapter_up_ns_ < s_to_ns(30) && (!audio || now - adapter_uuids_at_ns_ < s_to_ns(4))) {
+    reconnect_at_ns_ = now + s_to_ns(1);
+    return;
+  }
   const std::vector<std::string> connected = bt_bredr_connected(*objs, apath);
   ++reconnect_tries_;
   bool tried = false;
@@ -448,10 +477,15 @@ void BtManager::restore_adapters(const json& objs) {
     restored_.insert(a.path);
     const std::string name = a.path.substr(a.path.rfind('/') + 1);
     DDict props;
+    bool own_alias = false;
     {
       std::lock_guard<std::mutex> lk(m_);
       if (kept_adapters_.contains(name)) props = bt_restore_adapter_props(kept_adapters_[name]);
+      own_alias = kept_adapters_.contains(name) && kept_adapters_[name].contains("alias");
     }
+    // No alias set here: the board's name, unless BlueZ already has it.
+    const std::string host = default_alias_ && !own_alias ? host_name() : std::string{};
+    if (!host.empty() && str_of(objs[a.path][kAdapterIface], "Alias") != host) props.push_back({"Alias", DVar::str(host)});
     if (props.empty()) continue;
     LOG_INFO("bluetooth: {}: restoring {} kept setting(s)", name, props.size());
     for (const auto& p : props) {
@@ -618,10 +652,12 @@ void BtManager::close_bus() {
   match_slots_.clear();
   if (agent_slot_) agent_slot_ = sd_bus_slot_unref(agent_slot_);
   if (bus_) bus_ = sd_bus_flush_close_unref(bus_);
+  refresh_in_flight_ = false;
   agent_registered_ = false;
   {
     std::lock_guard<std::mutex> lk(m_);
     available_ = false;
+    stale_ = false;
     agent_registered_shared_ = false;
     scanning_ = false;
     objs_ = std::make_shared<const json>(json::object());
@@ -707,9 +743,13 @@ void BtManager::tick() {
     std::lock_guard<std::mutex> lk(m_);
     scan_until = scan_until_ns_;
   }
-  if ((dirty_ && now - last_refresh_ns_ >= kRefreshDebounceNs) ||
-      (scan_dirty_ && now - last_refresh_ns_ >= kRefreshDebounceScanNs) ||
-      now - last_refresh_ns_ >= kRefreshPeriodNs) {
+  // A slow read (a Zero W while scanning) spaces the reads out: the chatter's to a quarter of
+  // the time at most, a change's and the periodic one's in proportion.
+  const uint64_t took = refresh_took_ns_;
+  if (!refresh_in_flight_ && bus_ &&
+      ((dirty_ && now - last_refresh_ns_ >= std::max(kRefreshDebounceNs, 2 * took)) ||
+      (scan_dirty_ && now - last_refresh_ns_ >= std::max(kRefreshDebounceScanNs, 4 * took)) ||
+      now - last_refresh_ns_ >= std::max(kRefreshPeriodNs, 8 * took))) {
     dirty_ = false;
     scan_dirty_ = false;
     last_refresh_ns_ = now;
@@ -747,12 +787,26 @@ void BtManager::refresh() {
     sd_bus_error_free(&e);
   }
 
+  sd_bus_message* m = nullptr;
+  int r = sd_bus_message_new_method_call(bus_, &m, kBluez, "/", "org.freedesktop.DBus.ObjectManager",
+                                         "GetManagedObjects");
+  if (r >= 0)
+    r = sd_bus_call_async(bus_, nullptr, m, [](sd_bus_message* reply, void* self, sd_bus_error*) {
+      static_cast<BtManager*>(self)->refreshed(reply);
+      return 0;
+    }, this, kRefreshTimeoutUs);
+  sd_bus_message_unref(m);
+  if (r >= 0) refresh_in_flight_ = true;
+  else LOG_WARN("bluetooth: cannot read BlueZ's objects: {}", strerror(-r));
+}
+
+void BtManager::refreshed(sd_bus_message* reply) {
+  refresh_in_flight_ = false;
+  refresh_took_ns_ = mono_ns() - last_refresh_ns_;
   auto objs = std::make_shared<json>();
   sd_bus_error e = SD_BUS_ERROR_NULL;
-  sd_bus_message* reply = nullptr;
-  const int r = sd_bus_call_method(bus_, kBluez, "/", "org.freedesktop.DBus.ObjectManager",
-                                   "GetManagedObjects", &e, &reply, "");
-  const bool ok = r >= 0 && read_json(reply, objs.get()) > 0 && objs->is_object();
+  if (const sd_bus_error* re = sd_bus_message_get_error(reply)) sd_bus_error_copy(&e, re);
+  const bool ok = !sd_bus_error_is_set(&e) && read_json(reply, objs.get()) > 0 && objs->is_object();
   // BlueZ can take its name between the GetNameOwner above and this call; then the answer's sender
   // is the owner. Left unknown, the NameOwnerChanged that follows looked like another BlueZ, and the
   // agent and every BusUser were set up a second time.
@@ -763,16 +817,34 @@ void BtManager::refresh() {
       LOG_INFO("bluetooth: BlueZ is on the bus ({})", bluez_owner_);
     }
   }
-  sd_bus_message_unref(reply);
   if (!ok) {
-    const std::string why = is_error(&e, SD_BUS_ERROR_SERVICE_UNKNOWN) ||
-                                    is_error(&e, SD_BUS_ERROR_NAME_HAS_NO_OWNER)
-                                ? std::string("BlueZ is not running (bluetooth.service)")
-                                : std::string("BlueZ: ") + (e.message ? e.message : "no answer");
+    // Gone: the bus says nobody has the name, or BlueZ left it (NameOwnerChanged cleared the
+    // owner) — then a read fails however it fails: the bus may try to start BlueZ for it, and a
+    // start that fails answers with a systemd error or not at all.
+    const bool gone = is_error(&e, SD_BUS_ERROR_SERVICE_UNKNOWN) || is_error(&e, SD_BUS_ERROR_NAME_HAS_NO_OWNER) ||
+                      bluez_owner_.empty();
+    const std::string why = gone ? std::string("BlueZ is not running (bluetooth.service)")
+                                 : std::string("BlueZ: ") + (e.message ? e.message : "no answer");
     sd_bus_error_free(&e);
     if (why != logged_error_) {
       LOG_WARN("bluetooth: {}", why);
       logged_error_ = why;
+    }
+    // Slow, not gone (a timeout while bluetoothd is busy): what was read last stays, devices and
+    // all, and the next read comes at the scan pace rather than at once.
+    std::shared_ptr<const json> have;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      have = objs_;
+    }
+    if (!gone && have && !have->empty()) {
+      {
+        std::lock_guard<std::mutex> lk(m_);
+        stale_ = true;
+      }
+      scan_dirty_ = true;
+      changed(false);
+      return;
     }
     restored_.clear();
     if (!ready_adapter_.empty()) {
@@ -782,6 +854,7 @@ void BtManager::refresh() {
     {
       std::lock_guard<std::mutex> lk(m_);
       available_ = false;
+      stale_ = false;
       error_ = why;
       objs_ = std::make_shared<const json>(json::object());
       adapter_path_.clear();
@@ -812,6 +885,7 @@ void BtManager::refresh() {
     adapter_path_ = apath;
     available_ = !apath.empty();
     error_ = err;
+    stale_ = false;
     // A device that has gone (removed, or a temporary one expired) takes its busy/error with it.
     for (auto it = dev_state_.begin(); it != dev_state_.end();)
       it = objs->contains(it->first) ? std::next(it) : dev_state_.erase(it);
@@ -846,6 +920,15 @@ void BtManager::refresh() {
     // A few seconds' grace lets the adapter power up, and a peer that reconnects by itself do so.
     reconnect_tries_ = 0;
     reconnect_at_ns_ = apath.empty() ? 0 : mono_ns() + s_to_ns(5);
+    adapter_up_ns_ = mono_ns();
+  }
+  if (!apath.empty()) {
+    std::string uu;
+    for (const std::string& u : strv_of((*objs)[apath][kAdapterIface], "UUIDs")) uu += u + " ";
+    if (uu != adapter_uuids_) {
+      adapter_uuids_ = uu;
+      adapter_uuids_at_ns_ = mono_ns();
+    }
   }
   note_connected(*objs, apath);
 
@@ -977,23 +1060,28 @@ void BtManager::stop_scan() {
 
 // ---- Device operations ---------------------------------------------------------------------------
 
-void BtManager::set_device_state(const std::string& path, std::string busy, std::string error) {
+void BtManager::set_device_state(const std::string& path, std::string busy, std::string error,
+                                 std::string busy_on) {
   {
     std::lock_guard<std::mutex> lk(m_);
     DevState& s = dev_state_[path];
+    // A call's answer (nothing busy any more) keeps what the call was about with its error.
+    s.error_on = busy.empty() ? s.busy_on : std::string{};
     s.busy = std::move(busy);
+    s.busy_on = std::move(busy_on);
     s.error = std::move(error);
   }
   changed(false);
 }
 
 void BtManager::call_device(const std::string& path, const char* method, const std::string& uuid,
-                            const char* busy, unsigned timeout_s, const char* iface) {
+                            const char* busy, unsigned timeout_s, const char* iface,
+                            const std::string& busy_on) {
   if (!bus_) return;
   sd_bus_message* m = nullptr;
   int r = sd_bus_message_new_method_call(bus_, &m, kBluez, path.c_str(), iface ? iface : kDeviceIface, method);
   if (r >= 0 && !uuid.empty()) r = sd_bus_message_append(m, "s", uuid.c_str());
-  auto* op = new BtBus::AsyncOp{this, path, method};
+  auto* op = new BtBus::AsyncOp{this, path, method, iface ? iface : ""};
   sd_bus_slot* slot = nullptr;
   if (r >= 0) r = sd_bus_call_async(bus_, &slot, m, BtBus::async, op, s_to_ns(timeout_s) / 1000);
   sd_bus_message_unref(m);
@@ -1009,11 +1097,21 @@ void BtManager::call_device(const std::string& path, const char* method, const s
   sd_bus_slot_set_floating(slot, 1);
   sd_bus_slot_unref(slot);
   LOG_INFO("bluetooth: {} {}{}", method, address_from_path(path), uuid.empty() ? "" : " " + uuid);
-  set_device_state(path, busy, "");
+  set_device_state(path, busy, "", busy_on);
 }
 
-void BtManager::on_reply(const std::string& path, const std::string& method, sd_bus_message* reply) {
+void BtManager::on_reply(const std::string& path, const std::string& method, const std::string& iface,
+                         sd_bus_message* reply) {
   const sd_bus_error* e = sd_bus_message_get_error(reply);
+  // The BR/EDR bearer's Connect brings up the link only, and answers AlreadyConnected when it is
+  // up — as it still is right after a pairing — without connecting a profile: A2DP and AVRCP
+  // never came, and the idle link dropped seconds later. Device1's Connect connects the profiles
+  // over the link that is there.
+  if (e && method == "Connect" && iface == kBearerBredrIface && is_error(e, "org.bluez.Error.AlreadyConnected")) {
+    LOG_INFO("bluetooth: {} link is up: connecting its profiles", address_from_path(path));
+    call_device(path, "Connect", "", "connecting", kConnectTimeoutS);
+    return;
+  }
   // Nothing to disconnect is done, not failed: it is also how a bearer's Disconnect answers when
   // it only cancelled a Connect still in progress.
   if (e && method == "Disconnect" && is_error(e, "org.bluez.Error.NotConnected")) e = nullptr;
@@ -1225,7 +1323,7 @@ std::string BtManager::adapter_path() const {
 json BtManager::state() const {
   std::shared_ptr<const json> objs;
   std::string apath, error;
-  bool available, has_req, scanning, agent_reg;
+  bool available, has_req, scanning, agent_reg, stale;
   BtRequest req;
   uint64_t deadline, scan_until;
   std::map<std::string, DevState> ds;
@@ -1240,6 +1338,7 @@ json BtManager::state() const {
     apath = adapter_path_;
     available = available_;
     error = error_;
+    stale = stale_;
     has_req = has_request_;
     req = request_;
     deadline = request_deadline_ns_;
@@ -1267,7 +1366,9 @@ json BtManager::state() const {
   for (json& d : devices) {
     const auto it = ds.find(d["path"].get<std::string>());
     d["busy"] = it == ds.end() ? "" : it->second.busy;
+    d["busy_on"] = it == ds.end() ? "" : it->second.busy_on;
     d["error"] = it == ds.end() ? "" : it->second.error;
+    d["error_on"] = it == ds.end() ? "" : it->second.error_on;
     d["last_disconnect"] = it == ds.end() || it->second.last_disconnect.is_null() ? json(nullptr)
                                                                                  : it->second.last_disconnect;
   }
@@ -1275,6 +1376,8 @@ json BtManager::state() const {
   const bool discovering = adapter.is_object() && adapter.value("discovering", false);
   return json{{"available", available},
               {"error", error},
+              // BlueZ did not answer the last read in time: the devices are as it last said.
+              {"stale", stale},
               {"adapter", adapter},
               {"adapters", adapters},
               {"devices", devices},
@@ -1325,13 +1428,17 @@ json BtManager::device(const std::string& address) const {
   }
   json d = model_device(path, (*objs)[path][kDeviceIface], &(*objs)[path]);
   d["busy"] = st.busy;
+  d["busy_on"] = st.busy_on;
   d["error"] = st.error;
+  d["error_on"] = st.error_on;
   d["last_disconnect"] = st.last_disconnect.is_null() ? json(nullptr) : st.last_disconnect;
   // How much of it there is beyond the device itself: a resolved GATT database, A2DP endpoints.
   size_t services = 0, endpoints = 0, transports = 0;
   const std::string prefix = path + "/";
+  std::vector<const json*> children;
   for (auto it = objs->begin(); it != objs->end(); ++it) {
     if (!starts_with(it.key(), prefix)) continue;
+    children.push_back(&*it);
     if (it->contains("org.bluez.GattService1")) ++services;
     if (it->contains("org.bluez.MediaEndpoint1")) ++endpoints;
     if (it->contains("org.bluez.MediaTransport1")) ++transports;
@@ -1339,6 +1446,7 @@ json BtManager::device(const std::string& address) const {
   d["gatt_services"] = services;
   d["media_endpoints"] = endpoints;
   d["media_transports"] = transports;
+  d["profiles"] = d["connected"].get<bool>() ? model_profiles((*objs)[path], children) : json::array();
   return d;
 }
 
@@ -1376,7 +1484,9 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
         *err = "alias is at most 248 bytes";
         return false;
       }
-      props.push_back({"Alias", DVar::str(a)});
+      // Empty: back to the default — the board's name, or BlueZ's (its Name) on a PC.
+      const std::string host = a.empty() && default_alias_ ? host_name() : std::string{};
+      props.push_back({"Alias", DVar::str(host.empty() ? a : host)});
     }
     // The timeout first: BlueZ starts counting when Discoverable goes on, with the value in force.
     if (j.contains("discoverable_timeout_s"))
@@ -1403,6 +1513,8 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
     else if (objs_->contains(path) && (*objs_)[path].contains(kAdapterIface))
       timeout = static_cast<uint32_t>(num_of((*objs_)[path][kAdapterIface], "DiscoverableTimeout"));
     kept_adapters_[name] = bt_keep_adapter_settings(kept_adapters_.value(name, json::object()), j, timeout);
+    // An alias cleared is not kept: the default applies again at the next start.
+    if (j.contains("alias") && j["alias"].get<std::string>().empty()) kept_adapters_[name].erase("alias");
     save_state_locked();
   }
   touch();
@@ -1469,10 +1581,13 @@ bool BtManager::device_action(const std::string& address, Action action, const s
     std::lock_guard<std::mutex> lk(m_);
     DevState& s = dev_state_[path];
     s.error.clear();
+    s.error_on.clear();
     if (action == Action::Pair) s.busy = "pairing";
     if (action == Action::Connect) s.busy = "connecting";
     if (action == Action::Disconnect || action == Action::DisconnectBearer) s.busy = "disconnecting";
     if (action == Action::ConnectBearer) s.busy = "connecting";
+    s.busy_on = action == Action::ConnectBearer || action == Action::DisconnectBearer ? arg
+                : action == Action::Pair || action == Action::Remove ? std::string{} : uuid_full(arg);
   }
   // Disconnected or removed on purpose: not to be called back at the next start.
   if ((action == Action::Disconnect && arg.empty()) || action == Action::Remove ||
@@ -1504,15 +1619,18 @@ bool BtManager::device_action(const std::string& address, Action action, const s
         bool bredr = false;
         if (uuid.empty()) {
           std::lock_guard<std::mutex> lk(m_);
-          bredr = objs_->contains(path) && bt_connect_over_bredr((*objs_)[path]);
+          // Over BR/EDR's bearer only while that link is down: with it up (after a pairing),
+          // Device1's Connect is what connects the profiles (on_reply).
+          bredr = objs_->contains(path) && bt_connect_over_bredr((*objs_)[path]) &&
+                  !bool_of((*objs_)[path][kBearerBredrIface], "Connected");
         }
         call_device(path, uuid.empty() ? "Connect" : "ConnectProfile", uuid, "connecting", kConnectTimeoutS,
-                    bredr ? kBearerBredrIface : nullptr);
+                    bredr ? kBearerBredrIface : nullptr, uuid);
         break;
       }
       case Action::Disconnect:
         call_device(path, uuid.empty() ? "Disconnect" : "DisconnectProfile", uuid, "disconnecting",
-                    kConnectTimeoutS);
+                    kConnectTimeoutS, nullptr, uuid);
         break;
       case Action::ConnectBearer:
       case Action::DisconnectBearer:
@@ -1520,7 +1638,7 @@ bool BtManager::device_action(const std::string& address, Action action, const s
         // UnknownObject, shown on the device like any refusal.
         call_device(path, action == Action::ConnectBearer ? "Connect" : "Disconnect", "",
                     action == Action::ConnectBearer ? "connecting" : "disconnecting", kConnectTimeoutS,
-                    arg == "le" ? kBearerLeIface : kBearerBredrIface);
+                    arg == "le" ? kBearerLeIface : kBearerBredrIface, arg);
         break;
       case Action::Remove: {
         const std::string apath = path.substr(0, path.rfind('/'));

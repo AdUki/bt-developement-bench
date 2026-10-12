@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <map>
 #include <set>
 
 #include "a2dp_codec.h"
@@ -232,13 +233,81 @@ json model_device(const std::string& path, const json& d, const json* obj) {
   return j;
 }
 
+namespace {
+
+// The device an object belongs to: /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF of
+// /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/sep1/fd0; empty for the device itself and for others.
+std::string owning_device(const std::string& path) {
+  const size_t d = path.find("/dev_");
+  if (d == std::string::npos) return {};
+  const size_t end = path.find('/', d + 1);
+  return end == std::string::npos ? std::string{} : path.substr(0, end);
+}
+
+// One media transport as a profile: A2DP or LE Audio, which way the audio goes (the transport's
+// UUID is the board's own role: Audio Sink means the board receives), its state and codec.
+json transport_profile(const json& t) {
+  const std::string u = uuid_short(str_of(t, "UUID"));
+  const bool a2dp = u == "110a" || u == "110b";
+  const bool in = u == "110b" || u == "2bc9";  // A2DP sink, a sink PAC
+  const uint8_t codec = static_cast<uint8_t>(num_of(t, "Codec"));
+  return json{{"id", a2dp ? "a2dp" : "le-audio"},
+              {"name", a2dp ? "A2DP" : "LE Audio"},
+              {"detail", std::string(in ? "receiving" : "sending") + " · " +
+                             codec_name(codec, bytes_of(t, "Configuration"))},
+              {"state", str_of(t, "State")}};
+}
+
+}  // namespace
+
+json model_profiles(const json& dev_obj, const std::vector<const json*>& children) {
+  json out = json::array();
+  for (const json* c : children)
+    if (c->contains(kTransport)) out.push_back(transport_profile((*c)[kTransport]));
+  if (dev_obj.contains("org.bluez.MediaControl1") && bool_of(dev_obj["org.bluez.MediaControl1"], "Connected")) {
+    std::string player;
+    for (const json* c : children)
+      if (c->contains(kPlayer)) player = str_of((*c)[kPlayer], "Name");
+    out.push_back(json{{"id", "avrcp"}, {"name", "AVRCP"},
+                       {"detail", player.empty() ? "remote control" : "player: " + player}, {"state", "connected"}});
+  }
+  if (dev_obj.contains("org.bluez.Input1"))
+    out.push_back(json{{"id", "hid"}, {"name", "HID"}, {"detail", "input device"}, {"state", "connected"}});
+  if (dev_obj.contains("org.bluez.Network1") && bool_of(dev_obj["org.bluez.Network1"], "Connected"))
+    out.push_back(json{{"id", "pan"}, {"name", "PAN"}, {"detail", str_of(dev_obj["org.bluez.Network1"], "Interface")},
+                       {"state", "connected"}});
+  size_t services = 0;
+  for (const json* c : children)
+    if (c->contains(kService)) ++services;
+  const json* le = dev_obj.contains("org.bluez.Bearer.LE1") ? &dev_obj["org.bluez.Bearer.LE1"] : nullptr;
+  if (services && (!le || bool_of(*le, "Connected")))
+    out.push_back(json{{"id", "gatt"}, {"name", "GATT"},
+                       {"detail", std::to_string(services) + (services == 1 ? " service" : " services")},
+                       {"state", "connected"}});
+  if (dev_obj.contains("org.bluez.Battery1"))
+    out.push_back(json{{"id", "battery"}, {"name", "Battery"},
+                       {"detail", std::to_string(static_cast<int>(num_of(dev_obj["org.bluez.Battery1"], "Percentage"))) + " %"},
+                       {"state", "connected"}});
+  return out;
+}
+
 json model_devices(const json& objs, const std::string& adapter_path) {
   json out = json::array();
   const std::string prefix = adapter_path.empty() ? std::string{} : adapter_path + "/";
+  // Each device's child objects (transports, players, GATT services), in one pass over the tree.
+  std::map<std::string, std::vector<const json*>> children;
+  for (auto it = objs.begin(); it != objs.end(); ++it) {
+    const std::string dev = owning_device(it.key());
+    if (!dev.empty()) children[dev].push_back(&*it);
+  }
   for (auto it = objs.begin(); it != objs.end(); ++it) {
     if (!it->contains(kDevice)) continue;
     if (!prefix.empty() && !starts_with(it.key(), prefix)) continue;
-    out.push_back(model_device(it.key(), (*it)[kDevice], &*it));
+    json d = model_device(it.key(), (*it)[kDevice], &*it);
+    const auto c = children.find(it.key());
+    d["profiles"] = d["connected"].get<bool>() ? model_profiles(*it, c == children.end() ? std::vector<const json*>{} : c->second)
+                                               : json::array();
+    out.push_back(std::move(d));
   }
   std::stable_sort(out.begin(), out.end(), [](const json& x, const json& y) {
     if (x["connected"] != y["connected"]) return x["connected"].get<bool>();
@@ -357,6 +426,11 @@ bool gatt_find(const json& objs, const std::string& dev_path, uint16_t handle, s
 
 json model_media(const json& objs) {
   json endpoints = json::array(), transports = json::array(), players = json::array();
+  // The device's name as the console shows it, so a view need not wait for the device list.
+  auto device_name = [&objs](const std::string& dev) {
+    const auto d = objs.find(dev);
+    return d != objs.end() && d->contains(kDevice) ? str_of((*d)[kDevice], "Alias") : std::string{};
+  };
   for (auto it = objs.begin(); it != objs.end(); ++it) {
     if (it->contains(kEndpoint)) {
       const json& e = (*it)[kEndpoint];
@@ -386,6 +460,7 @@ json model_media(const json& objs) {
           {"path", it.key()},
           {"device", dev},
           {"address", address_from_path(dev.empty() ? it.key() : dev)},
+          {"device_name", device_name(dev)},
           {"uuid", uuid_short(str_of(t, "UUID"))},
           {"profile", uuid_names().name(str_of(t, "UUID"))},
           {"endpoint", str_of(t, "Endpoint")},
@@ -403,6 +478,7 @@ json model_media(const json& objs) {
       json pl{{"path", it.key()},
               {"device", dev},
               {"address", address_from_path(dev.empty() ? it.key() : dev)},
+              {"device_name", device_name(dev)},
               {"name", str_of(p, "Name")},
               {"type", str_of(p, "Type")},
               {"subtype", str_of(p, "Subtype")},

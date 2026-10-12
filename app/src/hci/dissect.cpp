@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -70,6 +71,11 @@ std::string printable(const uint8_t* p, size_t n, size_t max = 80) {
   }
   while (!s.empty() && s.back() == ' ') s.pop_back();
   return s;
+}
+
+// Text a device sent (a title, a folder name, a service name), quoted, cut for the summary.
+std::string quoted(const uint8_t* p, size_t n, size_t max = 60) {
+  return "\"" + printable(p, n, max) + (n > max ? "…" : "") + "\"";
 }
 
 bool mostly_text(const uint8_t* p, size_t n) {
@@ -624,11 +630,17 @@ const char* uuid16_name(uint16_t u) {
     case 0x0001: return "SDP";
     case 0x0003: return "RFCOMM";
     case 0x0017: return "AVCTP";
+    case 0x0008: return "OBEX";
+    case 0x000f: return "BNEP";
+    case 0x0011: return "HIDP";
     case 0x0019: return "AVDTP";
     case 0x0100: return "L2CAP";
+    case 0x1000: return "Service Discovery Server";
     case 0x1002: return "Public Browse Root";
     case 0x1101: return "Serial Port";
+    case 0x1103: return "Dialup Networking";
     case 0x1105: return "OBEX Object Push";
+    case 0x1106: return "OBEX File Transfer";
     case 0x1108: return "Headset";
     case 0x110a: return "Audio Source";
     case 0x110b: return "Audio Sink";
@@ -639,12 +651,22 @@ const char* uuid16_name(uint16_t u) {
     case 0x1112: return "Headset AG";
     case 0x1115: return "PANU";
     case 0x1116: return "NAP";
+    case 0x1117: return "GN";
+    case 0x1124: return "Human Interface Device Service";
+    case 0x112d: return "SIM Access";
+    case 0x112e: return "Phonebook Access PCE";
     case 0x111e: return "Handsfree";
     case 0x111f: return "Handsfree Audio Gateway";
     case 0x112f: return "Phonebook Access PSE";
+    case 0x1130: return "Phonebook Access";
+    case 0x1131: return "Headset HS";
     case 0x1132: return "Message Access Server";
+    case 0x1133: return "Message Notification Server";
+    case 0x1134: return "Message Access Profile";
     case 0x1200: return "PnP Information";
+    case 0x1201: return "Generic Networking";
     case 0x1203: return "Generic Audio";
+    case 0x1204: return "Generic Telephony";
     case 0x1800: return "Generic Access";
     case 0x1801: return "Generic Attribute";
     case 0x180a: return "Device Information";
@@ -655,6 +677,16 @@ const char* uuid16_name(uint16_t u) {
     case 0x184f: return "Broadcast Audio Scan";
     case 0x1850: return "Published Audio Capabilities";
     case 0x1844: return "Volume Control";
+    case 0x1843: return "Audio Input Control";
+    case 0x1845: return "Volume Offset Control";
+    case 0x1846: return "Coordinated Set Identification";
+    case 0x1848: return "Media Control";
+    case 0x1849: return "Generic Media Control";
+    case 0x184d: return "Microphone Control";
+    case 0x1853: return "Common Audio";
+    case 0x1854: return "Hearing Access";
+    case 0x1855: return "Telephony and Media Audio";
+    case 0x1856: return "Public Broadcast Announcement";
     case 0x2800: return "Primary Service";
     case 0x2801: return "Secondary Service";
     case 0x2802: return "Include";
@@ -667,14 +699,37 @@ const char* uuid16_name(uint16_t u) {
     case 0x2a04: return "Peripheral Preferred Connection Parameters";
     case 0x2a05: return "Service Changed";
     case 0x2a19: return "Battery Level";
+    case 0x2a23: return "System ID";
     case 0x2a24: return "Model Number String";
+    case 0x2a25: return "Serial Number String";
+    case 0x2a26: return "Firmware Revision String";
+    case 0x2a27: return "Hardware Revision String";
+    case 0x2a28: return "Software Revision String";
     case 0x2a29: return "Manufacturer Name String";
+    case 0x2a4a: return "HID Information";
+    case 0x2a4b: return "Report Map";
+    case 0x2a4c: return "HID Control Point";
+    case 0x2a4e: return "Protocol Mode";
+    case 0x2a50: return "PnP ID";
+    case 0x2908: return "Report Reference";
     case 0x2a37: return "Heart Rate Measurement";
     case 0x2a4d: return "Report";
     case 0x2aa6: return "Central Address Resolution";
     case 0x2b29: return "Client Supported Features";
     case 0x2b2a: return "Database Hash";
     case 0x2b3a: return "Server Supported Features";
+    case 0x2b7d: return "Volume State";
+    case 0x2b7e: return "Volume Control Point";
+    case 0x2b7f: return "Volume Flags";
+    case 0x2bc4: return "Sink ASE";
+    case 0x2bc5: return "Source ASE";
+    case 0x2bc6: return "ASE Control Point";
+    case 0x2bc9: return "Sink PAC";
+    case 0x2bca: return "Sink Audio Locations";
+    case 0x2bcb: return "Source PAC";
+    case 0x2bcc: return "Source Audio Locations";
+    case 0x2bcd: return "Available Audio Contexts";
+    case 0x2bce: return "Supported Audio Contexts";
     default: return nullptr;
   }
 }
@@ -992,6 +1047,21 @@ std::string ad_data(Out& o, const uint8_t* p, size_t n) {
 // ---------------------------------------------------------------------------------------------
 // HCI commands
 
+// Class of Device (Assigned Numbers 2.8): the major device class and its service classes.
+std::string cod_str(uint32_t c) {
+  static const char* major[] = {"miscellaneous", "computer", "phone", "LAN/network", "audio/video", "peripheral",
+                                "imaging", "wearable", "toy", "health"};
+  static const char* service[] = {"limited discoverable", "LE audio", "reserved", "positioning", "networking",
+                                  "rendering", "capturing", "object transfer", "audio", "telephony", "information"};
+  const unsigned mj = (c >> 8) & 0x1f;
+  std::string s = sf("0x%06x %s", c, mj < 10 ? major[mj] : mj == 0x1f ? "uncategorized" : "?");
+  std::string sv;
+  for (int b = 13; b <= 23; ++b)
+    if (c & (1u << b)) sv += (sv.empty() ? "" : ", ") + std::string(service[b - 13]);
+  if (!sv.empty()) s += " (" + sv + ")";
+  return s;
+}
+
 void hci_command(Out& o, const uint8_t* d, size_t len) {
   if (len < 3) {
     o.summary = "Command (truncated)";
@@ -1099,8 +1169,17 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
       break;
     case 0x0c24:  // Write Class of Device
       if (n >= 3) {
-        F("Class", sf("0x%06x", le24(p)), p, 3);
-        s += sf(" 0x%06x", le24(p));
+        F("Class", cod_str(le24(p)), p, 3);
+        s += " " + cod_str(le24(p));
+      }
+      break;
+    case 0x0c52:  // Write Extended Inquiry Response
+      if (n >= 1) {
+        F("FEC required", p[0] ? "yes" : "no", p, 1);
+        OPEN("EIR", "", p + 1, n - 1);
+        const std::string name = ad_data(o, p + 1, n - 1);
+        CLOSE();
+        if (!name.empty()) s += " \"" + name + "\"";
       }
       break;
     case 0x0c2f:  // Write Synchronous Flow Control Enable
@@ -1592,7 +1671,7 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
     case 0x04:  // Connection Request
       if (n >= 10) {
         F("Address", bdaddr_str(p), p, 6);
-        F("Class", sf("0x%06x", le24(p + 6)), p + 6, 3);
+        F("Class", cod_str(le24(p + 6)), p + 6, 3);
         F("Link type", p[9] == 1 ? "ACL" : p[9] == 2 ? "eSCO" : "SCO", p + 9, 1);
         s += " " + bdaddr_str(p) + (p[9] == 1 ? " ACL" : p[9] == 2 ? " eSCO" : " SCO");
       }
@@ -1732,7 +1811,7 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
     case 0x2f:  // Extended Inquiry Result
       if (n >= 15) {
         F("Address", bdaddr_str(p + 1), p + 1, 6);
-        F("Class", sf("0x%06x", le24(p + 9)), p + 9, 3);
+        F("Class", cod_str(le24(p + 9)), p + 9, 3);
         F("RSSI", sf("%d dBm", static_cast<int8_t>(p[14])), p + 14, 1);
         OPEN("EIR", "", p + 15, n - 15);
         const std::string name = ad_data(o, p + 15, n - 15);
@@ -2198,6 +2277,15 @@ std::string auth_req_str(uint8_t a) {
   return s;
 }
 
+std::string key_dist_str(uint8_t k) {
+  std::string s = sf("0x%02x", k);
+  if (k & 0x01) s += " EncKey";
+  if (k & 0x02) s += " IdKey";
+  if (k & 0x04) s += " SignKey";
+  if (k & 0x08) s += " LinkKey";
+  return s;
+}
+
 std::string smp(Out& o, const uint8_t* d, size_t n) {
   if (n < 1) return "SMP (empty)";
   const char* nm = smp_name(d[0]);
@@ -2214,9 +2302,10 @@ std::string smp(Out& o, const uint8_t* d, size_t n) {
         F("OOB data", p[1] ? "present" : "not present", p + 1, 1);
         F("Authentication", auth_req_str(p[2]), p + 2, 1);
         F("Max key size", std::to_string(p[3]), p + 3, 1);
-        F("Initiator keys", sf("0x%02x", p[4]), p + 4, 1);
-        F("Responder keys", sf("0x%02x", p[5]), p + 5, 1);
-        s += std::string(" ") + io_cap_name(p[0]) + " " + auth_req_str(p[2]);
+        F("Initiator keys", key_dist_str(p[4]), p + 4, 1);
+        F("Responder keys", key_dist_str(p[5]), p + 5, 1);
+        s += std::string(" ") + io_cap_name(p[0]) + " " + auth_req_str(p[2]) + sf(", key size %u", p[3]);
+        if (p[1]) s += ", OOB";
       }
       break;
     case 0x05:
@@ -2290,6 +2379,220 @@ void de_uuids(const uint8_t* p, size_t n, std::string* out, int depth = 0) {
   }
 }
 
+// One data element's header: type, the offset of its value and the value's length. false if it
+// does not fit in n.
+bool de_header(const uint8_t* p, size_t n, uint8_t* type, size_t* hdr, size_t* len) {
+  if (n < 1) return false;
+  *type = p[0] >> 3;
+  const uint8_t sz = p[0] & 7;
+  if (sz < 5) {
+    *hdr = 1;
+    *len = *type == 0 ? 0 : (1u << sz);
+  } else if (sz == 5) {
+    if (n < 2) return false;
+    *hdr = 2;
+    *len = p[1];
+  } else if (sz == 6) {
+    if (n < 3) return false;
+    *hdr = 3;
+    *len = be16(p + 1);
+  } else {
+    if (n < 5) return false;
+    *hdr = 5;
+    *len = be32(p + 1);
+  }
+  return *hdr + *len <= n;
+}
+
+// A data element as text: integers in hex, UUIDs by name, strings quoted, the outer sequence's
+// elements separated by commas and inner sequences in parentheses.
+std::string de_str(const uint8_t* p, size_t n, int depth = 0) {
+  uint8_t type;
+  size_t hdr, len;
+  if (!de_header(p, n, &type, &hdr, &len)) return "(truncated)";
+  const uint8_t* v = p + hdr;
+  switch (type) {
+    case 0: return "nil";
+    case 1:
+    case 2:
+      if (len == 1) return sf("0x%02x", v[0]);
+      if (len == 2) return sf("0x%04x", be16(v));
+      if (len == 4) return sf("0x%08x", be32(v));
+      return "0x" + hexbytes(v, len);
+    case 3:
+      if (len == 2) {
+        const char* nm = uuid16_name(be16(v));
+        return nm ? std::string(nm) : sf("0x%04x", be16(v));
+      }
+      if (len == 4) return sf("0x%08x", be32(v));
+      if (len == 16) {
+        return sf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]) +
+               hexbytes(v + 10, 6);
+      }
+      return hexbytes(v, len);
+    case 4:
+    case 8: return quoted(v, len, 100);
+    case 5: return len && v[0] ? "true" : "false";
+    case 6:
+    case 7: {
+      if (depth > 4) return "(…)";
+      std::string s;
+      size_t at = 0;
+      while (at < len) {
+        uint8_t t2;
+        size_t h2, l2;
+        if (!de_header(v + at, len - at, &t2, &h2, &l2)) break;
+        s += (s.empty() ? "" : depth ? " " : ", ") + de_str(v + at, h2 + l2, depth + 1);
+        at += h2 + l2;
+      }
+      return depth ? "(" + s + ")" : s;
+    }
+    default: return hexbytes(v, len);
+  }
+}
+
+const char* sdp_attr_name(uint16_t id) {
+  switch (id) {
+    case 0x0000: return "Service Record Handle";
+    case 0x0001: return "Service Class ID List";
+    case 0x0002: return "Service Record State";
+    case 0x0003: return "Service ID";
+    case 0x0004: return "Protocol Descriptor List";
+    case 0x0005: return "Browse Group List";
+    case 0x0006: return "Language Base Attribute ID List";
+    case 0x0007: return "Service Info Time To Live";
+    case 0x0008: return "Service Availability";
+    case 0x0009: return "Bluetooth Profile Descriptor List";
+    case 0x000a: return "Documentation URL";
+    case 0x000b: return "Client Executable URL";
+    case 0x000c: return "Icon URL";
+    case 0x000d: return "Additional Protocol Descriptor Lists";
+    case 0x0100: return "Service Name";
+    case 0x0101: return "Service Description";
+    case 0x0102: return "Provider Name";
+    case 0x0200: return "GoepL2capPsm / Version";
+    case 0x0311: return "Supported Features";
+    case 0x0314: return "Supported Repositories / MAS Instance";
+    case 0x0317: return "Supported Features (PBAP/MAP)";
+    default: return nullptr;
+  }
+}
+
+// The words of a protocol descriptor list worth a summary: "PSM 0x0019", "channel 3".
+std::string sdp_protocols(const uint8_t* p, size_t n) {
+  std::string out;
+  uint8_t type;
+  size_t hdr, len;
+  if (!de_header(p, n, &type, &hdr, &len) || (type != 6 && type != 7)) return out;
+  const uint8_t* v = p + hdr;
+  size_t at = 0;
+  while (at < len) {  // each protocol: (UUID [parameter ...])
+    uint8_t t2, t3, t4;
+    size_t h2, l2, h3, l3, h4, l4;
+    if (!de_header(v + at, len - at, &t2, &h2, &l2)) break;
+    const uint8_t* q = v + at + h2;
+    if ((t2 == 6 || t2 == 7) && de_header(q, l2, &t3, &h3, &l3) && t3 == 3 && l3 == 2 &&
+        h3 + l3 < l2 && de_header(q + h3 + l3, l2 - h3 - l3, &t4, &h4, &l4) && t4 == 1) {
+      const uint16_t u = be16(q + h3);
+      const uint8_t* pv = q + h3 + l3 + h4;
+      const unsigned val = l4 == 1 ? pv[0] : l4 == 2 ? be16(pv) : 0;
+      if (u == 0x0100) out += sf(" PSM 0x%04x", val);
+      if (u == 0x0003) out += sf(" channel %u", val);
+    }
+    at += h2 + l2;
+  }
+  return out;
+}
+
+// One service record's attribute list (attribute ID, value, ...): every attribute in the tree,
+// and "Audio Source PSM 0x0019 1.3"-style words for the summary.
+std::string sdp_record(Out& o, const uint8_t* p, size_t n) {
+  std::string cls, extra, name;
+  size_t at = 0;
+  while (at < n) {
+    uint8_t t1, t2;
+    size_t h1, l1, h2, l2;
+    if (!de_header(p + at, n - at, &t1, &h1, &l1) || t1 != 1 || l1 != 2) break;
+    const uint16_t id = be16(p + at + h1);
+    const uint8_t* v = p + at + h1 + l1;
+    const size_t vn = n - at - h1 - l1;
+    if (!de_header(v, vn, &t2, &h2, &l2)) {
+      F(sdp_attr_name(id) ? sdp_attr_name(id) : sf("Attribute 0x%04x", id), "(continues in the next response)", p + at, n - at);
+      break;
+    }
+    const std::string val = de_str(v, h2 + l2);
+    const char* an = sdp_attr_name(id);
+    F(an ? sf("%s (0x%04x)", an, id) : sf("Attribute 0x%04x", id), val, p + at, h1 + l1 + h2 + l2);
+    if (id == 0x0001 && cls.empty()) {
+      // The first class is the most specific one.
+      uint8_t t3;
+      size_t h3, l3;
+      if ((t2 == 6 || t2 == 7) && de_header(v + h2, l2, &t3, &h3, &l3)) cls = de_str(v + h2, h3 + l3);
+    } else if (id == 0x0004 || id == 0x000d) {
+      extra += sdp_protocols(id == 0x000d ? v + h2 : v, id == 0x000d ? l2 : h2 + l2);
+    } else if (id == 0x0009 && (t2 == 6 || t2 == 7)) {
+      // ((profile UUID version) ...): the version of the first profile.
+      uint8_t t3, t4, t5;
+      size_t h3, l3, h4, l4, h5, l5;
+      const uint8_t* q = v + h2;
+      if (de_header(q, l2, &t3, &h3, &l3) && (t3 == 6 || t3 == 7) && de_header(q + h3, l3, &t4, &h4, &l4) &&
+          h4 + l4 < l3 && de_header(q + h3 + h4 + l4, l3 - h4 - l4, &t5, &h5, &l5) && t5 == 1 && l5 == 2) {
+        const uint16_t ver = be16(q + h3 + h4 + l4 + h5);
+        const std::string prof = de_str(q + h3, h4 + l4);
+        extra += (prof == cls ? std::string(" v") : " " + prof + " ") + sf("%u.%u", ver >> 8, ver & 0xff);
+      }
+    } else if (id == 0x0100 && (t2 == 4 || t2 == 8)) {
+      name = " " + val;
+    } else if (id == 0x0200 && t2 == 1 && l2 == 2 && be16(v + h2) >= 0x1001) {
+      extra += sf(" GOEP PSM 0x%04x", be16(v + h2));
+    }
+    at += h1 + l1 + h2 + l2;
+  }
+  return (cls.empty() ? "?" : cls) + name + extra;
+}
+
+// The attribute lists of a Service Attribute Response (one record) or a Service Search
+// Attribute Response (a sequence of records). bytes: the AttributeList(s) byte count; when they
+// do not end in this PDU (a continuation state follows), only the complete records are decoded.
+std::string sdp_attr_lists(Out& o, const uint8_t* p, size_t n, bool search) {
+  uint8_t type = 0;
+  size_t hdr = 0, len = 0;
+  if (n < 2 || ((p[0] >> 3) != 6 && (p[0] >> 3) != 7)) return "";
+  if (!de_header(p, n, &type, &hdr, &len)) {
+    // Split across responses (a continuation state follows): this is the first part when it starts
+    // with the lists' sequence header, and the records complete in it are decoded.
+    if (hdr == 0 || hdr >= n || !search || ((p[hdr] >> 3) != 6 && (p[hdr] >> 3) != 7)) {
+      F("Attribute lists", "(part of the lists the previous responses began)", p, n);
+      return "";
+    }
+    len = n - hdr;
+  }
+  if (!search) {
+    OPEN("Record", "", p, hdr + len);
+    const std::string r = sdp_record(o, p + hdr, len);
+    CLOSE();
+    return r;
+  }
+  std::string s;
+  size_t at = 0;
+  unsigned i = 0;
+  while (at < len) {
+    uint8_t t2;
+    size_t h2, l2;
+    if (!de_header(p + hdr + at, len - at, &t2, &h2, &l2)) {
+      F(sf("Record %u", i), "(continues in the next response)", p + hdr + at, len - at);
+      break;
+    }
+    OPEN(sf("Record %u", i), "", p + hdr + at, h2 + l2);
+    const std::string r = sdp_record(o, p + hdr + at + h2, l2);
+    CLOSE();
+    s += (s.empty() ? "" : "; ") + r;
+    at += h2 + l2;
+    ++i;
+  }
+  return s;
+}
+
 std::string sdp(Out& o, const uint8_t* d, size_t n) {
   static const char* names[] = {"?", "Error Response", "Service Search Request",
                                 "Service Search Response", "Service Attribute Request",
@@ -2305,30 +2608,330 @@ std::string sdp(Out& o, const uint8_t* d, size_t n) {
   F("Parameter length", std::to_string(be16(d + 3)), d + 3, 2);
   const uint8_t* p = d + 5;
   const size_t m = n - 5;
-  if (pdu == 0x01 && m >= 2) {
-    F("Error", sf("0x%04x", be16(p)), p, 2);
-    s += sf(" error 0x%04x", be16(p));
-  } else if ((pdu == 0x02 || pdu == 0x06) && m) {
-    std::string u;
-    de_uuids(p, m, &u);
-    if (!u.empty()) {
-      F("Search pattern", u.substr(1), p, m);
-      s += u;
+  // The continuation state ends every PDU but the error: its length, then that many bytes.
+  auto continuation = [&](size_t at) {
+    if (at < m) {
+      F("Continuation state", p[at] ? sf("%u bytes: ", p[at]) + hexbytes(p + at + 1, std::min<size_t>(p[at], m - at - 1)) : "none",
+        p + at, m - at);
+      if (p[at]) s += pdu & 1 ? " (continues)" : " (continuation)";
     }
-  } else if (pdu == 0x04 && m >= 4) {
-    F("Record handle", sf("0x%08x", be32(p)), p, 4);
-    s += sf(" record 0x%08x", be32(p));
+  };
+  if (pdu == 0x01 && m >= 2) {
+    static const char* errs[] = {"?", "Invalid/unsupported SDP version", "Invalid Service Record Handle",
+                                 "Invalid request syntax", "Invalid PDU Size", "Invalid Continuation State",
+                                 "Insufficient Resources"};
+    const uint16_t e = be16(p);
+    F("Error", sf("0x%04x (%s)", e, e < 7 ? errs[e] : "?"), p, 2);
+    s += sf(" error 0x%04x (%s)", e, e < 7 ? errs[e] : "?");
+  } else if (pdu == 0x02 || pdu == 0x04 || pdu == 0x06) {
+    size_t at = 0;
+    uint8_t type;
+    size_t hdr, len;
+    if (pdu == 0x04 && m >= 4) {
+      F("Record handle", sf("0x%08x", be32(p)), p, 4);
+      s += sf(" record 0x%08x", be32(p));
+      at = 4;
+    } else if (de_header(p, m, &type, &hdr, &len)) {
+      std::string u;
+      de_uuids(p, hdr + len, &u);
+      F("Search pattern", de_str(p, hdr + len), p, hdr + len);
+      s += u;
+      at = hdr + len;
+    }
+    if (pdu != 0x04 && at + 2 <= m) {
+      F("Maximum record count", std::to_string(be16(p + at)), p + at, 2);
+      at += 2;
+    } else if (pdu == 0x04 && at + 2 <= m) {
+      F("Maximum attribute byte count", std::to_string(be16(p + at)), p + at, 2);
+      at += 2;
+    }
+    if (pdu == 0x06 && at + 2 <= m) {
+      F("Maximum attribute byte count", std::to_string(be16(p + at)), p + at, 2);
+      at += 2;
+    }
+    if (pdu != 0x02 && de_header(p + at, m - at, &type, &hdr, &len)) {
+      F("Attribute ID list", de_str(p + at, hdr + len), p + at, hdr + len);
+      at += hdr + len;
+    }
+    continuation(at);
   } else if ((pdu == 0x05 || pdu == 0x07) && m >= 2) {
+    const size_t bc = std::min<size_t>(be16(p), m - 2);
     F("Byte count", std::to_string(be16(p)), p, 2);
     s += sf(" %u bytes", be16(p));
+    const std::string r = sdp_attr_lists(o, p + 2, bc, pdu == 0x07);
+    if (!r.empty()) s += ": " + r;
+    continuation(2 + bc);
   } else if (pdu == 0x03 && m >= 4) {
     F("Total records", std::to_string(be16(p)), p, 2);
     F("Current records", std::to_string(be16(p + 2)), p + 2, 2);
     s += sf(" %u records", be16(p + 2));
+    for (size_t i = 0; i < be16(p + 2) && 4 + 4 * (i + 1) <= m; ++i) {
+      F("Record handle", sf("0x%08x", be32(p + 4 + 4 * i)), p + 4 + 4 * i, 4);
+    }
+    continuation(4 + 4u * be16(p + 2));
   }
-  if (o.detail && m) F("Parameters", hexbytes(p, m, 64), p, m);
   CLOSE();
   return s;
+}
+
+// ---------------------------------------------------------------------------------------------
+// OBEX (IrOBEX 1.5, GOEP): over RFCOMM, or over an L2CAP channel of its own
+
+const char* obex_opcode_name(uint8_t op) {
+  switch (op & 0x7f) {
+    case 0x00: return "Connect";
+    case 0x01: return "Disconnect";
+    case 0x02: return "Put";
+    case 0x03: return "Get";
+    case 0x05: return "SetPath";
+    case 0x06: return "Action";
+    case 0x07: return "Session";
+    case 0x7f: return "Abort";
+    default: return nullptr;
+  }
+}
+
+const char* obex_response_name(uint8_t rc) {
+  switch (rc & 0x7f) {
+    case 0x10: return "Continue";
+    case 0x20: return "Success";
+    case 0x21: return "Created";
+    case 0x22: return "Accepted";
+    case 0x24: return "No Content";
+    case 0x40: return "Bad Request";
+    case 0x41: return "Unauthorized";
+    case 0x43: return "Forbidden";
+    case 0x44: return "Not Found";
+    case 0x45: return "Method Not Allowed";
+    case 0x46: return "Not Acceptable";
+    case 0x48: return "Request Timeout";
+    case 0x49: return "Conflict";
+    case 0x4b: return "Length Required";
+    case 0x4c: return "Precondition Failed";
+    case 0x4d: return "Request Entity Too Large";
+    case 0x4f: return "Unsupported Media Type";
+    case 0x50: return "Internal Server Error";
+    case 0x51: return "Not Implemented";
+    case 0x53: return "Service Unavailable";
+    case 0x60: return "Database Full";
+    case 0x61: return "Database Locked";
+    default: return nullptr;
+  }
+}
+
+const char* obex_header_name(uint8_t hi) {
+  switch (hi) {
+    case 0xc0: return "Count";
+    case 0x01: return "Name";
+    case 0x42: return "Type";
+    case 0xc3: return "Length";
+    case 0x44: return "Time";
+    case 0xc4: return "Time";
+    case 0x05: return "Description";
+    case 0x46: return "Target";
+    case 0x47: return "HTTP";
+    case 0x48: return "Body";
+    case 0x49: return "End of Body";
+    case 0x4a: return "Who";
+    case 0xcb: return "Connection ID";
+    case 0x4c: return "Application Parameters";
+    case 0x4d: return "Authenticate Challenge";
+    case 0x4e: return "Authenticate Response";
+    case 0xcf: return "Creator ID";
+    case 0x50: return "WAN UUID";
+    case 0x51: return "Object Class";
+    case 0x52: return "Session Parameters";
+    case 0x93: return "Session Sequence Number";
+    case 0x94: return "Action ID";
+    case 0x15: return "DestName";
+    case 0xd6: return "Permissions";
+    case 0x97: return "Single Response Mode";
+    case 0x98: return "SRM Parameters";
+    case 0x30: return "Img-Handle";  // BIP's user-defined headers
+    case 0x71: return "Img-Descriptor";
+    default: return nullptr;
+  }
+}
+
+// The services a Target or Who header names (their 128-bit UUIDs).
+const char* obex_target_name(const uint8_t* p, size_t n) {
+  static const struct {
+    uint8_t uuid[16];
+    const char* name;
+  } kTargets[] = {
+      {{0xf9, 0xec, 0x7b, 0xc4, 0x95, 0x3c, 0x11, 0xd2, 0x98, 0x4e, 0x52, 0x54, 0x00, 0xdc, 0x9e, 0x09}, "File Transfer"},
+      {{0x79, 0x61, 0x35, 0xf0, 0xf0, 0xc5, 0x11, 0xd8, 0x09, 0x66, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66}, "Phonebook Access"},
+      {{0xbb, 0x58, 0x2b, 0x40, 0x42, 0x0c, 0x11, 0xdb, 0xb0, 0xde, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66}, "Message Access"},
+      {{0xbb, 0x58, 0x2b, 0x41, 0x42, 0x0c, 0x11, 0xdb, 0xb0, 0xde, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66}, "Message Notification"},
+      {{0x71, 0x63, 0xdd, 0x54, 0x4a, 0x7e, 0x11, 0xe2, 0xb4, 0x7c, 0x00, 0x50, 0xc2, 0x49, 0x00, 0x48}, "BIP Cover Art"},
+  };
+  if (n != 16) return nullptr;
+  for (const auto& t : kTargets)
+    if (std::memcmp(t.uuid, p, 16) == 0) return t.name;
+  return nullptr;
+}
+
+// UTF-16BE text (a Name header), as UTF-8 for the summary; NUL-terminated.
+std::string utf16be(const uint8_t* p, size_t n, size_t max = 80) {
+  std::string s;
+  for (size_t i = 0; i + 1 < n && s.size() < max; i += 2) {
+    uint32_t c = be16(p + i);
+    if (c == 0) break;
+    if (c >= 0xd800 && c < 0xdc00 && i + 3 < n) {
+      c = 0x10000 + ((c - 0xd800) << 10) + (be16(p + i + 2) - 0xdc00);
+      i += 2;
+    }
+    if (c < 0x20) {
+      s.push_back('.');
+    } else if (c < 0x80) {
+      s.push_back(static_cast<char>(c));
+    } else if (c < 0x800) {
+      s.push_back(static_cast<char>(0xc0 | (c >> 6)));
+      s.push_back(static_cast<char>(0x80 | (c & 0x3f)));
+    } else if (c < 0x10000) {
+      s.push_back(static_cast<char>(0xe0 | (c >> 12)));
+      s.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3f)));
+      s.push_back(static_cast<char>(0x80 | (c & 0x3f)));
+    } else {
+      s.push_back(static_cast<char>(0xf0 | (c >> 18)));
+      s.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3f)));
+      s.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3f)));
+      s.push_back(static_cast<char>(0x80 | (c & 0x3f)));
+    }
+  }
+  return s;
+}
+
+// Does this look like the start of an OBEX packet? The opcode or response code is one the spec
+// defines and the packet length covers exactly these bytes (or more, for a packet split over
+// several frames). Request vs. response is not known from the bytes alone: both are tried.
+bool is_obex(const uint8_t* p, size_t n) {
+  if (n < 3) return false;
+  const size_t len = be16(p + 1);
+  if (len < 3 || len < n) return false;
+  if (len > n && n < 64) return false;  // a first fragment is a full frame, not a short tail
+  const bool req = obex_opcode_name(p[0]) && ((p[0] & 0x7f) <= 0x07 || p[0] == 0xff);
+  const bool rsp = (p[0] & 0x80) && obex_response_name(p[0]);
+  return req || rsp;
+}
+
+std::string obex(Out& o, const uint8_t* p, size_t n) {
+  const uint8_t op = p[0];
+  const size_t len = be16(p + 1);
+  // 0x80..0x87 and 0xff are requests (Connect, Disconnect, Put/Get final, SetPath, ...); the
+  // response codes start at 0x90.
+  const bool rsp = (op & 0x7f) >= 0x10 && op != 0xff;
+  std::string s = "OBEX ";
+  if (rsp) {
+    const char* rn = obex_response_name(op);
+    s += sf("%s (0x%02x)", rn ? rn : "?", op);
+  } else {
+    s += obex_opcode_name(op);
+    if ((op & 0x80) && op != 0x80 && op != 0x81 && op != 0x85 && op != 0xff) s += " final";
+  }
+  OPEN("OBEX", s.substr(5), p, n);
+  F(rsp ? "Response code" : "Opcode", sf("0x%02x", op) + (op & 0x80 ? " (final)" : ""), p, 1);
+  F("Packet length", std::to_string(len) + (len > n ? sf(" (%zu here)", n) : ""), p + 1, 2);
+  size_t at = 3;
+  // Connect (request and its response) carries version, flags and the maximum packet length;
+  // SetPath flags and constants. A response does not say what it answers: a 7-byte prefix whose
+  // version is 1.0 is taken to be a Connect response.
+  if ((op == 0x80 || (rsp && n >= 7 && p[3] == 0x10)) && n >= 7) {
+    F("Version", sf("%u.%u", p[3] >> 4, p[3] & 15), p + 3, 1);
+    F("Flags", sf("0x%02x", p[4]), p + 4, 1);
+    F("Maximum packet length", std::to_string(be16(p + 5)), p + 5, 2);
+    s += sf(" max %u", be16(p + 5));
+    at = 7;
+  } else if (op == 0x85 && n >= 5) {
+    F("Flags", sf("0x%02x%s%s", p[3], p[3] & 1 ? " (backup a level)" : "", p[3] & 2 ? " (don't create)" : ""), p + 3, 1);
+    F("Constants", sf("0x%02x", p[4]), p + 4, 1);
+    if (p[3] & 1) s += " up";
+    at = 5;
+  }
+  std::string hs;
+  while (at < n) {
+    const uint8_t hi = p[at];
+    const char* hn = obex_header_name(hi);
+    const std::string name = hn ? hn : sf("Header 0x%02x", hi);
+    size_t hl = 0;
+    std::string val;
+    if ((hi >> 6) == 0 || (hi >> 6) == 1) {  // length-prefixed: Unicode text or bytes
+      if (at + 3 > n) break;
+      hl = be16(p + at + 1);
+      if (hl < 3) break;
+      const uint8_t* v = p + at + 3;
+      const size_t vn = std::min(hl, n - at) - 3;
+      if ((hi >> 6) == 0) {
+        val = "\"" + utf16be(v, vn, 200) + "\"";
+      } else if (hi == 0x46 || hi == 0x4a) {
+        const char* t = obex_target_name(v, vn);
+        val = t ? sf("%s (", t) + hexbytes(v, vn) + ")" : hexbytes(v, vn);
+      } else if (hi == 0x42 || hi == 0x44) {
+        val = quoted(v, vn, 100);
+      } else {
+        val = sf("%zu bytes", hl - 3) + (vn ? ": " + hexbytes(v, vn, 32) : "");
+      }
+      if (hi == 0x01 || hi == 0x42 || hi == 0x46 || hi == 0x4a || hi == 0x15)
+        hs += ", " + name + " " + (hi == 0x46 || hi == 0x4a ? (obex_target_name(v, vn) ? obex_target_name(v, vn) : "?") : val);
+      if (hi == 0x48 || hi == 0x49) hs += sf(", %s %zu bytes", name.c_str(), hl - 3);
+    } else if ((hi >> 6) == 2) {
+      if (at + 2 > n) break;
+      hl = 2;
+      val = sf("0x%02x", p[at + 1]);
+      if (hi == 0x97) val += p[at + 1] == 1 ? " (enabled)" : p[at + 1] == 0 ? " (disabled)" : "";
+      if (hi == 0x97) hs += ", SRM";
+    } else {
+      if (at + 5 > n) break;
+      hl = 5;
+      val = std::to_string(be32(p + at + 1));
+      if (hi == 0xcb) val = sf("0x%08x", be32(p + at + 1));
+      if (hi == 0xc3) hs += ", Length " + val;
+    }
+    F(name, val, p + at, std::min(hl, n - at));
+    at += hl;
+  }
+  if (at < n) F("Data", hexbytes(p + at, n - at, 32), p + at, n - at);
+  CLOSE();
+  return s + hs;
+}
+
+// AT commands and result codes of HFP/HSP (HFP 1.9 4.34): the codec IDs named, the rest as text.
+std::string at_text(Out& o, const uint8_t* p, size_t n) {
+  std::string t = printable(p, n, 120);
+  std::string extra;
+  auto codec = [](int id) {
+    return id == 1 ? std::string("CVSD") : id == 2 ? std::string("mSBC") : id == 3 ? std::string("LC3-SWB") : sf("codec %d", id);
+  };
+  if (t.rfind("+BCS:", 0) == 0 || t.rfind("AT+BCS=", 0) == 0) {
+    extra = codec(std::atoi(t.c_str() + t.find_first_of(":=") + 1));
+  } else if (t.rfind("AT+BAC=", 0) == 0) {
+    for (size_t at = 7; at < t.size();) {
+      extra += (extra.empty() ? "" : ", ") + codec(std::atoi(t.c_str() + at));
+      const size_t c = t.find(',', at);
+      if (c == std::string::npos) break;
+      at = c + 1;
+    }
+  } else if (t.rfind("AT+VGS=", 0) == 0 || t.rfind("AT+VGM=", 0) == 0 || t.rfind("+VGS", 0) == 0 || t.rfind("+VGM", 0) == 0) {
+    const int g = std::atoi(t.c_str() + t.find_first_of(":=") + 1);
+    extra = sf("gain %d/15", g);
+  } else if (t.rfind("AT+BRSF=", 0) == 0 || t.rfind("+BRSF:", 0) == 0) {
+    // HF features in the command, AG features in the result.
+    static const char* hf[] = {"EC/NR", "3-way", "CLI", "voice recognition", "remote volume", "enhanced call status",
+                               "enhanced call control", "codec negotiation", "HF indicators", "eSCO S4", "enhanced voice recognition",
+                               "voice recognition text"};
+    static const char* ag[] = {"3-way", "EC/NR", "voice recognition", "in-band ring", "voice tag", "reject call",
+                               "enhanced call status", "enhanced call control", "extended error codes", "codec negotiation",
+                               "HF indicators", "eSCO S4", "enhanced voice recognition", "voice recognition text"};
+    const bool is_ag = t[0] == '+';
+    const unsigned v = static_cast<unsigned>(std::strtoul(t.c_str() + t.find_first_of(":=") + 1, nullptr, 10));
+    const size_t nb = is_ag ? 14 : 12;
+    std::string f;
+    for (size_t b = 0; b < nb; ++b)
+      if (v & (1u << b)) f += (f.empty() ? "" : ", ") + std::string(is_ag ? ag[b] : hf[b]);
+    F(is_ag ? "AG features" : "HF features", sf("0x%x: ", v) + f, p, n);
+  }
+  F("AT", "\"" + t + "\"" + (extra.empty() ? "" : " (" + extra + ")"), p, n);
+  return t + (extra.empty() ? "" : " (" + extra + ")");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2400,9 +3003,9 @@ std::string rfcomm(Out& o, const uint8_t* d, size_t n) {
     }
   } else if (m) {
     if (mostly_text(p, m)) {
-      const std::string t = printable(p, m, 120);
-      F("Data", "\"" + t + "\"", p, m);
-      s += ": " + t;
+      s += ": " + at_text(o, p, m);
+    } else if (is_obex(p, m)) {
+      s += ": " + obex(o, p, m);
     } else {
       F("Data", hexbytes(p, m, 64), p, m);
       s += sf(", %zu bytes", m);
@@ -2430,28 +3033,58 @@ const char* avdtp_category(uint8_t c) {
   }
 }
 
+// A service capability list (GET_CAPABILITIES, SET_CONFIGURATION, ...): each category in the
+// tree, the codec with its fields. Returns the summary's part: the codec and the notable extras.
 std::string avdtp_caps(Out& o, const uint8_t* p, size_t n) {
-  std::string codec;
+  std::string codec, extra;
   while (n >= 2) {
     const uint8_t cat = p[0];
     const size_t cl = p[1];
-    if (cl > n - 2) break;
+    if (cl > n - 2) {
+      F(avdtp_category(cat), sf("truncated (%zu of %zu bytes)", n - 2, cl), p, n);
+      break;
+    }
+    const uint8_t* v = p + 2;
     if (cat == 7) {
       CodecInfo ci;
-      if (decode_media_codec(p + 2, cl, &ci)) {
+      if (decode_media_codec(v, cl, &ci)) {
         codec = ci.name + (ci.config.empty() ? "" : " " + ci.config);
-        F("Media Codec", codec, p, 2 + cl);
+        OPEN("Media Codec", codec, p, 2 + cl);
+        static const char* media[] = {"audio", "video", "multimedia"};
+        F("Media type", sf("0x%x (%s)", v[0] >> 4, (v[0] >> 4) < 3 ? media[v[0] >> 4] : "?"), v, 1);
+        F("Codec type", sf("0x%02x (%s)", v[1], v[1] == 0xff ? "vendor" : ci.name.c_str()), v + 1, 1);
+        for (const auto& f : ci.fields) F(f.first, f.second, v + 2, cl - 2);
+        CLOSE();
       } else {
-        F("Media Codec", hexbytes(p + 2, cl), p, 2 + cl);
+        F("Media Codec", hexbytes(v, cl), p, 2 + cl);
       }
+    } else if (cat == 4 && cl >= 2) {  // Content Protection: type, then type-specific data
+      const uint16_t cp = le16(v);
+      const char* cn = cp == 0x0001 ? "DTCP" : cp == 0x0002 ? "SCMS-T" : "?";
+      F("Content Protection", sf("0x%04x (%s)", cp, cn) + (cl > 2 ? " " + hexbytes(v + 2, cl - 2) : ""), p, 2 + cl);
+      extra += std::string(", ") + cn;
+    } else if (cat == 3 && cl >= 3) {
+      F("Recovery", sf("type 0x%02x%s, MRWS %u, MNMP %u", v[0], v[0] == 1 ? " (RFC 2733)" : "", v[1], v[2]), p, 2 + cl);
+      extra += ", recovery";
+    } else if (cat == 5 && cl >= 1) {
+      F("Header Compression", sf("0x%02x:%s%s%s", v[0], v[0] & 0x80 ? " back channel" : "",
+                                 v[0] & 0x40 ? " media" : "", v[0] & 0x20 ? " recovery" : ""), p, 2 + cl);
     } else {
-      F(avdtp_category(cat), cl ? hexbytes(p + 2, cl) : "", p, 2 + cl);
-      if (cat == 8) codec += codec.empty() ? "delay reporting" : ", delay reporting";
+      F(avdtp_category(cat) + std::string(cat >= 1 && cat <= 8 ? "" : sf(" 0x%02x", cat)),
+        cl ? hexbytes(v, cl) : "", p, 2 + cl);
+      if (cat == 6) extra += ", multiplexing";
+      if (cat == 8) extra += ", delay reporting";
     }
     p += 2 + cl;
     n -= 2 + cl;
   }
-  return codec;
+  if (codec.empty() && !extra.empty()) return extra.substr(2);
+  return codec + extra;
+}
+
+std::string avdtp_error_str(uint8_t e) {
+  const char* nm = avdtp_error_name(e);
+  return nm ? sf("%s (0x%02x)", nm, e) : sf("0x%02x", e);
 }
 
 std::string avdtp(Out& o, const uint8_t* d, size_t n) {
@@ -2525,7 +3158,8 @@ std::string avdtp(Out& o, const uint8_t* d, size_t n) {
     if (signal == 0x01) {
       s += ":";
       for (size_t i = 0; i + 1 < m; i += 2) {
-        const std::string sep = sf("%u %s%s%s", p[i] >> 2, (p[i + 1] >> 4) == 0 ? "audio " : "",
+        static const char* media[] = {"audio ", "video ", "multimedia "};
+        const std::string sep = sf("%u %s%s%s", p[i] >> 2, (p[i + 1] >> 4) < 3 ? media[p[i + 1] >> 4] : "",
                                    (p[i + 1] & 0x08) ? "sink" : "source", (p[i] & 0x02) ? " (in use)" : "");
         F(sf("SEP %u", p[i] >> 2), sep, p + i, 2);
         s += (i ? ", " : " ") + sep;
@@ -2535,15 +3169,21 @@ std::string avdtp(Out& o, const uint8_t* d, size_t n) {
       if (!c.empty()) s += ": " + c;
     }
   } else if (mtype == 3) {
-    const bool second = signal == 0x03 || signal == 0x05 || signal == 0x07 || signal == 0x09;
-    const size_t at = second ? 1 : 0;
-    if (second && m >= 1) F(signal == 0x07 || signal == 0x09 ? "ACP SEID" : "Category", std::to_string(signal == 0x07 || signal == 0x09 ? p[0] >> 2 : p[0]), p, 1);
+    // SET_CONFIGURATION and RECONFIGURE name the category that failed first, START and SUSPEND
+    // the stream endpoint.
+    const bool cat_first = signal == 0x03 || signal == 0x05;
+    const bool seid_first = signal == 0x07 || signal == 0x09;
+    const size_t at = cat_first || seid_first ? 1 : 0;
+    if (cat_first && m >= 1) F("Service category", sf("0x%02x (%s)", p[0], avdtp_category(p[0])), p, 1);
+    if (seid_first && m >= 1) F("ACP SEID", std::to_string(p[0] >> 2), p, 1);
     if (m > at) {
-      F("Error", sf("0x%02x", p[at]), p + at, 1);
-      s += sf(" (error 0x%02x)", p[at]);
+      F("Error", avdtp_error_str(p[at]), p + at, 1);
+      s += ": " + avdtp_error_str(p[at]);
+      if (cat_first && m >= 1) s += sf(" (%s)", avdtp_category(p[0]));
+      if (seid_first && m >= 1) s += sf(" (acp %u)", p[0] >> 2);
     }
   }
-  if (o.detail && m && mtype != 0 && signal != 0x01 && signal != 0x02 && signal != 0x0c) {
+  if (o.detail && m && mtype != 0 && signal != 0x01 && signal != 0x02 && signal != 0x04 && signal != 0x0c) {
     F("Parameters", hexbytes(p, m, 64), p, m);
   }
   CLOSE();
@@ -2651,6 +3291,593 @@ const char* avrcp_event_name(uint8_t e) {
   }
 }
 
+// The status a rejected command or a browsing response carries (AVRCP 1.6 6.15.3).
+const char* avrcp_status_name(uint8_t s) {
+  switch (s) {
+    case 0x00: return "Invalid Command";
+    case 0x01: return "Invalid Parameter";
+    case 0x02: return "Parameter Content Error";
+    case 0x03: return "Internal Error";
+    case 0x04: return "Success";
+    case 0x05: return "UID Changed";
+    case 0x07: return "Invalid Direction";
+    case 0x08: return "Not a Directory";
+    case 0x09: return "Does Not Exist";
+    case 0x0a: return "Invalid Scope";
+    case 0x0b: return "Range Out of Bounds";
+    case 0x0c: return "Folder Item is not Playable";
+    case 0x0d: return "Media in Use";
+    case 0x0e: return "Now Playing List Full";
+    case 0x0f: return "Search Not Supported";
+    case 0x10: return "Search in Progress";
+    case 0x11: return "Invalid Player Id";
+    case 0x12: return "Player Not Browsable";
+    case 0x13: return "Player Not Addressed";
+    case 0x14: return "No valid Search Results";
+    case 0x15: return "No available players";
+    case 0x16: return "Addressed Player Changed";
+    default: return "?";
+  }
+}
+
+std::string avrcp_status_str(uint8_t s) { return sf("%s (0x%02x)", avrcp_status_name(s), s); }
+
+// Media attributes (AVRCP 1.6 26 Appendix E).
+const char* avrcp_attr_name(uint32_t a) {
+  switch (a) {
+    case 0x1: return "Title";
+    case 0x2: return "Artist";
+    case 0x3: return "Album";
+    case 0x4: return "Track number";
+    case 0x5: return "Total tracks";
+    case 0x6: return "Genre";
+    case 0x7: return "Playing time";
+    case 0x8: return "Cover art handle";
+    default: return nullptr;
+  }
+}
+
+std::string avrcp_attr_str(uint32_t a) {
+  const char* nm = avrcp_attr_name(a);
+  return nm ? std::string(nm) : sf("attribute 0x%08x", a);
+}
+
+// Player application settings (AVRCP 1.6 Appendix F) and their values.
+const char* avrcp_setting_name(uint8_t a) {
+  switch (a) {
+    case 0x01: return "Equalizer";
+    case 0x02: return "Repeat";
+    case 0x03: return "Shuffle";
+    case 0x04: return "Scan";
+    default: return nullptr;
+  }
+}
+
+std::string avrcp_setting_str(uint8_t a) {
+  const char* nm = avrcp_setting_name(a);
+  return nm ? std::string(nm) : sf("setting 0x%02x", a);
+}
+
+std::string avrcp_setting_value(uint8_t a, uint8_t v) {
+  static const char* eq[] = {"off", "on"};
+  static const char* repeat[] = {"off", "single track", "all tracks", "group"};
+  static const char* shuffle[] = {"off", "all tracks", "group"};
+  if (a == 1 && v >= 1 && v <= 2) return eq[v - 1];
+  if (a == 2 && v >= 1 && v <= 4) return repeat[v - 1];
+  if ((a == 3 || a == 4) && v >= 1 && v <= 3) return shuffle[v - 1];
+  return sf("0x%02x", v);
+}
+
+const char* play_status_name(uint8_t s) {
+  switch (s) {
+    case 0x00: return "stopped";
+    case 0x01: return "playing";
+    case 0x02: return "paused";
+    case 0x03: return "forward seek";
+    case 0x04: return "reverse seek";
+    case 0xff: return "error";
+    default: return "?";
+  }
+}
+
+const char* avrcp_scope_name(uint8_t s) {
+  switch (s) {
+    case 0: return "Media Player List";
+    case 1: return "Media Player Virtual Filesystem";
+    case 2: return "Search";
+    case 3: return "Now Playing";
+    default: return "?";
+  }
+}
+
+// A position or length in ms as m:ss.mmm; 0xffffffff is "not supported" (or no track selected).
+std::string ms_str(uint32_t ms) {
+  if (ms == 0xffffffff) return "n/a";
+  return sf("%u:%02u.%03u", ms / 60000, (ms / 1000) % 60, ms % 1000);
+}
+
+std::string uid_str(const uint8_t* p) {
+  const uint64_t v = (static_cast<uint64_t>(be32(p)) << 32) | be32(p + 4);
+  if (v == 0) return "0";
+  if (v == ~0ull) return "0xffffffffffffffff";
+  return sf("0x%016llx", static_cast<unsigned long long>(v));
+}
+
+// A list of media attribute values (GetElementAttributes and GetItemAttributes responses, a media
+// element item): ID (4), character set (2), length (2), value. The summary names the attributes
+// people look for; the tree has all of them. Stops at the end of the bytes (a fragmented response
+// continues in the next packet). Returns the bytes used.
+size_t avrcp_attr_values(Out& o, const uint8_t* p, size_t n, unsigned count, std::string* sum) {
+  size_t at = 0;
+  for (unsigned i = 0; i < count && at + 8 <= n; ++i) {
+    const uint32_t id = be32(p + at);
+    const uint16_t cs = be16(p + at + 4);
+    const size_t len = be16(p + at + 6);
+    const uint8_t* v = p + at + 8;
+    const size_t vn = std::min(len, n - at - 8);
+    const char* nm = avrcp_attr_name(id);
+    std::string val;
+    if (id == 0x7 && vn == len && len && len < 12) {  // playing time: ms as decimal text
+      const std::string t = printable(v, vn);
+      const uint32_t ms = static_cast<uint32_t>(std::strtoul(t.c_str(), nullptr, 10));
+      val = t + " ms (" + ms_str(ms) + ")";
+      if (!sum->empty()) *sum += ", ";
+      *sum += "Time " + ms_str(ms).substr(0, ms_str(ms).size() - 4);
+    } else if ((id == 0x4 || id == 0x5) && vn == len) {  // track number, total: decimal text
+      val = printable(v, vn, 12);
+      if (vn) {
+        if (!sum->empty()) *sum += ", ";
+        *sum += (id == 4 ? "Track " : "Tracks ") + val;
+      }
+    } else {
+      val = quoted(v, vn, 200) + (vn < len ? sf(" (%zu of %zu bytes)", vn, len) : "");
+      if (nm && id <= 0x6 && (vn || id == 0x1)) {
+        if (!sum->empty()) *sum += ", ";
+        static const char* shortn[] = {"", "Title", "Artist", "Album", "Track", "Tracks", "Genre"};
+        *sum += shortn[id] + std::string(" ") + (id == 4 || id == 5 ? printable(v, vn, 12) : quoted(v, vn));
+      }
+    }
+    if (cs != 0x006a) val += sf(" (charset 0x%04x)", cs);
+    F(nm ? nm : sf("Attribute 0x%08x", id), val, p + at, 8 + vn);
+    at += 8 + vn;
+  }
+  return at;
+}
+
+// A RegisterNotification response's event data: what changed, as the summary's words.
+std::string avrcp_event_data(Out& o, uint8_t ev, const uint8_t* v, size_t n) {
+  switch (ev) {
+    case 0x01:
+      if (n < 1) break;
+      F("Play status", sf("0x%02x (%s)", v[0], play_status_name(v[0])), v, 1);
+      return play_status_name(v[0]);
+    case 0x02:
+      if (n < 8) break;
+      F("Identifier", uid_str(v) + (be32(v) == 0 && be32(v + 4) == 0 ? " (a track is selected)"
+                                    : be32(v) == 0xffffffff && be32(v + 4) == 0xffffffff ? " (no track selected)" : ""), v, 8);
+      return be32(v) == 0xffffffff && be32(v + 4) == 0xffffffff ? "no track" : "track " + uid_str(v);
+    case 0x05:
+      if (n < 4) break;
+      F("Position", sf("%u ms (", be32(v)) + ms_str(be32(v)) + ")", v, 4);
+      return ms_str(be32(v));
+    case 0x06: {
+      if (n < 1) break;
+      static const char* batt[] = {"normal", "warning", "critical", "external", "full charge"};
+      const char* b = v[0] < 5 ? batt[v[0]] : "?";
+      F("Battery status", sf("0x%02x (%s)", v[0], b), v, 1);
+      return b;
+    }
+    case 0x07: {
+      if (n < 1) break;
+      static const char* sys[] = {"power on", "power off", "unplugged"};
+      const char* st = v[0] < 3 ? sys[v[0]] : "?";
+      F("System status", sf("0x%02x (%s)", v[0], st), v, 1);
+      return st;
+    }
+    case 0x08: {
+      if (n < 1) break;
+      std::string s;
+      F("Number of settings", std::to_string(v[0]), v, 1);
+      for (size_t i = 0; i < v[0] && 2 + 2 * i <= n - 1; ++i) {
+        const uint8_t a = v[1 + 2 * i], val = v[2 + 2 * i];
+        F(avrcp_setting_str(a), avrcp_setting_value(a, val), v + 1 + 2 * i, 2);
+        s += (s.empty() ? "" : ", ") + avrcp_setting_str(a) + " " + avrcp_setting_value(a, val);
+      }
+      return s;
+    }
+    case 0x0b:
+      if (n < 4) break;
+      F("Player ID", std::to_string(be16(v)), v, 2);
+      F("UID counter", std::to_string(be16(v + 2)), v + 2, 2);
+      return sf("player %u, uid counter %u", be16(v), be16(v + 2));
+    case 0x0c:
+      if (n < 2) break;
+      F("UID counter", std::to_string(be16(v)), v, 2);
+      return sf("uid counter %u", be16(v));
+    case 0x0d:
+      if (n < 1) break;
+      F("Volume", sf("%u (%u%%)", v[0] & 0x7f, ((v[0] & 0x7f) * 100 + 63) / 127), v, 1);
+      return sf("%u (%u%%)", v[0] & 0x7f, ((v[0] & 0x7f) * 100 + 63) / 127);
+    default:
+      break;
+  }
+  return "";
+}
+
+// The parameters of a vendor-dependent (AV/C control channel) AVRCP PDU. Returns the summary's
+// detail, without the PDU name.
+std::string avrcp_vendor_params(Out& o, uint8_t pdu, bool rsp, uint8_t ctype, const uint8_t* v, size_t n) {
+  if (rsp && ctype == 0xa && n >= 1) {  // REJECTED: an error status, whatever the PDU
+    F("Status", avrcp_status_str(v[0]), v, 1);
+    return avrcp_status_str(v[0]);
+  }
+  std::string s;
+  switch (pdu) {
+    case 0x10:  // GetCapabilities
+      if (n < 1) break;
+      F("Capability", sf("0x%02x (%s)", v[0], v[0] == 2 ? "company IDs" : v[0] == 3 ? "events supported" : "?"), v, 1);
+      s = v[0] == 2 ? "company IDs" : v[0] == 3 ? "events" : sf("capability 0x%02x", v[0]);
+      if (rsp && n >= 2) {
+        F("Count", std::to_string(v[1]), v + 1, 1);
+        const size_t w = v[0] == 2 ? 3 : 1;
+        for (size_t i = 0; i < v[1] && 2 + (i + 1) * w <= n; ++i) {
+          const uint8_t* q = v + 2 + i * w;
+          if (w == 3) {
+            const uint32_t c = (q[0] << 16) | (q[1] << 8) | q[2];
+            F("Company ID", sf("0x%06x%s", c, c == 0x001958 ? " (Bluetooth SIG)" : ""), q, 3);
+            s += sf(" 0x%06x", c);
+          } else {
+            F("Event", sf("0x%02x (%s)", q[0], avrcp_event_name(q[0])), q, 1);
+            s += std::string(" ") + avrcp_event_name(q[0]);
+          }
+        }
+      }
+      break;
+    case 0x11:  // ListPlayerApplicationSettingAttributes
+      if (!rsp || n < 1) break;
+      F("Count", std::to_string(v[0]), v, 1);
+      for (size_t i = 0; i < v[0] && 1 + i < n; ++i) {
+        F("Setting", sf("0x%02x (%s)", v[1 + i], avrcp_setting_str(v[1 + i]).c_str()), v + 1 + i, 1);
+        s += (s.empty() ? "" : ", ") + avrcp_setting_str(v[1 + i]);
+      }
+      break;
+    case 0x12:  // ListPlayerApplicationSettingValues
+      if (n < 1) break;
+      if (!rsp) {
+        F("Setting", sf("0x%02x (%s)", v[0], avrcp_setting_str(v[0]).c_str()), v, 1);
+        s = avrcp_setting_str(v[0]);
+      } else {
+        F("Count", std::to_string(v[0]), v, 1);
+        s = "values";
+        for (size_t i = 0; i < v[0] && 1 + i < n; ++i) {
+          F("Value", sf("0x%02x", v[1 + i]), v + 1 + i, 1);
+          s += sf(" %u", v[1 + i]);
+        }
+      }
+      break;
+    case 0x13:  // GetCurrentPlayerApplicationSettingValue
+    case 0x14:  // SetPlayerApplicationSettingValue
+      if (n < 1 || (pdu == 0x14 && rsp)) break;
+      F("Count", std::to_string(v[0]), v, 1);
+      if (pdu == 0x13 && !rsp) {
+        for (size_t i = 0; i < v[0] && 1 + i < n; ++i) {
+          F("Setting", sf("0x%02x (%s)", v[1 + i], avrcp_setting_str(v[1 + i]).c_str()), v + 1 + i, 1);
+          s += (s.empty() ? "" : ", ") + avrcp_setting_str(v[1 + i]);
+        }
+      } else {
+        for (size_t i = 0; i < v[0] && 3 + 2 * i <= n; ++i) {
+          const uint8_t a = v[1 + 2 * i], val = v[2 + 2 * i];
+          F(avrcp_setting_str(a), avrcp_setting_value(a, val), v + 1 + 2 * i, 2);
+          s += (s.empty() ? "" : ", ") + avrcp_setting_str(a) + " " + avrcp_setting_value(a, val);
+        }
+      }
+      break;
+    case 0x15:  // GetPlayerApplicationSettingAttributeText
+    case 0x16: {  // GetPlayerApplicationSettingValueText
+      if (n < 1) break;
+      if (!rsp) {
+        size_t at = 0;
+        if (pdu == 0x16) {
+          F("Setting", sf("0x%02x (%s)", v[0], avrcp_setting_str(v[0]).c_str()), v, 1);
+          s = avrcp_setting_str(v[0]);
+          at = 1;
+        }
+        if (at < n) {
+          F("Count", std::to_string(v[at]), v + at, 1);
+          std::string ids;
+          for (size_t i = 0; i < v[at] && at + 1 + i < n; ++i) ids += sf(" 0x%02x", v[at + 1 + i]);
+          if (!ids.empty()) F(pdu == 0x15 ? "Settings" : "Values", ids.substr(1), v + at + 1, n - at - 1);
+        }
+        break;
+      }
+      F("Count", std::to_string(v[0]), v, 1);
+      size_t at = 1;
+      for (size_t i = 0; i < v[0] && at + 4 <= n; ++i) {
+        const size_t len = std::min<size_t>(v[at + 3], n - at - 4);
+        const std::string t = quoted(v + at + 4, len);
+        F(sf("0x%02x", v[at]), t, v + at, 4 + len);
+        s += (s.empty() ? "" : ", ") + sf("0x%02x ", v[at]) + t;
+        at += 4 + len;
+      }
+      break;
+    }
+    case 0x17:  // InformDisplayableCharacterSet
+      if (n < 1) break;
+      F("Count", std::to_string(v[0]), v, 1);
+      for (size_t i = 0; i < v[0] && 3 + 2 * i <= n; ++i) {
+        const uint16_t cs = be16(v + 1 + 2 * i);
+        F("Character set", sf("0x%04x%s", cs, cs == 0x006a ? " (UTF-8)" : ""), v + 1 + 2 * i, 2);
+        s += (s.empty() ? "" : ", ") + (cs == 0x006a ? std::string("UTF-8") : sf("0x%04x", cs));
+      }
+      break;
+    case 0x18: {  // InformBatteryStatusOfCT
+      if (n < 1 || rsp) break;
+      static const char* batt[] = {"normal", "warning", "critical", "external", "full charge"};
+      s = v[0] < 5 ? batt[v[0]] : "?";
+      F("Battery status", sf("0x%02x (%s)", v[0], s.c_str()), v, 1);
+      break;
+    }
+    case 0x20:  // GetElementAttributes
+      if (!rsp) {
+        if (n < 9) break;
+        F("Identifier", uid_str(v) + (be32(v) == 0 && be32(v + 4) == 0 ? " (playing)" : ""), v, 8);
+        F("Count", v[8] ? std::to_string(v[8]) : "0 (all)", v + 8, 1);
+        for (size_t i = 0; i < v[8] && 9 + 4 * (i + 1) <= n; ++i) {
+          const uint32_t a = be32(v + 9 + 4 * i);
+          F("Attribute", sf("0x%08x (%s)", a, avrcp_attr_str(a).c_str()), v + 9 + 4 * i, 4);
+          s += (s.empty() ? "" : ", ") + avrcp_attr_str(a);
+        }
+        if (!v[8]) s = "all";
+      } else {
+        if (n < 1) break;
+        F("Count", std::to_string(v[0]), v, 1);
+        avrcp_attr_values(o, v + 1, n - 1, v[0], &s);
+      }
+      break;
+    case 0x30:  // GetPlayStatus
+      if (!rsp || n < 9) break;
+      F("Song length", sf("%u ms (", be32(v)) + ms_str(be32(v)) + ")", v, 4);
+      F("Song position", sf("%u ms (", be32(v + 4)) + ms_str(be32(v + 4)) + ")", v + 4, 4);
+      F("Play status", sf("0x%02x (%s)", v[8], play_status_name(v[8])), v + 8, 1);
+      s = std::string(play_status_name(v[8])) + " " + ms_str(be32(v + 4)) + " / " + ms_str(be32(v));
+      break;
+    case 0x31:  // RegisterNotification
+      if (n < 1) break;
+      F("Event", sf("0x%02x (%s)", v[0], avrcp_event_name(v[0])), v, 1);
+      s = avrcp_event_name(v[0]);
+      if (!rsp) {
+        if (n >= 5 && v[0] == 0x05) F("Playback interval", sf("%u s", be32(v + 1)), v + 1, 4);
+        else if (n >= 5) F("Interval", std::to_string(be32(v + 1)), v + 1, 4);
+      } else {
+        const std::string d = avrcp_event_data(o, v[0], v + 1, n - 1);
+        if (!d.empty()) s += ": " + d;
+      }
+      break;
+    case 0x40:  // RequestContinuingResponse
+    case 0x41:  // AbortContinuingResponse
+      if (n < 1) break;
+      F("Continuing PDU", sf("0x%02x (%s)", v[0], avrcp_pdu_name(v[0]) ? avrcp_pdu_name(v[0]) : "?"), v, 1);
+      s = avrcp_pdu_name(v[0]) ? avrcp_pdu_name(v[0]) : sf("0x%02x", v[0]);
+      break;
+    case 0x50:  // SetAbsoluteVolume
+      if (n < 1) break;
+      F("Volume", sf("%u (%u%%)", v[0] & 0x7f, ((v[0] & 0x7f) * 100 + 63) / 127), v, 1);
+      s = sf("%u (%u%%)", v[0] & 0x7f, ((v[0] & 0x7f) * 100 + 63) / 127);
+      break;
+    case 0x60:  // SetAddressedPlayer
+      if (!rsp && n >= 2) {
+        F("Player ID", std::to_string(be16(v)), v, 2);
+        s = sf("player %u", be16(v));
+      } else if (rsp && n >= 1) {
+        F("Status", avrcp_status_str(v[0]), v, 1);
+        s = avrcp_status_name(v[0]);
+      }
+      break;
+    case 0x74:  // PlayItem
+    case 0x90:  // AddToNowPlaying
+      if (!rsp && n >= 11) {
+        F("Scope", sf("0x%02x (%s)", v[0], avrcp_scope_name(v[0])), v, 1);
+        F("UID", uid_str(v + 1), v + 1, 8);
+        F("UID counter", std::to_string(be16(v + 9)), v + 9, 2);
+        s = std::string(avrcp_scope_name(v[0])) + " " + uid_str(v + 1);
+      } else if (rsp && n >= 1) {
+        F("Status", avrcp_status_str(v[0]), v, 1);
+        s = avrcp_status_name(v[0]);
+      }
+      break;
+    default:
+      break;
+  }
+  return s;
+}
+
+// One item of a GetFolderItems response; returns its name for the summary.
+std::string avrcp_item(Out& o, const uint8_t* p, size_t n) {
+  const uint8_t type = p[0];
+  const uint8_t* v = p + 3;
+  const size_t vn = n - 3;
+  std::string name;
+  if (type == 0x01 && vn >= 28) {  // media player
+    const size_t len = std::min<size_t>(be16(v + 26), vn - 28);
+    name = quoted(v + 28, len);
+    OPEN("Media player", name, p, n);
+    F("Player ID", std::to_string(be16(v)), v, 2);
+    F("Major type", sf("0x%02x%s%s%s%s", v[2], v[2] & 1 ? " audio" : "", v[2] & 2 ? " video" : "",
+                       v[2] & 4 ? " broadcasting audio" : "", v[2] & 8 ? " broadcasting video" : ""), v + 2, 1);
+    F("Subtype", sf("0x%08x%s%s", be32(v + 3), be32(v + 3) & 1 ? " audio book" : "", be32(v + 3) & 2 ? " podcast" : ""), v + 3, 4);
+    F("Play status", sf("0x%02x (%s)", v[7], play_status_name(v[7])), v + 7, 1);
+    F("Features", hexbytes(v + 8, 16), v + 8, 16);
+    F("Character set", sf("0x%04x", be16(v + 24)), v + 24, 2);
+    F("Name", name, v + 28, len);
+    name = "player " + name;
+  } else if (type == 0x02 && vn >= 14) {  // folder
+    static const char* ftypes[] = {"mixed", "titles", "albums", "artists", "genres", "playlists", "years"};
+    const size_t len = std::min<size_t>(be16(v + 12), vn - 14);
+    name = quoted(v + 14, len);
+    OPEN("Folder", name, p, n);
+    F("UID", uid_str(v), v, 8);
+    F("Folder type", sf("0x%02x (%s)", v[8], v[8] < 7 ? ftypes[v[8]] : "?"), v + 8, 1);
+    F("Playable", v[9] ? "yes" : "no", v + 9, 1);
+    F("Character set", sf("0x%04x", be16(v + 10)), v + 10, 2);
+    F("Name", name, v + 14, len);
+    name = "folder " + name;
+  } else if (type == 0x03 && vn >= 13) {  // media element
+    const size_t len = std::min<size_t>(be16(v + 11), vn - 13);
+    name = quoted(v + 13, len);
+    OPEN("Media element", name, p, n);
+    F("UID", uid_str(v), v, 8);
+    F("Media type", v[8] == 0 ? "audio" : v[8] == 1 ? "video" : sf("0x%02x", v[8]), v + 8, 1);
+    F("Character set", sf("0x%04x", be16(v + 9)), v + 9, 2);
+    F("Name", name, v + 13, len);
+    if (13 + len < vn) {
+      const uint8_t* a = v + 13 + len;
+      std::string unused;
+      OPEN("Attributes", std::to_string(a[0]), a, vn - 13 - len);
+      avrcp_attr_values(o, a + 1, vn - 14 - len, a[0], &unused);
+      CLOSE();
+    }
+  } else {
+    OPEN("Item", sf("type 0x%02x", type), p, n);
+    if (vn) F("Data", hexbytes(v, vn, 64), v, vn);
+  }
+  CLOSE();
+  return name;
+}
+
+// A browsing channel PDU (AVRCP 1.6 6.10.4, 6.11).
+std::string avrcp_browsing(Out& o, const uint8_t* p, size_t m, bool rsp) {
+  const uint8_t pdu = p[0];
+  const char* nm = avrcp_pdu_name(pdu);
+  OPEN("AVRCP browsing", nm ? nm : "?", p, m);
+  F("PDU", sf("0x%02x (%s)", pdu, nm ? nm : "?"), p, 1);
+  F("Parameter length", std::to_string(be16(p + 1)), p + 1, 2);
+  const uint8_t* v = p + 3;
+  const size_t n = std::min<size_t>(m - 3, be16(p + 1));
+  std::string s = std::string(nm ? nm : sf("PDU 0x%02x", pdu).c_str()) + (rsp ? " rsp" : "");
+  std::string d;
+  if (pdu == 0xa0 && n >= 1) {
+    F("Reason", avrcp_status_str(v[0]), v, 1);
+    d = avrcp_status_name(v[0]);
+  } else if (rsp && n >= 1 && v[0] != 0x04) {  // every response starts with its status
+    F("Status", avrcp_status_str(v[0]), v, 1);
+    d = avrcp_status_name(v[0]);
+  } else if (!rsp) {
+    switch (pdu) {
+      case 0x70:  // SetBrowsedPlayer
+        if (n < 2) break;
+        F("Player ID", std::to_string(be16(v)), v, 2);
+        d = sf("player %u", be16(v));
+        break;
+      case 0x71:  // GetFolderItems
+        if (n < 10) break;
+        F("Scope", sf("0x%02x (%s)", v[0], avrcp_scope_name(v[0])), v, 1);
+        F("Start item", std::to_string(be32(v + 1)), v + 1, 4);
+        F("End item", std::to_string(be32(v + 5)), v + 5, 4);
+        F("Attribute count", v[9] == 0 ? "0 (all)" : v[9] == 0xff ? "0xff (none)" : std::to_string(v[9]), v + 9, 1);
+        if (v[9] != 0xff) {
+          for (size_t i = 0; i < v[9] && 10 + 4 * (i + 1) <= n; ++i) {
+            const uint32_t a = be32(v + 10 + 4 * i);
+            F("Attribute", sf("0x%08x (%s)", a, avrcp_attr_str(a).c_str()), v + 10 + 4 * i, 4);
+          }
+        }
+        d = sf("%s %u-%u", avrcp_scope_name(v[0]), be32(v + 1), be32(v + 5));
+        break;
+      case 0x72:  // ChangePath
+        if (n < 11) break;
+        F("UID counter", std::to_string(be16(v)), v, 2);
+        F("Direction", v[2] == 0 ? "0 (folder up)" : v[2] == 1 ? "1 (folder down)" : sf("0x%02x", v[2]), v + 2, 1);
+        F("Folder UID", uid_str(v + 3), v + 3, 8);
+        d = v[2] == 0 ? "up" : "down " + uid_str(v + 3);
+        break;
+      case 0x73:  // GetItemAttributes
+        if (n < 12) break;
+        F("Scope", sf("0x%02x (%s)", v[0], avrcp_scope_name(v[0])), v, 1);
+        F("UID", uid_str(v + 1), v + 1, 8);
+        F("UID counter", std::to_string(be16(v + 9)), v + 9, 2);
+        F("Count", v[11] ? std::to_string(v[11]) : "0 (all)", v + 11, 1);
+        for (size_t i = 0; i < v[11] && 12 + 4 * (i + 1) <= n; ++i) {
+          const uint32_t a = be32(v + 12 + 4 * i);
+          F("Attribute", sf("0x%08x (%s)", a, avrcp_attr_str(a).c_str()), v + 12 + 4 * i, 4);
+        }
+        d = std::string(avrcp_scope_name(v[0])) + " " + uid_str(v + 1);
+        break;
+      case 0x75:  // GetTotalNumberOfItems
+        if (n < 1) break;
+        F("Scope", sf("0x%02x (%s)", v[0], avrcp_scope_name(v[0])), v, 1);
+        d = avrcp_scope_name(v[0]);
+        break;
+      case 0x80:  // Search
+        if (n < 4) break;
+        F("Character set", sf("0x%04x", be16(v)), v, 2);
+        F("Search string", quoted(v + 4, std::min<size_t>(be16(v + 2), n - 4), 200), v + 4, n - 4);
+        d = quoted(v + 4, std::min<size_t>(be16(v + 2), n - 4));
+        break;
+      default:
+        break;
+    }
+  } else if (n >= 1) {
+    F("Status", avrcp_status_str(v[0]), v, 1);
+    switch (pdu) {
+      case 0x70:  // SetBrowsedPlayer: the browsed folder's path
+        if (n < 10) break;
+        F("UID counter", std::to_string(be16(v + 1)), v + 1, 2);
+        F("Number of items", std::to_string(be32(v + 3)), v + 3, 4);
+        F("Character set", sf("0x%04x", be16(v + 7)), v + 7, 2);
+        F("Folder depth", std::to_string(v[9]), v + 9, 1);
+        {
+          std::string path;
+          size_t at = 10;
+          for (unsigned i = 0; i < v[9] && at + 2 <= n; ++i) {
+            const size_t len = std::min<size_t>(be16(v + at), n - at - 2);
+            F("Folder", quoted(v + at + 2, len), v + at, 2 + len);
+            path += "/" + printable(v + at + 2, len, 40);
+            at += 2 + len;
+          }
+          d = sf("%u items in ", be32(v + 3)) + (path.empty() ? "/" : path);
+        }
+        break;
+      case 0x71:  // GetFolderItems
+        if (n < 5) break;
+        F("UID counter", std::to_string(be16(v + 1)), v + 1, 2);
+        F("Number of items", std::to_string(be16(v + 3)), v + 3, 2);
+        d = sf("%u items", be16(v + 3));
+        {
+          size_t at = 5;
+          for (unsigned i = 0; i < be16(v + 3) && at + 3 <= n; ++i) {
+            const size_t len = std::min<size_t>(be16(v + at + 1), n - at - 3);
+            const std::string nm2 = avrcp_item(o, v + at, 3 + len);
+            if (i < 4 && !nm2.empty()) d += (i ? ", " : ": ") + nm2;
+            else if (i == 4) d += ", …";
+            at += 3 + len;
+          }
+        }
+        break;
+      case 0x72:  // ChangePath
+        if (n < 5) break;
+        F("Number of items", std::to_string(be32(v + 1)), v + 1, 4);
+        d = sf("%u items", be32(v + 1));
+        break;
+      case 0x73:  // GetItemAttributes
+        if (n < 2) break;
+        F("Count", std::to_string(v[1]), v + 1, 1);
+        avrcp_attr_values(o, v + 2, n - 2, v[1], &d);
+        break;
+      case 0x75:  // GetTotalNumberOfItems
+      case 0x80:  // Search
+        if (n < 7) break;
+        F("UID counter", std::to_string(be16(v + 1)), v + 1, 2);
+        F("Number of items", std::to_string(be32(v + 3)), v + 3, 4);
+        d = sf("%u items", be32(v + 3));
+        break;
+      default:
+        break;
+    }
+  }
+  if (o.detail && pdu != 0x71 && pdu != 0x73 && pdu != 0x70 && n) F("Parameters", hexbytes(v, n, 64), v, n);
+  CLOSE();
+  return d.empty() ? s : s + ": " + d;
+}
+
 const char* avc_ctype_name(uint8_t c) {
   switch (c) {
     case 0x0: return "CONTROL";
@@ -2669,8 +3896,37 @@ const char* avc_ctype_name(uint8_t c) {
   }
 }
 
+// AV/C panel subunit operations (AV/C Panel Subunit 9.4, AVRCP 1.6 Table 9.21).
 const char* passthrough_name(uint8_t op) {
+  static const char* digits[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+  if (op >= 0x20 && op <= 0x29) return digits[op - 0x20];
   switch (op) {
+    case 0x00: return "SELECT";
+    case 0x01: return "UP";
+    case 0x02: return "DOWN";
+    case 0x03: return "LEFT";
+    case 0x04: return "RIGHT";
+    case 0x05: return "RIGHT_UP";
+    case 0x06: return "RIGHT_DOWN";
+    case 0x07: return "LEFT_UP";
+    case 0x08: return "LEFT_DOWN";
+    case 0x09: return "ROOT_MENU";
+    case 0x0a: return "SETUP_MENU";
+    case 0x0b: return "CONTENTS_MENU";
+    case 0x0c: return "FAVORITE_MENU";
+    case 0x0d: return "EXIT";
+    case 0x2a: return "DOT";
+    case 0x2b: return "ENTER";
+    case 0x2c: return "CLEAR";
+    case 0x30: return "CHANNEL_UP";
+    case 0x31: return "CHANNEL_DOWN";
+    case 0x32: return "PREVIOUS_CHANNEL";
+    case 0x33: return "SOUND_SELECT";
+    case 0x34: return "INPUT_SELECT";
+    case 0x35: return "DISPLAY_INFORMATION";
+    case 0x36: return "HELP";
+    case 0x37: return "PAGE_UP";
+    case 0x38: return "PAGE_DOWN";
     case 0x40: return "POWER";
     case 0x41: return "VOLUME_UP";
     case 0x42: return "VOLUME_DOWN";
@@ -2678,80 +3934,114 @@ const char* passthrough_name(uint8_t op) {
     case 0x44: return "PLAY";
     case 0x45: return "STOP";
     case 0x46: return "PAUSE";
+    case 0x47: return "RECORD";
     case 0x48: return "REWIND";
     case 0x49: return "FAST_FORWARD";
+    case 0x4a: return "EJECT";
     case 0x4b: return "FORWARD";
     case 0x4c: return "BACKWARD";
+    case 0x50: return "ANGLE";
+    case 0x51: return "SUBPICTURE";
+    case 0x71: return "F1";
+    case 0x72: return "F2";
+    case 0x73: return "F3";
+    case 0x74: return "F4";
+    case 0x75: return "F5";
     case 0x7e: return "VENDOR_UNIQUE";
     default: return nullptr;
   }
 }
 
-std::string avctp(Out& o, const uint8_t* d, size_t n, bool browsing) {
-  if (n < 3) return "AVCTP (truncated)";
-  const uint8_t label = d[0] >> 4, ptype = (d[0] >> 2) & 3;
-  const bool rsp = d[0] & 0x02;
-  OPEN("AVCTP", "", d, 3);
-  F("Header", sf("label %u, %s, %s%s", label, ptype ? "fragmented" : "single",
-                 rsp ? "response" : "command", d[0] & 1 ? ", invalid PID" : ""), d, 1);
-  if (ptype != 0) {
-    CLOSE();
-    return sf("AVCTP fragment (label %u)", label);
-  }
-  F("PID", sf("0x%04x%s", be16(d + 1), be16(d + 1) == 0x110e ? " (A/V Remote Control)" : ""), d + 1, 2);
-  CLOSE();
-  const uint8_t* p = d + 3;
-  const size_t m = n - 3;
-  if (browsing) {
-    if (m < 3) return "AVRCP browsing (truncated)";
-    const char* nm = avrcp_pdu_name(p[0]);
-    OPEN("AVRCP browsing", nm ? nm : "?", p, m);
-    F("PDU", sf("0x%02x (%s)", p[0], nm ? nm : "?"), p, 1);
-    F("Parameter length", std::to_string(be16(p + 1)), p + 1, 2);
-    if (m > 3) F("Parameters", hexbytes(p + 3, m - 3, 64), p + 3, m - 3);
-    CLOSE();
-    return std::string(nm ? nm : sf("PDU 0x%02x", p[0]).c_str()) + (rsp ? " rsp" : "");
-  }
-  if (m < 3) return sf("AVCTP %s (label %u)", rsp ? "response" : "command", label);
+// An AV/C frame on the control channel: PASS THROUGH, vendor-dependent AVRCP PDUs, unit info.
+std::string avc(Out& o, const uint8_t* p, size_t m, bool rsp) {
   const uint8_t ctype = p[0] & 0x0f, opcode = p[2];
   OPEN("AV/C", avc_ctype_name(ctype), p, m);
   F("Type", sf("0x%x (%s)", ctype, avc_ctype_name(ctype)), p, 1);
-  F("Subunit", sf("type 0x%02x, id %u", p[1] >> 3, p[1] & 7), p + 1, 1);
+  F("Subunit", sf("type 0x%02x%s, id %u", p[1] >> 3, (p[1] >> 3) == 0x09 ? " (panel)" : (p[1] >> 3) == 0x1f ? " (unit)" : "",
+                  p[1] & 7), p + 1, 1);
   std::string s;
   if (opcode == 0x7c && m >= 5) {  // PASS THROUGH
     const uint8_t op = p[3] & 0x7f;
     const char* on = passthrough_name(op);
     F("Opcode", "PASS THROUGH", p + 2, 1);
     F("Operation", sf("0x%02x (%s) %s", op, on ? on : "?", p[3] & 0x80 ? "released" : "pressed"), p + 3, 1);
+    F("Operand length", std::to_string(p[4]), p + 4, 1);
     s = sf("PASS THROUGH %s %s %s", on ? on : sf("0x%02x", op).c_str(), p[3] & 0x80 ? "released" : "pressed",
            avc_ctype_name(ctype));
+    if (op == 0x7e && m >= 10) {  // vendor unique: company, then the vendor's operation
+      const uint32_t c = (p[5] << 16) | (p[6] << 8) | p[7];
+      const uint16_t vop = be16(p + 8);
+      const char* vn = c == 0x001958 && vop == 0 ? "NEXT_GROUP" : c == 0x001958 && vop == 1 ? "PREV_GROUP" : nullptr;
+      F("Company", sf("0x%06x%s", c, c == 0x001958 ? " (Bluetooth SIG)" : ""), p + 5, 3);
+      F("Vendor operation", sf("0x%04x%s%s", vop, vn ? " " : "", vn ? vn : ""), p + 8, 2);
+      s = sf("PASS THROUGH %s %s %s", vn ? vn : sf("vendor 0x%04x", vop).c_str(), p[3] & 0x80 ? "released" : "pressed",
+             avc_ctype_name(ctype));
+    }
   } else if (opcode == 0x00 && m >= 10) {  // VENDOR DEPENDENT: company, PDU, packet type, length
-    const uint8_t pdu = p[6];
+    const uint8_t pdu = p[6], pt = p[7] & 3;
     const char* pn = avrcp_pdu_name(pdu);
+    static const char* pts[] = {"single", "start", "continue", "end"};
     F("Opcode", "VENDOR DEPENDENT", p + 2, 1);
-    F("Company", sf("0x%06x", (p[3] << 16) | (p[4] << 8) | p[5]), p + 3, 3);
+    const uint32_t company = (p[3] << 16) | (p[4] << 8) | p[5];
+    F("Company", sf("0x%06x%s", company, company == 0x001958 ? " (Bluetooth SIG)" : ""), p + 3, 3);
     F("PDU", sf("0x%02x (%s)", pdu, pn ? pn : "?"), p + 6, 1);
+    F("Packet type", sf("%u (%s)", pt, pts[pt]), p + 7, 1);
     F("Parameter length", std::to_string(be16(p + 8)), p + 8, 2);
     s = std::string(pn ? pn : sf("PDU 0x%02x", pdu).c_str()) + " " + avc_ctype_name(ctype);
     const uint8_t* v = p + 10;
-    const size_t vn = m - 10;
-    if (pdu == 0x31 && vn >= 1) {
-      F("Event", avrcp_event_name(v[0]), v, 1);
-      s += std::string(" (") + avrcp_event_name(v[0]) + ")";
-      if (v[0] == 0x0d && vn >= 2 && rsp) s += sf(" volume %u", v[1] & 0x7f);
-    } else if (pdu == 0x50 && vn >= 1) {
-      F("Volume", sf("%u (%u%%)", v[0] & 0x7f, (v[0] & 0x7f) * 100 / 127), v, 1);
-      s += sf(" %u", v[0] & 0x7f);
-    } else if (pdu == 0x10 && vn >= 1) {
-      F("Capability", v[0] == 2 ? "company IDs" : v[0] == 3 ? "events supported" : "?", v, 1);
+    const size_t vn = std::min<size_t>(m - 10, be16(p + 8));
+    if (pt == 2 || pt == 3) {
+      // The rest of a response too long for one AV/C frame: no header of its own to decode from.
+      if (vn) F("Continuation", hexbytes(v, vn, 64), v, vn);
+      s += sf(" (%s, %zu bytes)", pts[pt], vn);
+    } else {
+      const std::string d = avrcp_vendor_params(o, pdu, rsp, ctype, v, vn);
+      if (pt == 1) s += " (start)";
+      // "RegisterNotification CHANGED VOLUME_CHANGED: 87 (69%)": the event reads as part of the name.
+      if (!d.empty()) s += (pdu == 0x31 && ctype != 0xa ? " " : ": ") + d;
+      if (o.detail && vn && pdu != 0x20 && pdu != 0x31) F("Parameters", hexbytes(v, vn, 64), v, vn);
     }
-    if (vn) F("Parameters", hexbytes(v, vn, 64), v, vn);
   } else {
     F("Opcode", sf("0x%02x%s", opcode, opcode == 0x30 ? " (UNIT INFO)" : opcode == 0x31 ? " (SUBUNIT INFO)" : ""), p + 2, 1);
     s = sf("%s %s", opcode == 0x30 ? "UNIT INFO" : opcode == 0x31 ? "SUBUNIT INFO" : "AV/C", avc_ctype_name(ctype));
     if (m > 3) F("Operands", hexbytes(p + 3, m - 3), p + 3, m - 3);
   }
   CLOSE();
+  return s;
+}
+
+std::string avctp(Out& o, const uint8_t* d, size_t n, bool browsing) {
+  if (n < 1) return "AVCTP (truncated)";
+  const uint8_t label = d[0] >> 4, ptype = (d[0] >> 2) & 3;
+  const bool rsp = d[0] & 0x02;
+  static const char* ptypes[] = {"single", "start", "continue", "end"};
+  // A start packet has the number of packets before the PID; continue and end packets only the
+  // first byte (AVCTP 6.1.2).
+  const size_t hdr = ptype == 0 ? 3 : ptype == 1 ? 4 : 1;
+  if (n < hdr) return "AVCTP (truncated)";
+  OPEN("AVCTP", "", d, hdr);
+  F("Header", sf("label %u, %s packet, %s%s", label, ptypes[ptype], rsp ? "response" : "command",
+                 d[0] & 1 ? ", invalid PID" : ""), d, 1);
+  if (ptype == 1) F("Number of packets", std::to_string(d[1]), d + 1, 1);
+  if (ptype <= 1) {
+    const uint16_t pid = be16(d + hdr - 2);
+    F("PID", sf("0x%04x%s", pid, pid == 0x110e ? " (A/V Remote Control)" : pid == 0x110c ? " (A/V Remote Control Target)" : ""),
+      d + hdr - 2, 2);
+  }
+  CLOSE();
+  const uint8_t* p = d + hdr;
+  const size_t m = n - hdr;
+  if (ptype >= 2) {
+    if (m) F("Data", hexbytes(p, m, 64), p, m);
+    return sf("AVCTP %s packet (label %u), %zu bytes", ptypes[ptype], label, m);
+  }
+  if (browsing) {
+    if (m < 3) return "AVRCP browsing (truncated)";
+    return avrcp_browsing(o, p, m, rsp);
+  }
+  if (m < 3) return sf("AVCTP %s (label %u)", rsp ? "response" : "command", label);
+  std::string s = avc(o, p, m, rsp);
+  if (ptype == 1) s += sf(" [AVCTP start of %u]", d[1]);
   return s;
 }
 
@@ -2819,6 +4109,33 @@ bool ertm(Out& o, const uint8_t* frame, size_t len, const uint8_t** sdu, size_t*
   return true;
 }
 
+// A channel whose protocol the index does not know. GOEP 2.0 profiles (PBAP, MAP, OPP, FTP) run
+// OBEX straight over L2CAP in Enhanced Retransmission Mode: recognised by a good FCS, then by the
+// OBEX packet inside. frame: the basic header; q/m: the payload (all of it: l2len == m).
+std::string l2cap_other(Out& o, const uint8_t* frame, const uint8_t* q, size_t m, size_t l2len, uint16_t cid) {
+  // The CRC costs a pass over the packet, and the text filter summarizes every packet: it is only
+  // computed for short frames (S-frames, last segments) and for ones that would carry OBEX.
+  const bool maybe_ertm = m == l2len && m >= 4 &&
+                          (m <= 64 || is_obex(q + 2, m - 4) || (m >= 8 && is_obex(q + 4, m - 6)));
+  if (maybe_ertm && l2cap_fcs(frame, 4 + m - 2) == le16(frame + 4 + m - 2)) {
+    const uint8_t* sdu = nullptr;
+    size_t sdu_len = 0;
+    std::string s;
+    if (!ertm(o, frame, 4 + m, &sdu, &sdu_len, &s)) {
+      // The first segment of a long SDU (a large Get response): its OBEX header is here.
+      const uint16_t c = le16(q);
+      if (!(c & 1) && ((c >> 14) & 3) == 1 && m >= 8 && is_obex(q + 4, m - 6)) return obex(o, q + 4, m - 6) + " [SDU start]";
+      return s;
+    }
+    if (is_obex(sdu, sdu_len)) return obex(o, sdu, sdu_len);
+    F("Data", hexbytes(sdu, sdu_len, 64), sdu, sdu_len);
+    return sf("CID 0x%04x, ERTM I-frame, %zu bytes", cid, sdu_len);
+  }
+  if (is_obex(q, m)) return obex(o, q, m);
+  F("Data", hexbytes(q, m, 64), q, m);
+  return sf("CID 0x%04x, %zu bytes", cid, m);
+}
+
 void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
   if (len < 4) {
     o.summary = "ACL (truncated)";
@@ -2869,8 +4186,7 @@ void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
         s = l2cap_sig(o, q, m, cid == kCidLeSignaling);
         CLOSE();
       } else {
-        F("Data", hexbytes(q, m, 64), q, m);
-        s = sf("CID 0x%04x, %zu bytes", cid, m);
+        s = l2cap_other(o, p, q, m, l2len, cid);
       }
       break;
     case kProtoAtt: s = att(o, q, m); break;
@@ -2897,8 +4213,7 @@ void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
       s = m ? sf("HID header 0x%02x, %zu bytes", q[0], m) : "HID";
       break;
     default:
-      F("Data", hexbytes(q, m, 64), q, m);
-      s = sf("CID 0x%04x, %zu bytes", cid, m);
+      s = l2cap_other(o, p, q, m, l2len, cid);
       break;
   }
   o.summary = s + frag;

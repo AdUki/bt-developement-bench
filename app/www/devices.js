@@ -8,7 +8,10 @@ const devOpen = new Set();  // addresses whose details are expanded
 
 function btApply(b) {
   btState = b;
-  if (currentTab === 'devices') renderDevices();
+  if (currentTab === 'devices') {
+    refreshDevAudio(b);
+    renderDevices();
+  }
   if (typeof leOnBt === 'function') leOnBt(b);
 }
 
@@ -38,7 +41,7 @@ function renderScanOptions(b) {
 
 function renderAdapter(b) {
   const a = b.adapter;
-  setText($('ad-msg'), b.error || '');
+  setText($('ad-msg'), b.error || (b.stale ? 'BlueZ is slow to answer: the devices are as it last listed them.' : ''));
   setText($('ad-name'), a ? `${a.name} ${a.address}` : '');
   const on = !!(b.available && a);
   ['ad-powered', 'ad-discoverable', 'ad-pairable', 'ad-disc-timeout', 'ad-alias', 'ag-policy', 'ag-cap',
@@ -91,8 +94,11 @@ function bearersHTML(d) {
       x.bonded ? 'bonded' : x.paired ? 'paired' : 'not paired',
       x.connectable === true ? 'connectable' : x.connectable === false ? 'not connectable' : ''].filter(Boolean).join(' · ');
     const act = x.connected ? 'disconnect' : 'connect';
-    return `<span class="b-name">${BEARER_NAME[k]}</span><span class="small">${st}</span>
-      <button class="small-btn" data-act="bearer-${act}" data-bearer="${k}" data-addr="${a}"${d.busy ? ' disabled' : ''}>${x.connected ? 'Disconnect' : 'Connect'} ${BEARER_NAME[k]}</button>`;
+    // A connect or disconnect of this transport alone says so here, not under the device's row.
+    const here = d.busy && d.busy_on === k;
+    const err = !d.busy && d.error && d.error_on === k ? `<span class="b-err small bad-text">${esc(d.error)}</span>` : '';
+    return `<span class="b-name">${BEARER_NAME[k]}</span><span class="small">${here ? `<span class="warn-text"><span class="spin"></span>${esc(d.busy)} ${BEARER_NAME[k]}…</span>` : st}</span>
+      <button class="small-btn" data-act="bearer-${act}" data-bearer="${k}" data-addr="${a}"${d.busy ? ' disabled' : ''}>${x.connected ? 'Disconnect' : 'Connect'} ${BEARER_NAME[k]}</button>${err}`;
   }).join('');
   const pref = d.preferred_bearer != null ? `<label class="row small">Connect first on
       <select class="dev-pref" data-addr="${a}">${[['last-used', 'the last used'], ['last-seen', 'the last seen'], ['bredr', 'BR/EDR'], ['le', 'LE']]
@@ -132,6 +138,65 @@ function pollLinks() {
 }
 const tag = (text, cls) => `<span class="tag ${cls || ''}">${esc(text)}</span>`;
 
+// The profiles a connected device has up: what BlueZ holds for it (media transports, AVRCP, HID,
+// PAN, GATT, battery) and, from PipeWire, the audio profile its card is on — the only place HFP
+// shows, since PipeWire's own HFP does not go through BlueZ.
+const devAudio = {};  // address → PipeWire's device ({active: {kind, codec, name}}), from /audio/devices
+let devAudioKey = '';
+function refreshDevAudio(b) {
+  const key = b.devices.filter(d => d.connected).map(d => d.address + (d.profiles || []).map(p => p.id + p.detail).join()).join();
+  if (key === devAudioKey) return;
+  devAudioKey = key;
+  clearTimeout(refreshDevAudio.t);
+  // A moment after the change: PipeWire makes the device's card once BlueZ has its transports.
+  refreshDevAudio.t = setTimeout(() => api('/audio/devices').then(r => {
+    for (const k in devAudio) delete devAudio[k];
+    (r.devices || []).forEach(x => { if (x.address) devAudio[x.address.toUpperCase()] = x; });
+    if (currentTab === 'devices') renderDevices();
+  }).catch(() => {}), 1200);
+}
+
+const PROFILE_KIND = {a2dp: 'A2DP', 'a2dp-duplex': 'A2DP duplex', gateway: 'A2DP / HFP gateway', headset: 'HFP', bap: 'LE Audio'};
+function deviceProfiles(d) {
+  const ps = (d.profiles || []).map(p => ({name: p.name, detail: p.detail, state: p.state}));
+  const pw = devAudio[d.address];
+  const act = pw && pw.active;
+  // HFP, and an audio profile PipeWire chose that BlueZ has no transport for (yet).
+  if (act && act.kind && act.kind !== 'off' && act.kind !== 'other' && !(act.kind !== 'headset' && ps.some(p => p.name === 'A2DP' || p.name === 'LE Audio')))
+    ps.push({name: PROFILE_KIND[act.kind] || act.kind, detail: [act.codec, 'PipeWire: ' + act.name].filter(Boolean).join(' · '), state: 'connected'});
+  return ps;
+}
+// In the row: each profile once (a duplex link has two A2DP transports), lit while it streams.
+function profileTags(d) {
+  if (!d.connected) return '';
+  const by = new Map();
+  deviceProfiles(d).filter(p => p.name !== 'Battery').forEach(p => {
+    const x = by.get(p.name) || {on: false, details: []};
+    x.on = x.on || p.state === 'active';
+    if (p.detail) x.details.push(p.detail);
+    by.set(p.name, x);
+  });
+  return [...by].map(([name, x]) => `<span class="tag${x.on ? ' good' : ''}" title="${esc(x.details.join('; '))}">${esc(name)}</span>`).join('');
+}
+// A profile's UUID (busy_on, error_on: a bearer is "le" or "bredr").
+const isUuid = s => !!s && s.length > 5;
+function profilesHTML(d) {
+  const ps = d.connected ? deviceProfiles(d) : [];
+  const busy = d.busy && isUuid(d.busy_on) ? `<div class="small warn-text"><span class="spin"></span>${esc(d.busy)} ${esc(uuidLabel(d, d.busy_on))}…</div>` : '';
+  const err = !d.busy && d.error && isUuid(d.error_on) ? `<div class="small bad-text">${esc(uuidLabel(d, d.error_on))}: ${esc(d.error)}</div>` : '';
+  if (!d.connected) return busy + err;
+  if (!ps.length && !busy && !err) return `<div class="small muted">${d.services_resolved ? 'No profile connected.' : 'Resolving services…'}</div>`;
+  return `<div class="profiles">${ps.map(p => `<span class="pr-name">${esc(p.name)}</span>
+    <span class="small">${esc(p.detail || '')}</span>
+    <span>${p.state && p.state !== 'connected' ? pill(p.state === 'active' ? 'streaming' : p.state, p.state === 'active' ? 'good' : p.state === 'pending' ? 'warn' : '') : ''}</span>`).join('')}</div>${busy}${err}`;
+}
+// A profile's UUID by its name where the device lists it.
+const uuidLabel = (d, u) => {
+  const full = v => v.length === 4 ? '0000' + v + '-0000-1000-8000-00805f9b34fb' : v;
+  const x = d.uuids.find(v => full(v.uuid.toLowerCase()) === u.toLowerCase());
+  return x ? x.name : u;
+};
+
 // One row a device: a state LED, its name with what it is, and the one action its state calls for
 // (pair, connect or disconnect). The rest — trust, remove, profiles, a PIN, where else to take it —
 // waits behind a click on the row, since it is wanted for one device at a time.
@@ -152,8 +217,9 @@ function deviceRow(d) {
     `<span class="mono">${a}</span>`,
     kind ? `<span>${esc(kind)}</span>` : '',
     d.connected ? '<span class="good-text">connected</span>' : d.paired ? `<span>${d.bonded ? 'bonded' : 'paired'}</span>` : '',
-    d.rssi != null ? `<span title="RSSI when last seen in a scan">${sigBars(d.rssi)} ${d.rssi} dBm</span>` : '',
+    d.rssi != null && !d.connected ? `<span title="RSSI when last seen in a scan">${sigBars(d.rssi)} ${d.rssi} dBm</span>` : '',
     bearerChips(d),
+    profileTags(d),
   ].join('');
   let body = '';
   if (open) {
@@ -184,6 +250,7 @@ function deviceRow(d) {
     body = `<div class="rw-body">
       ${tags ? `<div class="row wrap" style="margin-bottom:.5rem">${tags}</div>` : ''}
       ${bearersHTML(d)}
+      ${d.connected || isUuid(d.busy_on) || isUuid(d.error_on) ? `<h4 class="rw-h">Profiles</h4>${profilesHTML(d)}` : ''}
       <div class="kv">${kv}</div>
       <div class="acts">
         ${d.trusted ? btn('untrust', 'Untrust') : btn('trust', 'Trust')}
@@ -211,8 +278,9 @@ function deviceRow(d) {
       <div class="rw-title"><b>${esc(d.alias || d.address)}</b><span class="rw-sub">${sub}</span></div>
       <div class="rw-acts">${main}<span class="chev"></span></div>
     </div>
-    ${busy ? `<div class="rw-note warn-text">${esc(d.busy)}…</div>` : ''}
-    ${d.error ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
+    ${busy && !d.busy_on ? `<div class="rw-note warn-text"><span class="spin"></span>${esc(d.busy)}…</div>` : ''}
+    ${busy && d.busy_on && !open ? `<div class="rw-note warn-text"><span class="spin"></span>${esc(d.busy)} ${esc(BEARER_NAME[d.busy_on] || uuidLabel(d, d.busy_on))}…</div>` : ''}
+    ${d.error && (!d.error_on || !open) ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
     ${body}
   </div>`;
 }
@@ -257,7 +325,7 @@ function deviceAction(addr, act, el) {
   let req;
   if (act === 'goto-gatt') return openOnDevice('le/explore', 'gx-dev', addr);
   if (act === 'goto-obex') return openOnDevice('obex/sessions', 'ob-dev', addr);
-  if (act === 'goto-avdtp') return openOnDevice('audio/stack', 'av-dev', addr);
+  if (act === 'goto-avdtp') return openOnDevice('audio/bt', 'av-dev', addr);
   if (act === 'toggle') {
     if (devOpen.has(addr)) devOpen.delete(addr); else devOpen.add(addr);
     renderDevices();

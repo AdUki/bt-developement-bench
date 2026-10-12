@@ -77,7 +77,7 @@ struct BtScanFilter {
   int rssi = 0;
   bool has_pathloss = false;
   int pathloss = 0;
-  bool duplicate_data = true;
+  bool duplicate_data = false;
   std::vector<std::string> uuids;
   bool has_pattern = false;  // "" is a pattern too: it matches every device
   std::string pattern;
@@ -153,6 +153,11 @@ class BtManager {
   // now, written when PUT /api/bluetooth changes one, and applied to an adapter whenever BlueZ
   // shows it (at boot, after bluetoothd restarts). Before start(); "" keeps nothing.
   void set_state_file(std::string path);
+  // On a board: an adapter whose alias was never set here (PUT /api/bluetooth) is called by the
+  // board's hostname (btbench-257bfc), so two boards in range are told apart by what others see;
+  // an alias set to "" goes back to that. Off on a PC, whose adapters are the desktop's.
+  // Before start().
+  void set_default_alias(bool on);
   void add_user(BusUser* u);  // before start()
   // Value changes of GATT characteristics (notifications, and reads), on the bus thread.
   using NotifyFn = std::function<void(const std::string& path, const std::vector<uint8_t>& value)>;
@@ -224,7 +229,10 @@ class BtManager {
   struct Pending;  // an agent request held open while the operator decides
   struct DevState {
     std::string busy;
+    // What the busy call is about: a bearer (le, bredr) or a profile's UUID; empty for the device.
+    std::string busy_on;
     std::string error;
+    std::string error_on;  // the busy_on of the call that failed
     // The last Disconnected signal of one of its bearers: {bearer, reason, message, at_ms}.
     nlohmann::json last_disconnect;
   };
@@ -235,6 +243,7 @@ class BtManager {
   void drain_commands();
   void tick();
   void refresh();
+  void refreshed(sd_bus_message* reply);
   void register_agent();
   void unregister_agent();
   void start_scan();
@@ -249,9 +258,11 @@ class BtManager {
 
   // iface: nullptr for Device1; a bearer's (Bearer.LE1, .BREDR1) for its Connect and Disconnect.
   void call_device(const std::string& path, const char* method, const std::string& uuid,
-                   const char* busy, unsigned timeout_s, const char* iface = nullptr);
-  void on_reply(const std::string& path, const std::string& method, sd_bus_message* reply);
-  void set_device_state(const std::string& path, std::string busy, std::string error);
+                   const char* busy, unsigned timeout_s, const char* iface = nullptr,
+                   const std::string& busy_on = {});
+  void on_reply(const std::string& path, const std::string& method, const std::string& iface, sd_bus_message* reply);
+  void set_device_state(const std::string& path, std::string busy, std::string error,
+                        std::string busy_on = {});
 
   int agent_call(sd_bus_message* m, const char* member);
   void hold_request(sd_bus_message* m, BtAsk ask, const std::string& kind,
@@ -298,6 +309,7 @@ class BtManager {
 
   // Set before start(), read on the bus thread.
   std::string want_adapter_;
+  bool default_alias_ = false;
   std::vector<BusUser*> users_;
   NotifyFn notify_;
   std::function<void(bool)> change_fn_;
@@ -312,6 +324,14 @@ class BtManager {
   bool dirty_ = true;       // something changed: re-read soon
   bool scan_dirty_ = false;  // only advertising chatter (RSSI, adv data): re-read at the slower pace
   uint64_t last_refresh_ns_ = 0;
+  uint64_t refresh_took_ns_ = 0;     // how long the last read took
+  bool refresh_in_flight_ = false;
+  // The adapter's UUIDs as last read, when they last changed and when the adapter came up: the
+  // reconnect at start waits for the audio stack's endpoints (reconnect_tick).
+  std::string adapter_uuids_;
+  uint64_t adapter_uuids_at_ns_ = 0;
+  uint64_t adapter_up_ns_ = 0;  // a GetManagedObjects is out: a slow BlueZ is not asked again
+  bool stale_ = false;              // (m_) the last read went unanswered: the tree shown is older
   std::string ready_adapter_;  // the adapter BusUsers were last told is ready
   std::set<std::string> restored_;  // adapter paths given their kept settings since BlueZ showed them
   uint64_t reconnect_at_ns_ = 0;  // the next try at reconnect_ (0: none due)

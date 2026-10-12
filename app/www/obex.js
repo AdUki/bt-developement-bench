@@ -56,6 +56,7 @@ function renderObex(s) {
   const outOpts = s.files.out.map(f => ({value: f.name, label: f.name}));
   document.querySelectorAll('#ob-sessions select.ob-outfile').forEach(sel =>
     fillSelect(sel, outOpts.length ? outOpts : [{value: '', label: '(upload a file to out/ first)'}]));
+  renderShare();
 }
 
 const refreshObex = () => api('/obex').then(renderObex).catch(e => setText($('ob-msg'), e.message));
@@ -250,11 +251,235 @@ function setupObex() {
   $('ob-up-shared').onchange = e => uploadTo('shared', e.target);
 }
 
+
+// ---------------------------------------------------------------- Share
+
+// Files the way a phone shares them: choose files, choose a device, Send — the board uploads them
+// to out/, opens an Object Push session to the device and pushes them one by one, with the
+// device's answer (it may ask its user first) and the progress of each. Received files are a
+// gallery of in/, images as thumbnails; a push that waits for an answer is asked here.
+const sh = {picked: [], dev: lsGet('btbench.sh.dev') || '', jobs: [], busy: false};
+
+const SH_ICON = {
+  phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
+  computer: 'M4 5h16v10H4zM2 19h20',
+  audio: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z',
+  other: 'M7 7l10 10-5 5V2l5 5L7 17',
+  file: 'M6 2h8l4 4v16H6zM14 2v4h4',
+  image: 'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5M15 9h.01',
+  contact: 'M5 4h14v16H5zM12 11a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM8 17a4 4 0 018 0',
+  music: 'M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z',
+  video: 'M4 6h12v12H4zM16 10l5-3v10l-5-3',
+  check: 'M5 12l5 5 9-10',
+};
+const shSvg = d => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+const shKind = n => /\.(jpe?g|png|gif|webp|bmp)$/i.test(n) ? 'image' : /\.vcf$/i.test(n) ? 'contact'
+  : /\.(mp3|m4a|aac|flac|wav|ogg|opus)$/i.test(n) ? 'music' : /\.(mp4|mkv|mov|3gp|webm)$/i.test(n) ? 'video' : 'file';
+const shDevIcon = d => /phone/.test(d.icon || '') || d.class_major === 'phone' ? 'phone'
+  : /computer/.test(d.icon || '') || d.class_major === 'computer' ? 'computer' : /audio|headset|headphone/.test(d.icon || '') ? 'audio' : 'other';
+// How long ago, by the board's clock (now: its now_ms; one without a network may be hours off).
+const shAgo = (ms, now) => {
+  const s = Math.max(0, ((now || Date.now()) - ms) / 1000);
+  return s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + ' min ago' : s < 86400 ? Math.floor(s / 3600) + ' h ago' : Math.floor(s / 86400) + ' d ago';
+};
+// A device takes files when it offers Object Push (0x1105).
+const shCanTake = d => d.uuids.some(u => u.uuid === '1105');
+
+function renderShareDevices() {
+  const b = btState;
+  const devs = b ? b.devices.filter(d => d.paired) : [];
+  if (!devs.some(d => d.address === sh.dev && shCanTake(d))) sh.dev = (devs.find(d => d.connected && shCanTake(d)) || devs.find(shCanTake) || {}).address || '';
+  setHTML($('sh-devs'), devs.length ? devs.map(d => {
+    const ok = shCanTake(d);
+    return `<button class="sh-dev${d.address === sh.dev ? ' on' : ''}" data-addr="${d.address}"${ok ? '' : ' disabled title="It offers no Object Push: it cannot receive files"'}>
+      <span class="sh-dev-i">${shSvg(SH_ICON[shDevIcon(d)])}</span><b>${esc(d.alias)}</b>
+      <span class="small muted">${ok ? (d.connected ? 'connected' : 'paired') : 'takes no files'}</span></button>`;
+  }).join('') : '<div class="small muted">No paired device. Pair one in Devices, then it shows here.</div>');
+  $('sh-send').disabled = sh.busy || !sh.picked.length || !sh.dev;
+}
+
+function renderSharePicked() {
+  setHTML($('sh-picked'), sh.picked.map((f, i) => `<div class="sh-file"><span class="sh-fi">${shSvg(SH_ICON[shKind(f.name)])}</span>
+    <span class="grow">${esc(f.name)} <span class="muted small">${fmtBytes(f.size)}</span></span>
+    <button class="icon-btn" data-unpick="${i}" title="Leave it out" aria-label="Leave it out"${sh.busy ? ' disabled' : ''}>×</button></div>`).join(''));
+  $('sh-drop').classList.toggle('has', sh.picked.length > 0);
+  renderShareDevices();
+}
+
+function renderShareJobs() {
+  const tr = id => ob.state && ob.state.transfers.find(t => t.id === id);
+  setHTML($('sh-jobs'), sh.jobs.map(j => {
+    const t = j.tid ? tr(j.tid) : null;
+    let pct = j.phase === 'upload' ? j.up : 0, note = '';
+    if (t) {
+      pct = t.size ? Math.min(100, t.transferred / t.size * 100) : t.status === 'complete' ? 100 : 0;
+      if (t.status === 'complete') j.phase = 'done';
+      else if (t.status === 'error') { j.phase = 'failed'; j.err = j.err || 'refused or interrupted'; }
+      else j.phase = t.transferred > 0 ? 'sending' : 'waiting';
+    }
+    note = {upload: 'preparing…', session: 'connecting…', waiting: `waiting for ${esc(j.to)} to accept…`, sending: `${pct.toFixed(0)} %`,
+      done: 'sent', failed: esc(j.err || 'failed'), queued: 'queued'}[j.phase] || '';
+    if (j.phase === 'done') pct = 100;
+    return `<div class="sh-job ${j.phase}"><span class="sh-fi">${shSvg(SH_ICON[j.phase === 'done' ? 'check' : shKind(j.name)])}</span>
+      <div class="grow"><div class="row between"><span>${esc(j.name)}</span><span class="small ${j.phase === 'failed' ? 'bad-text' : 'muted'}">${note}</span></div>
+      <div class="progress"><i style="width:${pct.toFixed(1)}%"></i></div></div></div>`;
+  }).join(''));
+}
+
+function renderShareRecv(s) {
+  $('sh-on').checked = !!s.running;
+  if (idle($('sh-policy'))) $('sh-policy').value = s.agent.policy;
+  const name = btState && btState.adapter ? btState.adapter.alias : 'the board';
+  setText($('sh-recv-note'), s.running ? `Others send to “${name}”.` : 'Off: devices cannot send files to the board.');
+  const r = s.request;
+  setHTML($('sh-incoming'), r ? `<div class="sh-ask"><span class="sh-fi">${shSvg(SH_ICON[shKind(r.name)])}</span>
+      <div class="grow"><b>${esc(r.device || 'A device')}</b> wants to send <b>${esc(r.name)}</b> <span class="muted">(${fmtBytes(r.size)})</span></div>
+      <button class="primary" data-sh-ans="yes" data-id="${r.id}">Accept</button><button data-sh-ans="no" data-id="${r.id}">Decline</button></div>` : '');
+  const files = s.files.in;
+  setHTML($('sh-recv'), files.length ? files.map(f => {
+    const url = `/api/obex/files/in/${encodeURIComponent(f.name)}`;
+    const k = shKind(f.name);
+    return `<div class="sh-item"><a class="sh-thumb" href="${url}" target="_blank" rel="noopener">${k === 'image'
+      ? `<img loading="lazy" alt="" src="${url}?t=${f.mtime}">` : shSvg(SH_ICON[k])}</a>
+      <div class="sh-meta"><span class="sh-name" title="${esc(f.name)}">${esc(f.name)}</span>
+        <span class="small muted">${fmtBytes(f.size)}${f.mtime ? ' · ' + shAgo(f.mtime, s.now_ms) : ''}</span></div>
+      <div class="sh-acts"><a class="small-btn btn-link" href="${url}" download="${esc(f.name)}">Download</a>
+        <button class="small-btn danger" data-sh-del="${esc(f.name)}">${armed['shin' + f.name] ? 'Really?' : 'Delete'}</button></div></div>`;
+  }).join('') : '<div class="sh-empty">Nothing received yet. Send a photo from a paired phone to the board: it shows up here.</div>');
+}
+
+function renderShare() {
+  if (!ob.state) return;
+  renderShareRecv(ob.state);
+  renderShareJobs();
+  renderShareDevices();
+}
+
+// One file to out/, with the upload's progress (fetch has none for a request body).
+function shUpload(job, f) {
+  return new Promise((ok, bad) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', `/api/obex/files/out?name=${encodeURIComponent(f.name)}`);
+    x.setRequestHeader('Content-Type', 'application/octet-stream');
+    x.upload.onprogress = e => { if (e.lengthComputable) { job.up = e.loaded / e.total * 100; renderShareJobs(); } };
+    x.onload = () => {
+      if (x.status < 300) return ok();
+      let m = x.statusText;
+      try { m = JSON.parse(x.responseText).error || m; } catch (e) { /* not JSON */ }
+      bad(new Error(m));
+    };
+    x.onerror = () => bad(new Error('upload failed'));
+    x.send(f);
+  });
+}
+
+// Waits for a transfer to end, from the "obex" frames (renderObex keeps ob.state). One that
+// vanishes after it was seen (obexd restarted), or never shows, has failed; a device that sits on
+// the question is given ten minutes.
+function shDone(tid) {
+  const until = Date.now() + 600000;
+  let seen = false, since = Date.now();
+  return new Promise(ok => {
+    const look = () => {
+      const t = ob.state && ob.state.transfers.find(x => x.id === tid);
+      if (t && (t.status === 'complete' || t.status === 'error')) return ok(t.status);
+      if (t) { seen = true; since = Date.now(); }
+      if ((seen || Date.now() - since > 15000) && !t && Date.now() - since > 3000) return ok('error');
+      if (Date.now() > until) return ok('error');
+      setTimeout(look, 500);
+    };
+    look();
+  });
+}
+
+async function shSend() {
+  const d = btState && btState.devices.find(x => x.address === sh.dev);
+  if (!d || !sh.picked.length) return;
+  sh.busy = true;
+  lsSet('btbench.sh.dev', sh.dev);
+  const files = sh.picked;
+  sh.picked = [];
+  sh.jobs = files.map(f => ({name: f.name, to: d.alias, phase: 'queued', up: 0}));
+  renderSharePicked();
+  renderShareJobs();
+  setText($('sh-msg'), `Sending to ${d.alias}…`);
+  let sid = null;
+  try {
+    for (let i = 0; i < files.length; i++) {
+      sh.jobs[i].phase = 'upload';
+      renderShareJobs();
+      await shUpload(sh.jobs[i], files[i]);
+    }
+    sh.jobs.forEach(j => { j.phase = 'session'; });
+    renderShareJobs();
+    sid = (await post('/obex/sessions', {address: d.address, target: 'opp'})).id;
+    let sent = 0;
+    for (const j of sh.jobs) {
+      try {
+        const t = await post(`/obex/sessions/${sid}`, {op: 'send', file: j.name});
+        j.tid = t.id;
+        j.phase = 'waiting';
+        renderShareJobs();
+        if (await shDone(t.id) === 'complete') sent++;
+      } catch (e) { j.phase = 'failed'; j.err = e.message; }
+      renderShareJobs();
+    }
+    setText($('sh-msg'), sent === sh.jobs.length ? `Sent ${sent === 1 ? 'it' : 'all ' + sent} to ${d.alias}.` : `${sent} of ${sh.jobs.length} sent.`);
+  } catch (e) {
+    sh.jobs.forEach(j => { if (j.phase !== 'done') { j.phase = 'failed'; j.err = j.err || e.message; } });
+    renderShareJobs();
+    setText($('sh-msg'), e.message);
+  } finally {
+    if (sid) del(`/obex/sessions/${sid}`).catch(() => {});
+    sh.busy = false;
+    renderSharePicked();
+  }
+}
+
+function setupShare() {
+  const add = list => { if (!sh.busy) { sh.picked = sh.picked.concat([...list]); renderSharePicked(); } };
+  $('sh-files').onchange = e => { add(e.target.files); e.target.value = ''; };
+  const drop = $('sh-drop');
+  drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('sh-files').click(); } };
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => add(e.dataTransfer.files));
+  $('sh-picked').onclick = e => {
+    const b = e.target.closest('[data-unpick]');
+    if (b) { sh.picked.splice(parseInt(b.dataset.unpick, 10), 1); renderSharePicked(); }
+  };
+  $('sh-devs').onclick = e => {
+    const b = e.target.closest('.sh-dev');
+    if (b && !b.disabled) { sh.dev = b.dataset.addr; renderShareDevices(); }
+  };
+  $('sh-send').onclick = shSend;
+  $('sh-on').onchange = e => put('/obex', {running: e.target.checked}).then(renderObex).catch(fail);
+  $('sh-policy').onchange = e => put('/obex', {policy: e.target.value}).then(renderObex).catch(fail);
+  $('sh-incoming').onclick = e => {
+    const b = e.target.closest('[data-sh-ans]');
+    if (b) post('/obex/request', {id: parseInt(b.dataset.id, 10), accept: b.dataset.shAns === 'yes', name: ''}).then(refreshObex).catch(fail);
+  };
+  $('sh-recv').onclick = e => {
+    const b = e.target.closest('[data-sh-del]');
+    if (!b) return;
+    const n = b.dataset.shDel;
+    if (!twoClick('shin' + n, renderShare)) return;
+    del(`/obex/files/in/${encodeURIComponent(n)}`).then(refreshObex).catch(fail);
+  };
+}
+
 registerTab('obex', {
-  topics: () => ['obex'],
-  show() { refreshObex(); obDevices(); },
+  topics: () => ['obex', 'bt'],
+  show() {
+    refreshObex();
+    obDevices();
+    api('/bluetooth').then(b => { btState = b; renderShare(); }).catch(() => {});
+  },
   onMessage(topic, data) {
-    if (currentTab === 'obex' && topic === 'obex') renderObex(data);
+    if (currentTab !== 'obex') return;
+    if (topic === 'obex') renderObex(data);
+    if (topic === 'bt' && panes.obex === 'share') renderShareDevices();
   },
 });
 setupObex();
+setupShare();

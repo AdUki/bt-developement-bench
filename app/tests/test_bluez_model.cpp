@@ -253,6 +253,47 @@ void test_players() {
   CHECK(browse_items(json::array()).empty());
 }
 
+// What a connected device has up: its GATT services here (the tree's HRM), and on a phone an A2DP
+// transport each way, AVRCP with its player and the battery.
+void test_profiles() {
+  const json devs = model_devices(tree(), "/org/bluez/hci0");
+  for (const json& d : devs) {
+    if (d["address"] == "C0:FF:EE:00:00:01") {
+      CHECK_EQ(d["profiles"].size(), 1u);
+      CHECK_EQ(d["profiles"][0]["id"].get<std::string>(), std::string("gatt"));
+      CHECK_EQ(d["profiles"][0]["detail"].get<std::string>(), std::string("2 services"));
+    } else {
+      CHECK(d["profiles"].empty());  // not connected
+    }
+  }
+  json t = json::parse(R"({
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01": {
+      "org.bluez.Device1": {"Address": "5C:E9:1E:22:40:01", "Alias": "Pixel", "Connected": true},
+      "org.bluez.MediaControl1": {"Connected": true},
+      "org.bluez.Battery1": {"Percentage": 80}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/sep1/fd0": {"org.bluez.MediaTransport1": {
+      "UUID": "0000110b-0000-1000-8000-00805f9b34fb", "State": "active", "Codec": 0, "Configuration": [33, 21, 2, 53],
+      "Device": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01"}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/sep2/fd1": {"org.bluez.MediaTransport1": {
+      "UUID": "0000110a-0000-1000-8000-00805f9b34fb", "State": "idle", "Codec": 0, "Configuration": [33, 21, 2, 53],
+      "Device": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01"}},
+    "/org/bluez/hci0/dev_5C_E9_1E_22_40_01/avrcp/player0": {"org.bluez.MediaPlayer1": {
+      "Name": "Music", "Device": "/org/bluez/hci0/dev_5C_E9_1E_22_40_01"}}
+  })");
+  const json p = model_devices(t)[0]["profiles"];
+  CHECK_EQ(p.size(), 4u);
+  CHECK_EQ(p[0]["id"].get<std::string>(), std::string("a2dp"));
+  CHECK_EQ(p[0]["detail"].get<std::string>().rfind("receiving · SBC", 0), 0u);
+  CHECK_EQ(p[0]["state"].get<std::string>(), std::string("active"));
+  CHECK_EQ(p[1]["detail"].get<std::string>().rfind("sending", 0), 0u);
+  CHECK_EQ(p[2]["detail"].get<std::string>(), std::string("player: Music"));
+  CHECK_EQ(p[3]["detail"].get<std::string>(), std::string("80 %"));
+  // The media state names the device, for views that do not hold the device list.
+  const json m = model_media(t);
+  CHECK_EQ(m["players"][0]["device_name"].get<std::string>(), std::string("Pixel"));
+  CHECK_EQ(m["transports"][0]["device_name"].get<std::string>(), std::string("Pixel"));
+}
+
 void test_names() {
   CHECK_EQ(class_major_name(0x5a020c), std::string("phone"));
   CHECK_EQ(class_major_name(0x1f00), std::string("uncategorized"));
@@ -284,6 +325,7 @@ int main() {
   test_gatt();
   test_media();
   test_players();
+  test_profiles();
   test_names();
   return report("test_bluez_model");
 }

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <fstream>
 #include <future>
+#include <set>
 
 #include "dbus_util.h"
 #include "util/exec.h"
@@ -553,6 +554,8 @@ void ObexManager::refresh_objects(sd_bus* bus) {
   }
   // A transfer that finished is removed by obexd at once; keep the last state of the ones we saw
   // (bounded), so the console can show how it ended.
+  std::set<std::string> live;
+  for (const auto& kv : t) live.insert(kv.first);
   for (auto& [p, props] : transfers_) {
     if (t.count(p)) continue;
     t[p] = props;
@@ -560,7 +563,9 @@ void ObexManager::refresh_objects(sd_bus* bus) {
     const std::string st = str(props, "Status");
     if (st != "complete" && st != "error") t[p]["Status"] = "error";
   }
-  while (t.size() > 50) t.erase(t.begin());
+  // Over the bound, finished ones go: never one obexd still has (it is someone's transfer under
+  // way — the names sort session12 before session3, so "the first" is not the oldest).
+  for (auto it = t.begin(); t.size() > 50 && it != t.end();) it = live.count(it->first) ? std::next(it) : t.erase(it);
   transfers_.swap(t);
   for (auto it = session_meta_.begin(); it != session_meta_.end();)
     it = sessions_.count(it->first) ? std::next(it) : session_meta_.erase(it);
@@ -776,7 +781,11 @@ json ObexManager::status() {
               {"request", req},
               {"sessions", sessions},
               {"transfers", transfers},
-              {"files", files_json()}};
+              {"files", files_json()},
+              // The board's clock, which the files' mtime is by: a board without a network has no
+              // idea of the time, and "an hour ago" must be said against its clock, not the browser's.
+              {"now_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch()).count()}};
 }
 
 std::string ObexManager::session_path(const std::string& id) const {
@@ -1116,6 +1125,14 @@ bool ObexManager::cover_session(const std::string& address, uint16_t psm, std::s
   json s;
   if (!create_session(address, "bip-avrcp", json{{"psm", psm}}, &s, err, status)) return false;
   *sid = s["id"].get<std::string>();
+  // A handle names an image within one BIP connection only (a phone starts again at 0000001 on
+  // the next): what was kept from an earlier one is another track's cover.
+  const std::string dir = opt_.root + "/in/cover", prefix = upper(address) + "-";
+  if (DIR* d = opendir(dir.c_str())) {
+    while (const dirent* e = readdir(d))
+      if (starts_with(upper(e->d_name), prefix)) unlink((dir + "/" + e->d_name).c_str());
+    closedir(d);
+  }
   return true;
 }
 
@@ -1132,17 +1149,18 @@ bool ObexManager::cover_art(const std::string& address, uint16_t psm, const std:
     *err = "an image handle is seven digits";
     return false;
   }
-  const std::string local = opt_.root + "/in/cover/" + address + "-" + handle + (thumbnail ? "-thumb" : "") + ".jpg";
+  // One bip-avrcp session per device, kept while it works: a session per image would cost an
+  // OBEX connect each time the track changes. The images kept are those of this session (a new one
+  // clears them, cover_session).
+  std::lock_guard<std::mutex> guard(cover_m_);
+  std::string sid;
+  if (!cover_session(address, psm, &sid, err, status)) return false;
+  const std::string local = opt_.root + "/in/cover/" + upper(address) + "-" + handle + (thumbnail ? "-thumb" : "") + ".jpg";
   struct stat st{};
   if (stat(local.c_str(), &st) == 0 && st.st_size > 0) {
     *file = local;
     return true;
   }
-  // One bip-avrcp session per device, kept while it works: a session per image would cost an
-  // OBEX connect each time the track changes.
-  std::lock_guard<std::mutex> guard(cover_m_);
-  std::string sid;
-  if (!cover_session(address, psm, &sid, err, status)) return false;
   const std::string name = local.substr(local.rfind('/') + 1);
   json t;
   if (!op(sid, json{{"op", thumbnail ? "thumbnail" : "get"}, {"handle", handle}, {"file", "cover/" + name}}, &t, err, status))

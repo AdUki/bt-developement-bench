@@ -24,6 +24,7 @@ DEPENDS = "dbus ncurses"
 SRC_URI = " \
     ${BTBENCH_PIPEWIRE_GIT};nobranch=1 \
     file://50-btbench.conf \
+    file://55-btbench-rpi0w.conf \
 "
 SRCREV = "${BTBENCH_PIPEWIRE_SRCREV}"
 PV = "${BTBENCH_PIPEWIRE_PV}"
@@ -69,7 +70,7 @@ EXTRA_OEMESON += " \
 "
 
 # SBC (and SBC-XQ), mSBC, CVSD, Opus, LC3 (BAP and HFP LC3-SWB) and G.722 (ASHA) by default.
-# aptX and LDAC need libfreeaptx and ldacbt (BTBENCH_EXTRA_CODECS = "1"), AAC needs fdk-aac, whose
+# aptX and LDAC need libfreeaptx and ldacbt (BTBENCH_EXTRA_CODECS, on by default), AAC needs fdk-aac, whose
 # license is flagged commercial (BTBENCH_AAC = "1"; the distro then accepts the flag).
 PACKAGECONFIG ??= " \
     alsa bluez bluez-opus bluez-lc3 bluez-g722 udev readline sndfile pw-cat \
@@ -125,6 +126,10 @@ do_install:append() {
 
     install -d ${D}${sysconfdir}/pipewire/pipewire.conf.d
     install -m 0644 ${WORKDIR}/50-btbench.conf ${D}${sysconfdir}/pipewire/pipewire.conf.d/
+    # The Zero W's single core: audio's real-time priority under the interrupt threads.
+    if [ "${BTBENCH_BOARD}" = rpi0w ]; then
+        install -m 0644 ${WORKDIR}/55-btbench-rpi0w.conf ${D}${sysconfdir}/pipewire/pipewire.conf.d/
+    fi
 }
 
 # One package per SPA plugin and per module, with a -meta package for each kind that depends on
@@ -187,7 +192,7 @@ PACKAGES_DYNAMIC = "^${PN}-spa-plugins.* ^${PN}-modules.*"
 SYSTEMD_SERVICE:${PN} = "${@bb.utils.contains('PACKAGECONFIG', 'systemd-system-service', 'pipewire.service pipewire.socket pipewire-manager.socket', '', d)}"
 SYSTEMD_AUTO_ENABLE:${PN} = "disable"
 
-CONFFILES:${PN} += "${datadir}/pipewire/pipewire.conf ${sysconfdir}/pipewire/pipewire.conf.d/50-btbench.conf"
+CONFFILES:${PN} += "${datadir}/pipewire/pipewire.conf ${sysconfdir}/pipewire/pipewire.conf.d/50-btbench.conf ${sysconfdir}/pipewire/pipewire.conf.d/55-btbench-rpi0w.conf"
 FILES:${PN} = " \
     ${datadir}/pipewire \
     ${sysconfdir}/pipewire \
@@ -258,3 +263,5 @@ FILES:${PN}-alsa-card-profile = " \
 "
 
 FILES:${PN}-aes67 += "${bindir}/pipewire-aes67"
+
+do_install[vardeps] += "BTBENCH_BOARD"

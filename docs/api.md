@@ -45,7 +45,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 ### `GET /api/bluetooth`
 
 ```json
-{"available": true, "error": "",
+{"available": true, "error": "", "stale": false,
  "adapter": {"name": "hci0", "path": "/org/bluez/hci0", "address": "B8:27:EB:50:7B:22", "address_type": "public",
              "alias": "btbench", "powered": true, "discoverable": false, "discoverable_timeout_s": 180,
              "pairable": true, "discovering": false, "roles": ["central", "peripheral"],
@@ -58,15 +58,17 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
  "agent": {"policy": "auto", "capability": "KeyboardDisplay", "registered": true},
  "reconnect": {"on": true, "devices": ["50:1E:2D:95:16:34"]},
  "discovery": {"on": false, "ours": false,
-               "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": true,
+               "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": false,
                           "uuids": [], "pattern": null, "discoverable": false, "auto_connect": false},
                "filters": ["UUIDs", "RSSI", "Pathloss", "Transport", "DuplicateData", "Discoverable",
                            "Pattern", "AutoConnect"],
                "until_s": null}}
 ```
 
-`adapter` is the primary adapter: hci0, or the one btbenchd was started with (`--bt-adapter`). A
-device is:
+`adapter` is the primary adapter: hci0, or the one btbenchd was started with (`--bt-adapter`).
+`available` turns false only when BlueZ is not on the bus (or has no adapter); a read of its objects
+that goes unanswered (bluetoothd busy, a Zero W scanning a crowded room) leaves the last answer in
+place with `stale: true` until the next one. A device is:
 
 ```json
 {"path": "/org/bluez/hci0/dev_C0_FF_EE_00_00_01", "address": "C0:FF:EE:00:00:01", "address_type": "random",
@@ -79,7 +81,8 @@ device is:
  "preferred_bearer": null,
  "bearers": {"bredr": null,
              "le": {"connected": true, "paired": false, "bonded": false, "connectable": true}},
- "busy": "", "error": "",
+ "profiles": [{"id": "gatt", "name": "GATT", "detail": "4 services", "state": "connected"}],
+ "busy": "", "busy_on": "", "error": "", "error_on": "",
  "last_disconnect": {"bearer": "le", "reason": "remote", "message": "Connection terminated by remote host",
                      "at_ms": 1791661005562}}
 ```
@@ -91,8 +94,14 @@ for the other): a dual-mode device has both, each with its own connection and pa
 `preferred_bearer` is the transport a dual-mode device connects on first (`last-used`, `bredr`,
 `le`, `last-seen`; null for a single-mode one). `last_disconnect` is the last time one of its
 bearers went down and why (BlueZ's `Disconnected` signal: `unknown`, `timeout`, `local`, `remote`,
-`authentication`, `suspend`), kept until btbenchd restarts. `busy` is `pairing`, `connecting` or `disconnecting` while one of those runs; `error` is the
-last operation's failure in BlueZ's words, kept until the next one. Sorted: connected, paired, then
+`authentication`, `suspend`), kept until btbenchd restarts. `busy` is `pairing`, `connecting` or `disconnecting` while one of those runs, and `busy_on` what it
+is about: a bearer (`le`, `bredr`), a profile's full UUID, or empty for the whole device; `error` is the
+last operation's failure in BlueZ's words, kept until the next one, `error_on` likewise.
+`profiles` (empty unless connected) is what the device has up, from its BlueZ objects: `a2dp` and
+`le-audio` per media transport (`detail` says `receiving` or `sending` — the board's side — and the
+codec; `state` is the transport's `idle`, `pending` or `active`), `avrcp` (its player's name),
+`hid`, `pan`, `gatt` (the service count) and `battery` (the level). HFP is not among them: PipeWire's
+own HFP does not go through BlueZ (`GET /api/audio/devices` has the profile PipeWire uses). Sorted: connected, paired, then
 by alias.
 
 ### `GET /api/bluetooth/dbus?since=0&limit=500`
@@ -128,11 +137,16 @@ e.g. `"hci1"`; default the primary), `agent` (`"auto"` or `"ask"`), `agent_capab
 (bool). Answers with
 the new state. What is set is kept in `/data/btbench/bluetooth.json` and put back on the adapter
 whenever BlueZ shows it (a reboot, a bluetoothd restart), since BlueZ powers adapters on at start
-and forgets Pairable; a discoverable with a timeout is kept as off.
+and forgets Pairable; a discoverable with a timeout is kept as off. On a board, an adapter whose
+alias was never set here is given the board's hostname (`btbench-257bfc`), so boards in range of
+each other show up under names of their own; `"alias": ""` goes back to that (BlueZ's `Name`, which
+stays `btbench`, is not changed).
 
 `reconnect` (on by default): when BlueZ appears with an adapter (a boot, a bluetoothd restart),
 btbenchd connects again, over BR/EDR, the paired devices that were connected over BR/EDR when it
-went: up to three tries, 35 s apart, after 5 s. A peer that saw the board shut down cleanly does
+went: up to three tries, 35 s apart, after 5 s — and not before the board's own A2DP endpoints are
+registered and have settled (up to 30 s): a device connected while PipeWire is still registering
+them discovers only part of them (without SBC, say) and keeps that list for the connection. A peer that saw the board shut down cleanly does
 not call back by itself, and BlueZ reconnects only after a link loss. `reconnect.devices` is that
 list; a device leaves it when it is disconnected or removed through the API, or unpaired. LE
 devices are BlueZ's auto-connect's.
@@ -326,7 +340,8 @@ while someone subscribes to `hid.input`, or with `media_keys` on.
 ## Media
 
 `GET /api/media` — the remote stream endpoints, the transports and the AVRCP players (they are
-BlueZ's objects, whoever registered the local endpoints):
+BlueZ's objects, whoever registered the local endpoints). Transports and players also carry
+`device_name`, the device's alias:
 
 ```json
 {"endpoints": [{"path": ".../sep1", "device": "...", "address": "A0:B1:C2:D3:E4:F5", "uuid": "110b",
@@ -378,7 +393,7 @@ transport, for its volume. `items` are what browsing listed (see below), in list
 | `POST /api/media/players/browse` | `{"path", "folder": "<item path>"}` (folder optional) | `ChangeFolder` when given, then `ListItems`: `{"items": [{path, name, type, folder_type, playable, title, artist, album, duration_ms}]}`. The items also appear under the player from then on |
 | `POST /api/media/items` | `{"path": "<item>", "action": "play\|add"}` | play an item now, or add it to the now-playing list |
 | `POST /api/media/players/search` | `{"path", "value"}` | `MediaFolder1.Search` (a `searchable` player), answered with the result folder's listing: `{"items", "folder", "result"}` |
-| `GET /api/media/players/cover?path=<player>[&full=1]` | | the current track's cover art (`track.img_handle`), pulled over BIP from the player's `obex_port` (AVRCP 1.6 cover art) through obexd and cached per handle: the 200×200 thumbnail, or with `full=1` the native image. 404 when the player offers none |
+| `GET /api/media/players/cover?path=<player>[&full=1]` | | the current track's cover art (`track.img_handle`), pulled over BIP from the player's `obex_port` (AVRCP 1.6 cover art) through obexd and cached per handle for as long as that BIP connection lasts (a phone hands out the same handles again on its next one): the 200×200 thumbnail, or with `full=1` the native image. 404 when the player offers none |
 
 Browsing folders: `POST /api/media/players/browse` with `"folder": "<player>/NowPlaying"`, `"<player>/Filesystem"`,
 or a folder item's path. Its answer also has `folder`, the name the player gives the folder now listed.
@@ -583,7 +598,9 @@ three.
 
 `GET /api/obex` — `{running, managed, owner, error, root, agent: {policy, registered}, request,
 sessions: [{id, path, destination, target, channel, psm}], transfers: [{id, session, status,
-name, filename, size, transferred, direction}], files: {in, out, shared}}`.
+name, filename, size, transferred, direction}], files: {in, out, shared}, now_ms}`. A file is
+`{name, size, mtime}` (ms); `now_ms` is the board's clock, to say "how long ago" by (a board
+without a network may be hours off).
 `PUT /api/obex` `{"running": true|false, "policy": "auto|ask|reject"}`: start/stop obexd, and what
 the board's OBEX server does with an incoming push (`auto` saves it into `in/`; `ask` holds it as
 `request` for `POST /api/obex/request` `{"id", "accept", "name"}`, 55 s). The policy is kept in
@@ -669,7 +686,13 @@ transport running/starting. Times are `null` when pw-top did not measure them.
 ## Audio stack
 
 `GET /api/audio` — `btbench-audio status`:
-`{"stack": "pipewire", "services": {"pipewire": "active", "wireplumber": "active"}}`.
+`{"stack": "pipewire", "enabled": true, "services": {"pipewire": "active", "wireplumber": "active"}}`.
+
+`PUT /api/audio` `{"enabled": false}` — switches the audio stack (PipeWire and WirePlumber) off,
+after dropping the links that carry audio, and keeps it off across reboots (`AUDIO_STACK=off` in
+`/data/btbench/audio.env`; a factory reset removes it); `true` starts it again. Bluetooth works
+without it — LE, GATT, the HID remote, OBEX — but nothing registers A2DP or HFP endpoints. Answers
+with the status. While it is off, `POST /api/audio/restart` refuses (500, "the audio stack is off").
 
 `POST /api/audio/restart` `{"restart_bt": false}` (the body is optional) — restarts PipeWire and
 WirePlumber, first dropping the links that carry audio so devices reconnect to the new endpoints

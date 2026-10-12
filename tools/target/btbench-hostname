@@ -1,9 +1,9 @@
 #!/bin/sh
 # btbench-hostname — give the board a name of its own: the device conf's hostname (/etc/hostname,
-# "btbench") with the board's MAC address in front, e.g. 257bfc-btbench. Every image carries the
+# "btbench") with the board's MAC address after it, e.g. btbench-257bfc. Every image carries the
 # same /etc/hostname, so two boards on one network would both answer btbench.local, and mDNS
-# (systemd-resolved) renames one of them unpredictably; with the MAC in front each has a stable
-# name: ssh root@257bfc-btbench.local. btbench-hostname.service runs it at every boot.
+# (systemd-resolved) renames one of them unpredictably; with the MAC after it each has a stable
+# name: ssh root@btbench-257bfc.local. btbench-hostname.service runs it at every boot.
 #
 # The MAC is the Wi-Fi's (wlan0), or the first other interface with a burned-in address: the last
 # three bytes, since a Raspberry Pi's all start b8:27:eb or dc:a6:32 (the Pi Foundation's). It is a
@@ -50,7 +50,7 @@ if [ -z "$mac" ]; then
 fi
 
 tag=$(echo "$mac" | cut -d: -f4-6 | tr -d : | tr 'A-F' 'a-f')
-case $base in "$tag"-*) name=$base ;; *) name=$tag-$base ;; esac
+case $base in *-"$tag") name=$base ;; *) name=$base-$tag ;; esac
 [ "$(hostname)" = "$name" ] && exit 0
 # The kernel's hostname, written directly: `hostnamectl --transient` does nothing while a static
 # hostname is set (it says it did), and the static one cannot change on a read-only root.

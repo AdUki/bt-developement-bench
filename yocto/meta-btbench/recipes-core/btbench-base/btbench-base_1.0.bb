@@ -27,6 +27,9 @@ SRC_URI = " \
     file://10-usb0.network \
     file://30-wlan0.network \
     file://resolved-btbench.conf \
+    file://btbench-http.dnssd \
+    file://btbench-ssh.dnssd \
+    file://wired-mdns.conf \
     file://journald-btbench.conf \
     file://wpa_supplicant-btbench.conf \
     file://dnsmasq-btbench.conf \
@@ -64,7 +67,7 @@ BTBENCH_DTBS ??= ""
 BTBENCH_TRY_METHOD ??= "none"
 BTBENCH_GADGET_UDC ??= ""
 BTBENCH_BT_HCI ??= "hci0"
-# The board's MAC in front of its hostname (btbench-hostname): 257bfc-btbench. "0" keeps it plain.
+# The board's MAC after its hostname (btbench-hostname): btbench-257bfc. "0" keeps it plain.
 BTBENCH_HOSTNAME_MAC ??= "1"
 
 # What the scripts run. bash and jq: btbench-wifi. sfdisk, partx, findmnt, resize2fs: growing
@@ -163,6 +166,12 @@ EOF
     install -m 0644 ${WORKDIR}/10-usb0.network ${WORKDIR}/30-wlan0.network ${D}${systemd_unitdir}/network/
     install -d ${D}${sysconfdir}/systemd/resolved.conf.d
     install -m 0644 ${WORKDIR}/resolved-btbench.conf ${D}${sysconfdir}/systemd/resolved.conf.d/10-btbench.conf
+    # The console and ssh as DNS-SD services, published by resolved on mDNS.
+    install -d ${D}${systemd_unitdir}/network/80-wired.network.d
+    install -m 0644 ${WORKDIR}/wired-mdns.conf ${D}${systemd_unitdir}/network/80-wired.network.d/10-btbench-mdns.conf
+    install -d ${D}${sysconfdir}/systemd/dnssd
+    sed 's/@PORT@/${BTBENCH_HTTP_PORT}/' ${WORKDIR}/btbench-http.dnssd > ${D}${sysconfdir}/systemd/dnssd/btbench-http.dnssd
+    install -m 0644 ${WORKDIR}/btbench-ssh.dnssd ${D}${sysconfdir}/systemd/dnssd/
     install -d ${D}${systemd_system_unitdir}/systemd-networkd-wait-online.service.d
     sed -e 's|@SYSTEMD_UNITDIR@|${systemd_unitdir}|' ${WORKDIR}/wait-online-btbench.conf \
         >${D}${systemd_system_unitdir}/systemd-networkd-wait-online.service.d/10-btbench.conf

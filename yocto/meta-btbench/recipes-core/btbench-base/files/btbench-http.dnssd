@@ -1,0 +1,9 @@
+# The web console as a DNS-SD service on mDNS (systemd-resolved publishes /etc/systemd/dnssd/;
+# no Avahi on the image): a browser's or a phone's service list (avahi-browse -r _http._tcp,
+# Bonjour) shows each board by its name, with the address and port to open. btbench-base fills in
+# the port (BTBENCH_HTTP_PORT).
+[Service]
+Name=%H
+Type=_http._tcp
+Port=@PORT@
+TxtText=path=/ product=btbench

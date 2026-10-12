@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace btb::hci {
 
@@ -17,11 +19,16 @@ struct CodecInfo {
   uint32_t rate = 0;   // sample rate when exactly one is selected (RTP clock), else 0
   bool rtp = true;     // aptX, aptX LL and FastStream send raw frames, no RTP header
   bool sbc = false;    // the media payload starts with SBC's frame-count byte
+  // The same, one field at a time, for the packet view's field tree: {"Sampling frequency",
+  // "44100 Hz"}, {"Vendor", "0x000005f1 (The Linux Foundation)"}, ...
+  std::vector<std::pair<std::string, std::string>> fields;
 };
 
 // p points at the Media Codec capability value: media type byte, codec type byte, codec info.
 bool decode_media_codec(const uint8_t* p, size_t len, CodecInfo* out);
 
 const char* avdtp_signal_name(uint8_t id);
+// AVDTP and A2DP error codes (AVDTP 8.20.6.2, A2DP 5.1.3), nullptr if unknown.
+const char* avdtp_error_name(uint8_t e);
 
 }  // namespace btb::hci

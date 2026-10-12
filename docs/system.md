@@ -91,11 +91,16 @@ Plug the Zero W's **USB** port (not PWR) into the PC. It is one composite USB de
 - **Serial console**: `/dev/ttyACM0` on the PC (`picocom /dev/ttyACM0`), a login on `ttyGS0`.
   It works when the network does not, e.g. a trial kernel without a network.
 
-`ssh root@10.55.0.1`, or `ssh root@<mac>-<hostname>.local` (mDNS from systemd-resolved, on the USB link
-and Wi-Fi). `<mac>` is the last three bytes of the board's Wi-Fi MAC address (`257bfc-btbench`):
-every image has the same `/etc/hostname`, and `btbench-hostname.service` puts the MAC in front at
+`ssh root@10.55.0.1`, or `ssh root@<hostname>-<mac>.local` (mDNS from systemd-resolved, on the USB link
+and Wi-Fi). `<mac>` is the last three bytes of the board's Wi-Fi MAC address (`btbench-257bfc`):
+every image has the same `/etc/hostname`, and `btbench-hostname.service` puts the MAC after it at
 boot, as a transient hostname, so that several boards on one network each have a name of their
-own. `BTBENCH_HOSTNAME_MAC = "0"` in the device conf keeps the plain name.
+own. `BTBENCH_HOSTNAME_MAC = "0"` in the device conf keeps the plain name. The boards also
+announce themselves as DNS-SD services on mDNS — the web console as `_http._tcp` and ssh as
+`_ssh._tcp`, under the board's name — so a service browser lists every bench in reach without
+knowing its name: `avahi-browse -rt _http._tcp` on a PC, the Bonjour/mDNS browser of a phone.
+systemd-resolved publishes them (`/etc/systemd/dnssd/`); there is no Avahi on the image. mDNS is on
+for usb0, wlan0 and Ethernet (the VIM3L's port).
 
 `BTBENCH_GADGET=off`, or a board without a device controller, leaves the port alone: on the Zero W
 that keeps it a USB host, for a Bluetooth dongle, and the board is reachable over Wi-Fi only.

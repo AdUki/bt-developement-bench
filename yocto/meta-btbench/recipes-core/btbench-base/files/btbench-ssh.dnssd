@@ -1,0 +1,5 @@
+# ssh to the board, found by DNS-SD the same way as its console (btbench-http.dnssd).
+[Service]
+Name=%H
+Type=_ssh._tcp
+Port=22

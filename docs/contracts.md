@@ -95,8 +95,9 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   `bluetooth-cache/<adapter>` bound over each adapter's BlueZ cache).
 - `/run/btbench-rw/` — btbench-rw's counts.
 - Network: USB gadget `usb0` = `10.55.0.1/24` (DHCP server for the PC), Wi-Fi AP `10.42.0.1/24`,
-  mDNS `<mac>-<hostname>.local` (btbench-hostname: the last three bytes of wlan0's MAC in front of
-  `/etc/hostname`, a transient hostname; `HOSTNAME_MAC=0` in device.env keeps it plain).
+  mDNS `<hostname>-<mac>.local` (btbench-hostname: the last three bytes of wlan0's MAC after
+  `/etc/hostname`, a transient hostname; `HOSTNAME_MAC=0` in device.env keeps it plain), with the
+console and ssh announced as DNS-SD `_http._tcp` and `_ssh._tcp` (`/etc/systemd/dnssd/`).
 
 ## Target scripts (`/usr/bin`, sources in `tools/target/`)
 

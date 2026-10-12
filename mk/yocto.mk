@@ -145,7 +145,7 @@ configure: ## Set hostname, password, ssh key, Wi-Fi and the Yocto cache dirs (i
 	echo -e "\n$(DIM)The line is pre-filled with the current value: edit it, or clear it and press$(OFF)"; \
 	echo -e "$(DIM)Enter to restore the default shown above it.$(OFF)"; \
 	echo -e "\n$(BOLD)Device$(OFF) $(DIM)— baked into the image.$(OFF)"; \
-	ask "Hostname (the board answers on <mac>-<hostname>.local)" "$(DEF_HOSTNAME)" "$$(get $(DEVCONF) BTBENCH_HOSTNAME)"; host="$$ANS"; \
+	ask "Hostname (the board answers on <hostname>-<mac>.local)" "$(DEF_HOSTNAME)" "$$(get $(DEVCONF) BTBENCH_HOSTNAME)"; host="$$ANS"; \
 	ask "Root password (stored in the clear in $(DEVCONF))" "$(DEF_PASSWORD)" "$$(get $(DEVCONF) BTBENCH_ROOT_PASSWORD)"; pass="$$ANS"; \
 	ask "ssh public key to authorize for root (the deploy targets log in with it)" "$(DEF_SSH_PUBKEY)" "$$(get $(DEVCONF) BTBENCH_SSH_PUBKEY)"; key="$$ANS"; \
 	echo -e "\n$(BOLD)Wi-Fi$(OFF) $(DIM)— a first network to join. Empty is fine: the board then starts its setup AP and you add one from its page.$(OFF)"; \

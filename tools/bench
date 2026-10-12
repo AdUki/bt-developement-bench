@@ -359,10 +359,13 @@ cmd_audio() {
     local restart=false
     [ "${2-}" = --restart-bt ] && restart=true
     post /api/audio/restart "$(jq -nc --argjson r "$restart" '{restart_bt:$r}')" >/dev/null || exit 1
+  elif [ "${1-}" = on ] || [ "${1-}" = off ]; then
+    # Kept across reboots: off is Bluetooth without PipeWire (an LE remote, a GATT peripheral).
+    put /api/audio "$(jq -nc --argjson e "$([ "$1" = on ] && echo true || echo false)" '{enabled:$e}')" >/dev/null || exit 1
   elif [ $# -ge 1 ]; then
-    die "usage: bench audio [restart [--restart-bt]]"
+    die "usage: bench audio [restart [--restart-bt] | on | off]"
   fi
-  get /api/audio | show '"audio stack " + .stack, (.services | to_entries[] | "  " + .key + ": " + .value)'
+  get /api/audio | show '"audio stack " + .stack + (if .enabled == false then " (off)" else "" end), (.services | to_entries[] | "  " + .key + ": " + .value)'
 }
 
 cmd_media() {
@@ -852,7 +855,7 @@ _bench() {
     ask|auto) COMPREPLY=($(compgen -W "DisplayOnly DisplayYesNo KeyboardOnly NoInputNoOutput KeyboardDisplay" -- "$cur")) ;;
     adv) COMPREPLY=($(compgen -W "ls start stop" -- "$cur")) ;;
     start) COMPREPLY=($(compgen -f -- "$cur")) ;;
-    audio) COMPREPLY=($(compgen -W "restart" -- "$cur")) ;;
+    audio) COMPREPLY=($(compgen -W "restart on off" -- "$cur")) ;;
     cap) COMPREPLY=($(compgen -W "on off ls get analyze rm live" -- "$cur")) ;;
     wifi) COMPREPLY=($(compgen -W "status scan add remove ap sta off auto" -- "$cur")) ;;
     kernel) COMPREPLY=($(compgen -W "status try commit rollback" -- "$cur")) ;;

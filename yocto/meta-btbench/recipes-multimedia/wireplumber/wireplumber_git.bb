@@ -51,6 +51,18 @@ do_install:append() {
     install -d ${D}${sysconfdir}/wireplumber/wireplumber.conf.d
     install -m 0644 ${WORKDIR}/50-btbench.conf ${D}${sysconfdir}/wireplumber/wireplumber.conf.d/
 
+    # The Zero W only: WirePlumber's real-time threads (the Bluetooth nodes' data loops, where
+    # SBC/AAC/Opus are coded) run at module-rt's default SCHED_FIFO 83, above the kernel's interrupt
+    # threads (50); on its single core the codec starved the SD card's interrupt thread until the
+    # card timed out. A fragment can only append to context.modules, and WirePlumber's PipeWire
+    # context reads no module.rt.args (config.name is "null"), so the priority goes into
+    # module-rt's args here: 40, as PipeWire's own (55-btbench-rpi0w.conf there).
+    if [ "${BTBENCH_BOARD}" = rpi0w ]; then
+        sed -i 's/^\(\s*\)# rt.prio      = 88$/\1rt.prio      = 40/' ${D}${datadir}/wireplumber/wireplumber.conf
+        grep -q '^\s*rt.prio      = 40$' ${D}${datadir}/wireplumber/wireplumber.conf || \
+            bbfatal "wireplumber.conf: module-rt's rt.prio line not found; set the priority another way"
+    fi
+
     if ${@bb.utils.contains('PACKAGECONFIG', 'systemd-system-service', 'true', 'false', d)}; then
         install -d ${D}${systemd_system_unitdir}/wireplumber.service.d
         install -m 0644 ${WORKDIR}/10-btbench-state.conf ${D}${systemd_system_unitdir}/wireplumber.service.d/
@@ -123,3 +135,5 @@ FILES:${PN}-scripts += "${datadir}/wireplumber/scripts/*"
 
 FILES:${PN}-modules = ""
 RRECOMMENDS:${PN}-modules += "${PN}-modules-meta"
+
+do_install[vardeps] += "BTBENCH_BOARD"

@@ -814,8 +814,11 @@ void AudioEngine::Stream::run() {
       ok = decoder_argv(sp.source, url, rate, ch, *tools, &argv, &err);
       // ffmpeg does not report title changes, and mpg123 may not (its https helper): ask the
       // server every 15 s, unless the decoder has reported a title within the last 30 s. A
-      // playlist's tracks are files with their titles known: no polling.
-      if (ok && !tools->curl.empty() && sp.source.playlist.size() <= 1 && lower(url).find(".m3u8") == std::string::npos) {
+      // playlist's tracks are files with their titles known: no polling — nor for one such track
+      // (a length says it is a file, not a station).
+      const bool file = sp.source.playlist.size() > 1 ||
+                        (sp.source.playlist.size() == 1 && sp.source.playlist.front().duration_ms);
+      if (ok && !tools->curl.empty() && !file && lower(url).find(".m3u8") == std::string::npos) {
         titles = std::thread([this, url] {
           // Track titles can wait; the pump is what this thread was forked from.
           set_thread_nice(kBackgroundNice);

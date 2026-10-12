@@ -1,18 +1,25 @@
 'use strict';
-// Audio: PipeWire and WirePlumber (btbench-audio restarts them); the AVRCP players of connected phones
-// (controls, metadata, browsing); streams — a test signal, a radio or UPnP URL, or one device's
-// audio — played into a sink and/or listened to here; and BlueZ's transports and endpoints.
+// Audio, four views. Bluetooth: each connected audio device — which way audio goes on it and in
+// what codec (BlueZ's transports), the PipeWire profile that is its codec choice, its stream
+// endpoints and the AVDTP probe. Players: AVRCP — the phones' players (controls, metadata,
+// browsing) and the board's own player. Streams: what the board plays itself — a test signal, a
+// device's audio, a radio or URL — into an output and/or listened to here. PipeWire: the services
+// and the graph.
 //
 // Listening is plain fetch() of the stream's endless WAV, scheduled into Web Audio: no media
 // element (which buffers seconds and cannot say how much), and the AudioContext is made in the
 // click that asked for it, so autoplay rules let it play.
 
-const au = {browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
-  tick: null, radio: [], upnp: {server: null, path: []}};
+const au = {adOpen: {}, browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
+  tick: null, radio: []};
 
 function renderAudio(s) {
   setHTML($('au-services'), Object.entries(s.services || {}).map(([k, v]) =>
     pill(k.replace(/\.service$/, ''), v === 'active' ? 'good' : v === 'failed' ? 'bad' : '')).join(' '));
+  const on = s.enabled !== false;
+  if (idle($('au-on'))) $('au-on').checked = on;
+  $('au-off-hint').hidden = on;
+  $('au-restart').disabled = !on;
 }
 
 function refreshAudio() {
@@ -429,19 +436,7 @@ const CD_KINDS = [['a2dp', 'Send (A2DP)'], ['a2dp-duplex', 'Both ways (A2DP dupl
 function renderCodecs(r) {
   au.devices = r;
   if ($('st-sink')) renderOutCodec();
-  if (!r.devices.length) {
-    setHTML($('cd-list'), `<div class="small muted">${esc(r.error || 'No Bluetooth audio device connected.')}</div>`);
-    return;
-  }
-  // Not while a picker is open: the rebuild would close it.
-  const ae = document.activeElement;
-  if (ae && $('cd-list').contains(ae) && ae.tagName === 'SELECT') return;
-  setHTML($('cd-list'), r.devices.map(d => {
-    const a = d.active;
-    return `<div class="row wrap codec-row"><b>${esc(d.label)}</b> <span class="mono small muted">${esc(d.address)}</span>
-      ${a ? pill(a.codec || a.name, a.kind === 'off' ? '' : 'good') : ''}
-      ${codecSelect(d)}</div>`;
-  }).join(''));
+  renderAudioDevices();
 }
 
 function codecSelect(d) {
@@ -455,7 +450,7 @@ function codecSelect(d) {
   return `<select class="cd-pick grow" data-id="${d.id}" aria-label="Codec">${groups}</select>`;
 }
 
-const refreshCodecs = () => api('/audio/devices').then(renderCodecs).catch(e => setHTML($('cd-list'), `<span class="bad-text">${esc(e.message)}</span>`));
+const refreshCodecs = () => api('/audio/devices').then(renderCodecs).catch(e => renderCodecs({devices: [], error: e.message}));
 
 // ---------------------------------------------------------------- AVRCP players
 
@@ -492,9 +487,14 @@ const PL_ICON = {
   play: 'M8 5v14l11-7z', pause: 'M7 5h4v14H7zM13 5h4v14h-4z', stop: 'M6 6h12v12H6z',
 };
 const NOTE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z"/></svg>';
+// A device's name: from the device list, else from what the media state says about it (a view
+// that shows players gets the name with them, without waiting for the device list).
 const devName = addr => {
   const d = typeof btState !== 'undefined' && btState && btState.devices.find(x => x.address === addr);
-  return d ? d.alias : addr;
+  if (d) return d.alias;
+  const m = au.media || (typeof pl !== 'undefined' ? pl.media : null);
+  const o = m && m.players.concat(m.transports).find(x => x.address === addr && x.device_name);
+  return o ? o.device_name : addr;
 };
 
 // A player as a now-playing screen: cover, track, the transport row (with repeat and shuffle when
@@ -509,7 +509,7 @@ function playerCard(p, transports) {
     <svg viewBox="0 0 24 24"><path d="${PL_ICON[a]}"/></svg></button>`;
   const playing = p.status === 'playing';
   const art = p.obex_port != null && t.img_handle
-    ? `<img alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}" onerror="coverRetry(this)">`
+    ? `<img alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}&t=${encodeURIComponent([t.title, t.album].join('|'))}" onerror="coverRetry(this)">`
     : (p.obex_port != null ? coverConnect(p) : '') + NOTE_SVG;
   const extras = p.browsable;
   au.plOpen = au.plOpen || {};
@@ -682,43 +682,43 @@ function playerAction(path, action) {
   return post('/media/players/control', {path, action}).catch(fail);
 }
 
-// Hear what a phone plays into the board: its capture endpoint, by address. A phone that is
-// connected but not streaming (its transport idle — it fell back to its own speaker after a
-// reconnect, say) has no capture node: it is asked over AVRCP to play again, which makes it open
-// the stream, and the node is waited for (a few seconds) before giving up.
-// `onStream`: the caller plays the stream itself (the Listen view's media element) instead of
-// Web Audio here.
+// Hear what a phone plays into the board: PipeWire's capture node of its link, found by address in
+// a fresh read of the endpoints (a cached one may be from before the phone connected). A phone that
+// is connected but not streaming may have no node yet: it is asked once over AVRCP to play — never
+// paused, which would interrupt what someone is listening to — and the node is waited for.
+// `onStream`: the caller plays the stream itself (the Listen view's media element) instead of Web
+// Audio here. Resolves with the stream, or null when there was nothing to hear (said in a toast).
 function listenToDevice(address, onStream) {
-  const find = ep => ep && ep.sources.find(e => e.address && e.address.toUpperCase() === address.toUpperCase());
+  const same = a => !!a && a.toUpperCase() === address.toUpperCase();
   // The AudioContext comes from the click itself, before any wait.
-  const ctx = onStream ? {close() {}} : newAudioContext();
-  if (!ctx) return;
-  const go = src => startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, !onStream,
-    {rate: src.rate || 48000}, onStream ? null : ctx).then(s => { if (onStream) onStream(s); }).catch(() => {});
-  const src = find(au.endpoints);
-  if (src) return go(src);
+  const ctx = onStream ? null : newAudioContext();
+  if (!onStream && !ctx) return Promise.resolve(null);
   const m = au.media || (typeof pl !== 'undefined' ? pl.media : null);
-  const player = m && m.players.find(p => p.address.toUpperCase() === address.toUpperCase());
-  const transport = m && m.transports.find(t => t.address.toUpperCase() === address.toUpperCase());
-  if (!transport) {
-    ctx.close();
+  const player = m && m.players.find(p => same(p.address) && /\/avrcp\//.test(p.path));
+  if (m && !m.transports.some(t => same(t.address))) {
+    if (ctx) ctx.close();
     toast('The phone sends no audio to the board: connect it with the board as its speaker (A2DP).');
-    return;
+    return Promise.resolve(null);
   }
-  toast('Asking the phone to stream to the board…');
-  const nudge = player ? (player.status === 'playing'
-    ? post('/media/players/control', {path: player.path, action: 'pause'}).then(() => new Promise(r => setTimeout(r, 800)))
-    : Promise.resolve()).then(() => post('/media/players/control', {path: player.path, action: 'play'})) : Promise.resolve();
-  const deadline = Date.now() + 7000;
-  const poll = () => api('/audio/endpoints?fresh=1').then(ep => {
+  const deadline = Date.now() + 10000;
+  let asked = false;
+  const look = () => api('/audio/endpoints?fresh=1').then(ep => {
     renderEndpoints(ep);
-    const s = find(ep);
-    if (s) return go(s);
-    if (Date.now() < deadline) return new Promise(r => setTimeout(r, 800)).then(poll);
-    ctx.close();
-    toast('The phone did not start streaming to the board. On the phone, choose btbench as the audio output.');
+    const src = ep.sources.find(e => same(e.address));
+    if (src) {
+      return startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, !onStream,
+        {rate: src.rate || 48000, channels: 2, gain_db: 0}, ctx);
+    }
+    if (!asked && player && player.status !== 'playing') {
+      asked = true;
+      toast('Asking the phone to play…');
+      post('/media/players/control', {path: player.path, action: 'play'}).catch(() => {});
+    }
+    if (Date.now() > deadline) throw new Error('The phone is not streaming to the board: play something on it, with the board as its speaker.');
+    return new Promise(r => setTimeout(r, 700)).then(look);
   });
-  nudge.catch(() => {}).then(poll).catch(e => { ctx.close(); fail(e); });
+  return look().then(s => { if (onStream) onStream(s); return s; })
+    .catch(e => { if (ctx) ctx.close(); toast(e.message); return null; });
 }
 
 // ---------------------------------------------------------------- media (BlueZ)
@@ -730,25 +730,74 @@ function codecCell(c) {
 function renderMedia(m) {
   au.media = m;
   renderPlayers(m);
-  // The codec in words up front; the raw configuration bytes and the object path, which only a
-  // bug report needs, behind "Details".
-  setHTML($('au-transports'), m.transports.length ? m.transports.map(t => `<div class="card">
-      <div class="card-head"><h3>${esc(t.profile || t.uuid)} <span class="small muted">with ${esc(devName(t.address))}</span></h3>
-        ${pill(t.state, t.state === 'active' ? 'good' : t.state === 'pending' ? 'warn' : '')}</div>
-      <div class="small">${codecCell(t.codec)}${t.delay_ms != null ? ` <span class="muted">· delay ${t.delay_ms.toFixed(1)} ms</span>` : ''}</div>
-      ${t.volume != null ? `<label class="row small pl-vol-row"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
+  renderAudioDevices();
+}
+
+// ---------------------------------------------------------------- Bluetooth: one card a device
+
+// The board's own role on a transport is its UUID: Audio Sink (or a sink PAC) means the board
+// receives from the device.
+const receives = t => /^(110b|2bc9)$/i.test(t.uuid);
+
+// Every device with a transport, a PipeWire card or stream endpoints, by address.
+function audioDevices() {
+  const m = au.media || {transports: [], endpoints: []};
+  const by = new Map();
+  const get = a => {
+    const k = (a || '').toUpperCase();
+    if (!by.has(k)) by.set(k, {address: k, transports: [], endpoints: [], card: null});
+    return by.get(k);
+  };
+  m.transports.forEach(t => get(t.address).transports.push(t));
+  ((au.devices && au.devices.devices) || []).forEach(c => { if (c.address) get(c.address).card = c; });
+  m.endpoints.forEach(e => get(e.address).endpoints.push(e));
+  by.delete('');
+  return [...by.values()];
+}
+
+function audioDeviceCard(x) {
+  const name = devName(x.address) !== x.address ? devName(x.address) : x.card ? x.card.label : x.address;
+  const live = x.transports.some(t => t.state === 'active');
+  const links = x.transports.slice().sort((a, b) => receives(b) - receives(a)).map(t => `<div class="ad-link">
+      <span class="ad-dir"><b>${receives(t) ? 'Receiving' : 'Sending'}</b> <span class="muted small">${esc(t.profile || t.uuid)}</span></span>
+      <span class="ad-codec">${codecCell(t.codec)}${t.delay_ms != null ? ` <span class="muted small">· delay ${t.delay_ms.toFixed(1)} ms</span>` : ''}</span>
+      <span class="ad-state">${pill(t.state === 'active' ? 'streaming' : t.state, t.state === 'active' ? 'good' : t.state === 'pending' ? 'warn' : '')}</span>
+      <span class="ad-acts">${receives(t) ? `<button class="small-btn ad-listen" data-address="${esc(x.address)}" title="Hear what the device sends the board, in this browser">Listen here</button>` : ''}</span>
+      ${t.volume != null ? `<label class="row small ad-vol"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
         <span class="mono">${t.volume}</span></label>` : ''}
-      <details class="more-fields"><summary>Details</summary>
-        <div class="kv" style="margin-top:.4rem"><span>Configuration</span><span class="mono">${esc(t.configuration)}</span>
-          <span>Device</span><span class="mono">${esc(t.address)}</span>
-          <span>Path</span><span class="mono">${esc(t.path)}</span></div></details>
-    </div>`).join('') : '<div class="card"><p class="hint" style="margin:0">No transport: nothing is set up to stream. A2DP devices get one when they connect.</p></div>');
-  setHTML($('au-endpoints'), m.endpoints.length ? `<div class="card flush"><div class="scroll-x"><table class="tbl">
-      <tr><th>Device</th><th>Role</th><th>Codec</th><th>Capabilities</th><th>Delay reports</th></tr>
-      ${m.endpoints.map(e => `<tr><td>${esc(devName(e.address))}</td><td>${esc(e.role || e.uuid)}</td>
-        <td><b>${esc(e.codec.name)}</b></td><td class="wrap small" title="${esc(e.capabilities)}">${esc(e.codec.summary)}</td>
-        <td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div></div>`
-    : '<div class="card"><p class="hint" style="margin:0">No remote endpoints: connect an A2DP device.</p></div>');
+    </div>`).join('');
+  // Every A2DP endpoint set has SBC (the spec makes it mandatory): one without it was discovered
+  // half way — while the device was still registering its codecs — and holds for this connection.
+  const a2dp = x.endpoints.filter(e => /^Audio (Sink|Source)$/.test(e.role || ''));
+  const noSbc = ['Audio Sink', 'Audio Source'].filter(r => a2dp.some(e => e.role === r) && !a2dp.some(e => e.role === r && e.codec.id === 0));
+  const partial = noSbc.length ? `<p class="small warn-text">Its ${noSbc.join(' and ').toLowerCase()} endpoints are listed without SBC, which every A2DP device has: the list was read while the device was still registering its codecs. Disconnect and connect it again for the whole list.</p>` : '';
+  const eps = x.endpoints.length ? `<details class="more-fields" data-key="ep-${esc(x.address)}"${au.adOpen['ep-' + x.address] ? ' open' : ''}>
+      <summary>Its stream endpoints (${x.endpoints.length})</summary>
+      <div class="scroll-x"><table class="tbl"><tr><th>Role</th><th>Codec</th><th>Capabilities</th><th>Delay reports</th></tr>
+      ${x.endpoints.map(e => `<tr><td>${esc(e.role || e.uuid)}</td><td><b>${esc(e.codec.name)}</b></td>
+        <td class="wrap small" title="${esc(e.capabilities)}">${esc(e.codec.summary)}</td><td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div>
+    </details>` : '';
+  const raw = x.transports.length ? `<details class="more-fields" data-key="raw-${esc(x.address)}"${au.adOpen['raw-' + x.address] ? ' open' : ''}><summary>Details</summary>
+      <div class="kv" style="margin-top:.4rem">${x.transports.map(t => `<span>${esc(t.profile || t.uuid)}</span><span class="mono">${esc(t.configuration)} · ${esc(t.path)}</span>`).join('')}</div></details>` : '';
+  return `<div class="card ad-card" data-address="${esc(x.address)}">
+    <div class="card-head"><h3>${esc(name)} <span class="mono small muted">${esc(x.address)}</span></h3>
+      ${pill(live ? 'streaming' : x.transports.length ? 'idle' : 'connected', live ? 'good' : '')}</div>
+    ${links || '<p class="hint">No audio link set up: the device and the board have not agreed on a stream yet.</p>'}
+    ${x.card ? `<label class="row wrap small ad-profile"><span class="muted">PipeWire profile and codec</span> ${codecSelect(x.card)}</label>` : ''}
+    ${partial}${eps}${raw}
+  </div>`;
+}
+
+function renderAudioDevices() {
+  const el = $('ad-list');
+  if (!el) return;
+  // Not while a picker is open or a slider held: the rebuild would take it from under the pointer.
+  const ae = document.activeElement;
+  if (ae && el.contains(ae) && (ae.tagName === 'SELECT' || ae.type === 'range')) return;
+  const ds = audioDevices();
+  setHTML(el, ds.length ? ds.map(audioDeviceCard).join('')
+    : `<div class="card empty-card"><h3>No Bluetooth audio device</h3><p class="hint">${esc((au.devices && au.devices.error) || '')}
+        Connect a phone with the board as its speaker, or a speaker or headphones to play to (Devices): each shows here with its audio links and codec.</p></div>`);
 }
 
 // AVDTP browsing: ask a device for its stream endpoints over a signalling channel of our own.
@@ -781,35 +830,11 @@ function renderRadio(r) {
     : '<span class="muted">No stations: Edit to add some.</span>');
 }
 
-function playUrl(url, title, listen) {
-  return startStream({type: 'url', url, title, decoder: $('st-decoder').value}, chosenSink(), listen).catch(() => {});
-}
-
-// ---------------------------------------------------------------- UPnP
-
-function renderUpnpServers(r) {
-  setHTML($('up-servers'), r.servers.length ? r.servers.map(s => `<div class="row between">
-      <span><b>${esc(s.name)}</b> <span class="muted">${esc([s.manufacturer, s.model].filter(Boolean).join(' '))}</span></span>
-      <button class="small-btn" data-server="${esc(s.id)}" data-name="${esc(s.name)}">Browse</button></div>`).join('')
-    : `<span class="muted">${r.searched_ms ? 'No media servers answered' + (r.error ? ': ' + esc(r.error) : '.') : 'Search the LAN to find DLNA / UPnP servers.'}</span>`);
-}
-
-function browseUpnp(server, object, title) {
-  const u = au.upnp;
-  if (server !== u.server) { u.server = server; u.path = []; }
-  const at = u.path.findIndex(p => p.id === object);
-  if (at >= 0) u.path = u.path.slice(0, at + 1); else u.path.push({id: object, title});
-  setHTML($('up-path'), u.path.map((p, i) => `<a href="#" data-crumb="${i}">${esc(p.title)}</a>`).join(' / '));
-  setHTML($('up-items'), '<span class="muted">browsing…</span>');
-  api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(object)}&count=200`).then(r => {
-    au.upnp.items = r.items;
-    setHTML($('up-items'), (r.containers.map(c => `<div class="row between"><span>📁 ${esc(c.title)}${c.child_count != null ? ` <span class="muted">(${c.child_count})</span>` : ''}</span>
-        <button class="small-btn" data-open="${esc(c.id)}" data-title="${esc(c.title)}">Open</button></div>`).join('') +
-      r.items.map((it, i) => `<div class="row between"><span>${esc(it.title)}${it.artist ? ' <span class="muted">— ' + esc(it.artist) + '</span>' : ''}
-          <span class="muted mono">${esc(it.mime || '')}${it.duration_s ? ' ' + fmtMs(it.duration_s * 1000) : ''}</span></span>
-        <span>${it.url ? `<button class="small-btn" data-item="${i}">Play</button><button class="small-btn" data-item-hear="${i}">Listen</button>` : ''}</span></div>`).join('')) ||
-      '<span class="muted">Empty.</span>') + (r.total > r.returned ? `<div class="muted">${r.returned} of ${r.total} shown</div>` : '');
-  }).catch(e => setHTML($('up-items'), `<span class="bad-text">${esc(e.message)}</span>`));
+// A URL plays at the rate it most likely is (streamRate, player.js) unless one was chosen under
+// Format and gain: decoding to another rate makes the decoder resample, at three times the CPU.
+function playUrl(url, title, listen, rate) {
+  const extra = $('st-rate').dataset.chosen ? {} : {rate: streamRate(rate)};
+  return startStream({type: 'url', url, title, decoder: $('st-decoder').value}, chosenSink(), listen, extra).catch(() => {});
 }
 
 // ---------------------------------------------------------------- setup
@@ -824,6 +849,19 @@ function showSourceFields() {
 }
 
 function setupAudio() {
+  // The whole stack on or off, kept across reboots (btbench-audio on|off).
+  $('au-on').onchange = e => {
+    const on = e.target.checked;
+    if (!on && !confirm('Switch the audio stack off? Audio links are dropped, and it stays off after a reboot until switched on here.')) {
+      e.target.checked = true;
+      return;
+    }
+    e.target.disabled = true;
+    setText($('au-msg'), on ? 'starting PipeWire…' : 'stopping PipeWire…');
+    put('/audio', {enabled: on}).then(s => { renderAudio(s); setText($('au-msg'), ''); refreshEndpoints(true); })
+      .catch(err => { setText($('au-msg'), err.message); refreshAudio(); })
+      .finally(() => { e.target.disabled = false; });
+  };
   $('au-restart').onclick = () => {
     const restart = $('au-restart-bt').checked;
     if (!confirm(`Restart PipeWire and WirePlumber${restart ? ' and bluetoothd' : ''}? Audio connections are dropped.`)) return;
@@ -838,7 +876,16 @@ function setupAudio() {
     const r = e.target.closest('input[type=range][data-path]');
     if (r) put('/media/transport', {path: r.dataset.path, volume: parseInt(r.value, 10)}).catch(fail);
   };
-  $('au-transports').onchange = volume;
+  // The device cards: volume, the codec picker, listening, what is open.
+  const ad = $('ad-list');
+  ad.addEventListener('change', e => {
+    if (e.target.type === 'range') volume(e);
+  });
+  ad.addEventListener('toggle', e => { if (e.target.dataset && e.target.dataset.key) au.adOpen[e.target.dataset.key] = e.target.open; }, true);
+  ad.addEventListener('click', e => {
+    const ls = e.target.closest('.ad-listen');
+    if (ls) listenToDevice(ls.dataset.address);
+  });
 
   // The board's player.
   const lp = $('au-local');
@@ -921,9 +968,8 @@ function setupAudio() {
 
   $('av-probe').onclick = probeAvdtp;
 
-  // The codec picker.
-  $('cd-refresh').onclick = refreshCodecs;
-  $('cd-list').onchange = $('st-codec').onchange = e => {
+  // The codec picker, on a device's card and next to the output.
+  ad.onchange = $('st-codec').onchange = e => {
     const sel = e.target.closest('select.cd-pick');
     if (!sel) return;
     sel.disabled = true;
@@ -934,6 +980,7 @@ function setupAudio() {
   };
 
   // The stream form.
+  $('st-rate').onchange = () => { $('st-rate').dataset.chosen = '1'; };
   $('st-src').onchange = showSourceFields;
   showSourceFields();
   $('st-sink').onchange = () => { lsSet('btbench.au.sink', $('st-sink').value); renderOutCodec(); };
@@ -1019,32 +1066,6 @@ function setupAudio() {
     put('/audio/radio', {stations}).then(r => { renderRadio(r); $('rd-editor').hidden = true; }).catch(fail);
   };
 
-  // UPnP.
-  $('up-search').onclick = () => {
-    setHTML($('up-servers'), '<span class="muted">searching…</span>');
-    api('/audio/upnp/servers?search=1').then(renderUpnpServers).catch(e => setHTML($('up-servers'), `<span class="bad-text">${esc(e.message)}</span>`));
-  };
-  $('up-servers').onclick = e => {
-    const b = e.target.closest('button[data-server]');
-    if (b) browseUpnp(b.dataset.server, '0', b.dataset.name);
-  };
-  $('up-path').onclick = e => {
-    const a = e.target.closest('a[data-crumb]');
-    if (!a) return;
-    e.preventDefault();
-    const p = au.upnp.path[parseInt(a.dataset.crumb, 10)];
-    browseUpnp(au.upnp.server, p.id, p.title);
-  };
-  $('up-items').onclick = e => {
-    const o = e.target.closest('button[data-open]');
-    if (o) return browseUpnp(au.upnp.server, o.dataset.open, o.dataset.title);
-    const p = e.target.closest('button[data-item], button[data-item-hear]');
-    if (!p) return;
-    const hear = p.dataset.itemHear != null;
-    const it = au.upnp.items[parseInt(hear ? p.dataset.itemHear : p.dataset.item, 10)];
-    if (!hear && !chosenSink()) { toast('Choose an output in "Play to" above first, or use Listen.'); return; }
-    playUrl(it.url, [it.artist, it.title].filter(Boolean).join(' — '), hear || $('st-listen').checked);
-  };
 }
 
 // ---------------------------------------------------------------- PipeWire's graph (pw-top)
@@ -1086,7 +1107,6 @@ registerTab('audio', {
     avdtpDevices();
     refreshStreams();
     api('/audio/radio').then(renderRadio).catch(() => {});
-    api('/audio/upnp/servers').then(renderUpnpServers).catch(() => {});
     clearInterval(au.tick);
     au.tick = setInterval(tickPlayers, 500);
     // The board's player has no topic: asked every two seconds while the players are shown.

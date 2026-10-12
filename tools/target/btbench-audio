@@ -1,14 +1,20 @@
 #!/bin/sh
 # btbench-audio — the board's audio stack: PipeWire and WirePlumber.
 #
-#   btbench-audio status                    JSON: {"stack":"pipewire","services":{..}}
+#   btbench-audio status                    JSON: {"stack":"pipewire","enabled":true,"services":{..}}
 #   btbench-audio restart [--restart-bt]    restart PipeWire and WirePlumber (and bluetoothd)
-#   btbench-audio boot                      start the stack (btbench-audio-select.service)
+#   btbench-audio on | off                  switch the stack on or off, kept across reboots
+#   btbench-audio boot                      start the stack unless it is off (btbench-audio-select.service)
 #   btbench-audio get                       "pipewire" (what older callers asked for the mode)
 #
 # PipeWire is the bench's audio stack, always: the streams, the codec picker and the board's player
 # are all built on it. The stack is btbench-audio-pipewire.target, which wants PipeWire and
 # WirePlumber; their services are PartOf= it, so restarting the target restarts both.
+#
+# Off (`btbench-audio off`, the console's Audio → PipeWire switch) stops PipeWire and WirePlumber
+# and keeps them stopped at boot: Bluetooth without an audio stack, for a board that is only an LE
+# remote or a GATT peripheral — nothing registers A2DP or HFP endpoints then, and nothing spends
+# the CPU. The choice is AUDIO_STACK=off in /data/btbench/audio.env (a factory reset removes it).
 #
 # A restart is the cure for a WirePlumber that has stopped answering (it has been seen spinning
 # after Bluetooth links vanished all at once). The links that carry audio are dropped first, so the
@@ -21,6 +27,13 @@
 set -u
 
 TARGET=btbench-audio-pipewire.target
+STATE=${BTBENCH_AUDIO_ENV:-/data/btbench/audio.env}
+
+enabled() {
+	AUDIO_STACK=on
+	[ -r "$STATE" ] && . "$STATE"
+	[ "$AUDIO_STACK" != off ]
+}
 
 # Profiles whose connections belong to the audio stack: A2DP source/sink/AVDTP, HSP HS/AG,
 # HFP HF/AG, ASCS, BASS, PACS, CAS. Their links are dropped before the stack restarts.
@@ -51,8 +64,23 @@ disconnect_audio() {
 }
 
 cmd_status() {
-	printf '{"stack":"pipewire","services":{"pipewire":"%s","wireplumber":"%s"}}\n' \
-		"$(service_state pipewire)" "$(service_state wireplumber)"
+	en=true
+	enabled || en=false
+	printf '{"stack":"pipewire","enabled":%s,"services":{"pipewire":"%s","wireplumber":"%s"}}\n' \
+		"$en" "$(service_state pipewire)" "$(service_state wireplumber)"
+}
+
+# on | off: kept first, then applied, so a board that reboots meanwhile comes up as asked.
+cmd_switch() {
+	mkdir -p "$(dirname "$STATE")" || die "cannot write $STATE"
+	echo "AUDIO_STACK=$1" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE" || die "cannot write $STATE"
+	if [ "$1" = off ]; then
+		disconnect_audio
+		systemctl stop "$TARGET" pipewire.socket pipewire-manager.socket pipewire.service wireplumber.service ||
+			die "stopping $TARGET failed"
+	else
+		systemctl start "$TARGET" || die "starting $TARGET failed (journalctl -b -u $TARGET)"
+	fi
 }
 
 cmd_restart() {
@@ -63,6 +91,7 @@ cmd_restart() {
 		*) die "unknown option '$a'" ;;
 		esac
 	done
+	enabled || die "the audio stack is off (btbench-audio on)"
 	disconnect_audio
 	systemctl restart "$TARGET" ||
 		die "restarting $TARGET failed (journalctl -b -u $TARGET)"
@@ -77,13 +106,18 @@ restart)
 	shift
 	cmd_restart "$@"
 	;;
+on | off) cmd_switch "$1" && cmd_status ;;
 boot)
+	if ! enabled; then
+		echo "btbench-audio: the audio stack is off ($STATE): not started"
+		exit 0
+	fi
 	# --no-block: this runs inside a unit during boot; the target's services start on their own.
 	systemctl start --no-block "$TARGET" || die "starting $TARGET failed"
 	;;
 get) echo pipewire ;;
 *)
-	echo "usage: btbench-audio status | restart [--restart-bt] | boot" >&2
+	echo "usage: btbench-audio status | restart [--restart-bt] | on | off | boot" >&2
 	exit 2
 	;;
 esac

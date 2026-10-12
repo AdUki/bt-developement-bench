@@ -35,6 +35,7 @@
       <div class="np-art" id="np-art"></div>
       <div class="np-main">
         <div class="np-src" id="np-src"></div>
+        <div class="np-from" id="np-from"></div>
         <div class="np-title" id="np-title">Nothing playing</div>
         <div class="np-sub" id="np-sub"></div>
         <div class="np-sub2" id="np-sub2"></div>
@@ -85,7 +86,7 @@
         <details class="more">
           <summary>Settings</summary>
           <div class="pop grid">
-            <label>Name others see <input type="text" id="ad-alias" maxlength="248"></label>
+            <label>Name others see <input type="text" id="ad-alias" maxlength="248" placeholder="empty: the board's name"></label>
             <label>Stay visible for (s, 0 = always) <input type="number" id="ad-disc-timeout" min="0" max="65535"></label>
             <label>Pairing questions
               <select id="ag-policy">
@@ -120,7 +121,7 @@
             <label><span id="sc-sig-label">dBm</span> <input type="number" id="sc-sig-val" placeholder="-70" disabled></label>
             <label class="wide">Services (UUIDs, comma-separated) <input type="text" id="sc-uuids" class="mono" data-filter="UUIDs" placeholder="180d, 110b, 0000fe2c-…"></label>
             <label class="wide">Name or address starts with <input type="text" id="sc-pattern" data-filter="Pattern" placeholder="any" maxlength="248"></label>
-            <label class="check"><input type="checkbox" id="sc-dup" data-filter="DuplicateData" checked> Report every advertisement (no duplicate filtering)</label>
+            <label class="check"><input type="checkbox" id="sc-dup" data-filter="DuplicateData"> Report every advertisement (no duplicate filtering)</label>
             <label class="check"><input type="checkbox" id="sc-disc" data-filter="Discoverable"> Make the board visible while scanning</label>
             <label class="check"><input type="checkbox" id="sc-auto" data-filter="AutoConnect" disabled> Connect to what the pattern matches</label>
             <div class="small muted wide" id="sc-note"></div>
@@ -254,20 +255,28 @@
 
   <!-- ======================================================== Audio -->
   <section id="audio" class="panel">
-    <div class="pane" data-pane="players">
-      <div id="au-players" class="rows-cards"></div>
-      <div id="au-local"></div>
+    <!-- Bluetooth: one card per audio device — its links, codec, endpoints and the AVDTP probe. -->
+    <div class="pane" data-pane="bt">
+      <p class="hint">Each connected Bluetooth audio device: which way audio goes on it and in what codec, the profile PipeWire uses for it (that is the codec choice), and what it offers.</p>
+      <div id="ad-list" class="rows-cards"></div>
       <div class="card">
         <div class="card-head">
-          <h3>Codec</h3>
-          <button class="small-btn" id="cd-refresh">Refresh</button>
+          <h3>AVDTP probe</h3>
+          <div class="acts"><select id="av-dev" aria-label="Device"></select><button id="av-probe">Probe</button></div>
         </div>
-        <p class="hint">The link renegotiates on a change: a second or two of silence.</p>
-        <div id="cd-list"></div>
+        <p class="hint">Asks a device itself for its stream endpoints (DISCOVER, GET_ALL_CAPABILITIES), connected or not: what it could do, not what is set up. Refused while A2DP is streaming.</p>
+        <div id="av-result" class="small"></div>
       </div>
     </div>
 
-    <div class="pane" data-pane="play">
+    <!-- Players: AVRCP — the phones' players and the board's own. -->
+    <div class="pane" data-pane="players">
+      <div id="au-players" class="rows-cards"></div>
+      <div id="au-local"></div>
+    </div>
+
+    <!-- Streams: what the board itself plays — test signals, a device's audio, a URL — to an output. -->
+    <div class="pane" data-pane="streams">
       <div class="card" id="st-out">
         <div class="card-head">
           <h3>Output</h3>
@@ -281,24 +290,28 @@
           <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
           <span id="st-backend" class="small muted"></span>
         </div>
-        <p class="hint">Everything on this page plays here. A connected speaker or car shows what plays on it on its display, and its buttons pause and skip it.</p>
+        <p class="hint">Every stream started on this page plays here. A speaker or car shows what plays on its display, and its buttons pause and skip it. Music from media servers is in Listen → Library.</p>
       </div>
 
-      <h2>Playing now</h2>
+      <h2>Running</h2>
       <div id="st-list" class="rows-cards"></div>
-      <div id="st-empty" class="small muted">Nothing is playing. Pick a test signal, a station or a track below.</div>
+      <div id="st-empty" class="small muted">Nothing is playing. Start a test signal, a device's audio or a station below.</div>
 
       <div class="cols">
         <div class="card" id="st-new">
           <div class="card-head">
-            <h3>Test signal</h3>
+            <h3>New stream</h3>
             <select id="st-src" aria-label="Signal">
-              <option value="tone">Tone</option>
-              <option value="sweep">Sweep</option>
-              <option value="noise">Noise</option>
-              <option value="silence">Silence</option>
-              <option value="capture">A device's audio</option>
-              <option value="monitor">What an output plays</option>
+              <optgroup label="Test signal">
+                <option value="tone">Tone</option>
+                <option value="sweep">Sweep</option>
+                <option value="noise">Noise</option>
+                <option value="silence">Silence</option>
+              </optgroup>
+              <optgroup label="Audio from">
+                <option value="capture">A device (a phone's A2DP, a microphone)</option>
+                <option value="monitor">What an output plays</option>
+              </optgroup>
             </select>
           </div>
           <div class="grid">
@@ -314,6 +327,7 @@
             <label data-for="capture">Capture from <select id="st-capture"></select></label>
             <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
           </div>
+          <p class="hint" data-for="capture">With a speaker as the output, this is a tunnel: one device's audio played on another.</p>
           <details class="more-fields">
             <summary>Format and gain</summary>
             <div class="grid">
@@ -331,12 +345,12 @@
           </details>
           <div class="form-acts">
             <span id="st-msg" class="small"></span>
-            <button class="primary" id="st-start">Play</button>
+            <button class="primary" id="st-start">Start</button>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>Internet radio</h3><button class="small-btn" id="rd-edit">Edit</button></div>
+          <div class="card-head"><h3>Internet radio and URLs</h3><button class="small-btn" id="rd-edit">Edit stations</button></div>
           <div id="rd-list" class="small"></div>
           <div id="rd-editor" hidden>
             <textarea id="rd-text" class="mono" rows="8" placeholder="Name | https://url"></textarea>
@@ -344,53 +358,39 @@
               <button id="rd-cancel">Cancel</button><button id="rd-save" class="primary">Save</button></div>
           </div>
           <div class="row url-row">
-            <input type="url" id="st-url" class="grow" aria-label="Stream URL" placeholder="A stream, .pls or .m3u URL">
+            <input type="url" id="st-url" class="grow" aria-label="Stream URL" placeholder="A stream, .pls or .m3u URL, or a file">
             <button class="small-btn" id="st-url-play">Play</button>
           </div>
         </div>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h3>Media servers</h3><button class="small-btn" id="up-search">Search the LAN</button></div>
-        <div id="up-servers" class="small"></div>
-        <div id="up-path" class="small crumbs"></div>
-        <div id="up-items" class="small"></div>
-      </div>
     </div>
 
+    <!-- PipeWire: the audio server itself. -->
     <div class="pane" data-pane="stack">
       <div class="card">
         <div class="card-head">
           <h3>PipeWire <span id="au-services"></span></h3>
-          <div class="acts"><button id="au-restart">Restart</button></div>
+          <div class="acts">
+            <label class="switch inline" title="Kept across reboots"><input type="checkbox" id="au-on"><i></i> Audio on</label>
+            <button id="au-restart">Restart</button>
+          </div>
         </div>
+        <p class="hint" id="au-off-hint" hidden>The audio stack is off, and stays off after a reboot: Bluetooth works without it — LE, GATT, the remote, files — but no device can play to or from the board (no A2DP, no HFP), and Streams and Listen have nothing to play to.</p>
         <p class="hint">Restarting PipeWire and WirePlumber drops the audio links first, so devices reconnect to the new endpoints. It cures a WirePlumber that stopped answering after links vanished at once.</p>
         <label class="switch inline small"><input type="checkbox" id="au-restart-bt"><i></i> Restart bluetoothd too</label>
         <div id="au-msg" class="small muted"></div>
       </div>
       <div class="card">
-        <div class="card-head"><h3>PipeWire graph</h3><span id="pw-note" class="small muted"></span></div>
+        <div class="card-head"><h3>Graph</h3><span id="pw-note" class="small muted"></span></div>
         <p class="hint">Each driver (a sound card, a Bluetooth transport) runs a cycle of one quantum and pulls its followers through it. Load is the cycle's busy time against the quantum; an xrun is a cycle that did not finish in time. From pw-top, a second at a time, while this is on screen.</p>
         <div id="pw-graph" class="scroll-x"></div>
-      </div>
-      <h2>Transports</h2>
-      <div id="au-transports" class="rows-cards"></div>
-      <h2>Remote endpoints</h2>
-      <div id="au-endpoints"></div>
-      <div class="card">
-        <div class="card-head">
-          <h3>AVDTP probe</h3>
-          <div class="acts"><select id="av-dev" aria-label="Device"></select><button id="av-probe">Probe</button></div>
-        </div>
-        <p class="hint">Asks the device itself for its stream endpoints (DISCOVER, GET_ALL_CAPABILITIES). Refused while A2DP is streaming.</p>
-        <div id="av-result" class="small"></div>
       </div>
     </div>
   </section>
 
   <!-- ======================================================== OBEX -->
   <section id="obex" class="panel">
-    <div class="card toolbar">
+    <div class="card toolbar" id="ob-bar">
       <div class="tb-main">
         <div class="tb-id"><b>obexd</b> <span id="ob-state" class="pill">…</span></div>
         <label class="small inline-label">Incoming files
@@ -400,6 +400,37 @@
       </div>
       <div id="ob-info" class="small muted"></div>
       <div id="ob-request" class="ob-request" hidden></div>
+    </div>
+
+    <!-- Share: sending and receiving files the way a phone does it — the tester's views follow. -->
+    <div class="pane" data-pane="share">
+      <div class="sh-layout">
+        <div class="card sh-send">
+          <h3>Send files</h3>
+          <label class="sh-drop" id="sh-drop" tabindex="0">
+            <input type="file" id="sh-files" multiple hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+            <b>Drop files here</b><span class="muted small">or click to choose them</span>
+          </label>
+          <div id="sh-picked" class="sh-picked"></div>
+          <h4 class="sh-h">To</h4>
+          <div id="sh-devs" class="sh-devs"></div>
+          <div class="form-acts"><span id="sh-msg" class="small muted"></span><button class="primary" id="sh-send" disabled>Send</button></div>
+          <div id="sh-jobs" class="sh-jobs"></div>
+        </div>
+        <div class="card sh-recv">
+          <div class="card-head">
+            <h3>Received</h3>
+            <label class="switch inline small" title="Other devices can send files to the board while this is on (obexd)"><input type="checkbox" id="sh-on"><i></i> Receive files</label>
+          </div>
+          <div class="row wrap small sh-recv-opts">
+            <span id="sh-recv-note" class="muted grow"></span>
+            <label class="inline-label">Incoming <select id="sh-policy"><option value="auto">save automatically</option><option value="ask">ask me first</option><option value="reject">refuse</option></select></label>
+          </div>
+          <div id="sh-incoming"></div>
+          <div id="sh-recv" class="sh-grid"></div>
+        </div>
+      </div>
     </div>
 
     <div class="pane" data-pane="sessions">
