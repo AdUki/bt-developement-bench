@@ -33,10 +33,16 @@ endif
 YOCTO  := yocto
 LAYERS := $(YOCTO)/layers
 include boards/$(BOARD).mk
-# The kernels a board can run (boards/<board>.mk KERNELS): KERNEL=rpi only on a Raspberry Pi.
+# The kernels a board can run (boards/<board>.mk KERNELS): KERNEL=rpi only on a Raspberry Pi,
+# KERNEL=bsp only on a board whose BSP brings its kernel. A default the board cannot run (bench.conf
+# says next, the board has only bsp) gives way to the board's first; one asked for on the command
+# line is an error.
 KERNELS ?= next rpi
 ifeq ($(filter $(KERNEL),$(KERNELS)),)
-  $(error KERNEL=$(KERNEL) is not one of BOARD=$(BOARD)'s: $(KERNELS))
+  ifneq ($(filter command line environment,$(origin KERNEL)),)
+    $(error KERNEL=$(KERNEL) is not one of BOARD=$(BOARD)'s: $(KERNELS))
+  endif
+  KERNEL := $(firstword $(KERNELS))
 endif
 BOARD_MK   := boards/$(BOARD).mk
 BOARD_CONF := $(YOCTO)/conf/boards/$(BOARD).conf

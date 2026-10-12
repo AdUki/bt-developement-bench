@@ -39,6 +39,7 @@ JOBS ?= $(shell nproc)
 # line variables (MAKEFLAGS would hand BOARD=, KERNEL=, ... down to it) and no compiler flags
 # from the caller's environment. Defines a shell function kmake; expects set -e.
 define kmake_setup
+$(if $(filter bsp,$(KERNEL)),echo "KERNEL=bsp: BOARD=$(BOARD)'s kernel is its BSP's, built with the image (make image)."; exit 1;) \
 cross=$$(. "$(SDK_ENV)" >/dev/null 2>&1 && command -v "$${TARGET_PREFIX}gcc") || true; \
 [ -n "$$cross" ] || { echo "No cross compiler in the SDK ($(SDK_ENV))."; exit 1; }; \
 [ -d "$(LINUX_TREE)" ] || { echo -e "No kernel tree at $(LINUX_TREE).\n\n  $(BOLD)make src-linux$(if $(filter rpi,$(KERNEL)),-rpi)$(OFF)\n"; exit 1; }; \
