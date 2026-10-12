@@ -31,7 +31,8 @@
 # The networks live in /data/btbench/wifi/wpa_supplicant-wlan0.conf, which wpa_supplicant@wlan0
 # reads (its drop-in from btbench-base points it there). This script owns that file: SSIDs are
 # written in hex and passphrases as the key derived from them, so no SSID or password can break its
-# syntax. It is seeded on first use with the network from the device conf.
+# syntax (with wpa_supplicant 2.11, which derives none from a pipe, as the quoted passphrase). It
+# is seeded on first use with the network from the device conf.
 #
 # CLI commands talk to the running state machine with SIGUSR1 ("look again"); its state is in
 # /run/btbench/wifi.json (the status JSON, rewritten on every change).
@@ -209,8 +210,15 @@ conf_add() {
         # From stdin, not argv: the passphrase would show in ps.
         key=$(printf '%s\n' "$psk" | wpa_passphrase "$ssid" 2>/dev/null |
             sed -n 's/^[[:space:]]*psk=\([0-9a-f]\{64\}\)$/\1/p')
-        [ -n "$key" ] || die "wpa_passphrase could not derive a key"
-        key=$'\tpsk='$key
+        if [ -n "$key" ]; then
+            key=$'\tpsk='$key
+        else
+            # wpa_passphrase 2.11 reads a passphrase only from a terminal (it turns its echo off),
+            # so it derives nothing here. wpa_supplicant then gets the passphrase itself, quoted:
+            # it takes everything up to the last quote, and the passphrase has no control
+            # characters (cmd_add checks).
+            key=$'\tpsk="'$psk'"'
+        fi
     fi
     {
         conf_without "$ssid"
