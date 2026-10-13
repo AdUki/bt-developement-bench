@@ -148,6 +148,21 @@ keys derived. Use `add` and `remove` rather than editing the file. `country=` fo
   reports `43:43:A1:12:1F:AC`, or `AA:AA:AA:AA:AA:AA`, which mainline treats as "unconfigured". In
   either case the script sets `B8:27:EB:xx:xx:xx` with `btmgmt public-addr`, derived from the
   serial number the way Raspberry Pi OS's `bthelper` does. Any other address is left alone.
+- **Which controller.** The board's own: the first not on USB, whatever its hciN (a USB adapter can
+  probe first and take hci0). `BT_HCI` (board.env) only when every controller is on USB.
+
+## A second adapter
+
+A USB Bluetooth adapter next to the board's own controller is a second adapter of the bench's
+(docs/api.md "Two adapters"): the console's Devices page and `bench -a hciN` pick which one to
+scan, pair and connect with, and `bench primary` moves the advertisements, the GATT server and the
+HID remote to another. Its firmware goes in the board's image (`BTBENCH_BOARD_FIRMWARE`).
+
+- **Intel BE200** (Wi-Fi 7 M.2 card, on a USB adapter on the VIM3L; USB `8087:0036`, Bluetooth 5.4
+  with LE Audio). btusb + btintel load `intel/ibt-0291-0291.sfi` and its `.ddc`: from
+  `btbench-firmware-ibt`, pinned to a linux-firmware tag newer than scarthgap's. Without them it
+  stays in its bootloader, an hci with address `00:00:00:00:00:00` that never comes up. Booted,
+  `dmesg` says `hci1: Firmware timestamp 2026.29 buildtype 1 build 120611`.
 
 ## Changing the scripts
 

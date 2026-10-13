@@ -51,12 +51,15 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
              "pairable": true, "discovering": false, "roles": ["central", "peripheral"],
              "uuids": [{"uuid": "110b", "name": "Audio Sink"}],
              "adv": {"supported_instances": 4, "active_instances": 0, "supported_includes": ["tx-power"],
-                     "supported_secondary_channels": ["1M"]}},
+                     "supported_secondary_channels": ["1M"]},
+             "manufacturer": 15, "manufacturer_name": "Broadcom", "version": "4.2",
+             "primary": true, "usb": false,
+             "discovery": { ...as "discovery" below, this adapter's... }},
  "adapters": [ ...every adapter, the same shape... ],
  "devices": [ ...see below... ],
  "request": null,
  "agent": {"policy": "auto", "capability": "KeyboardDisplay", "registered": true},
- "reconnect": {"on": true, "devices": ["50:1E:2D:95:16:34"]},
+ "reconnect": {"on": true, "devices": [{"adapter": "hci0", "address": "50:1E:2D:95:16:34"}]},
  "discovery": {"on": false, "ours": false,
                "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": false,
                           "uuids": [], "pattern": null, "discoverable": false, "auto_connect": false},
@@ -65,7 +68,28 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
                "until_s": null}}
 ```
 
-`adapter` is the primary adapter: hci0, or the one btbenchd was started with (`--bt-adapter`).
+`adapter` is the primary adapter, `discovery` its scan. `manufacturer` is the controller maker's
+Bluetooth company ID (`manufacturer_name` for the common ones), `version` its HCI version; `usb`
+says the controller is on USB (a dongle, an M.2 card on an adapter) rather than the board's own.
+
+**Two adapters.** With more than one adapter (the VIM3L's own BCM4359 and an Intel BE200 on its
+USB, say) every one is the bench's: the device list has each adapter's devices (a device seen by
+both is there twice, once per adapter, each with its own pairing and connection), each adapter
+scans on its own, and the agent answers for all of them (a request's `adapter` says which one is
+asked). One is the **primary**: the advertisements, the local GATT server and the HID remote
+run on it, and a scan or a device request that names no adapter goes to it. It is the board's own
+controller (the first not on USB, hci0 among those) unless `PUT /api/bluetooth {"primary": ...}`
+chose another; that choice is kept by address, and while that adapter is not there (unplugged) the
+board's own stands in. btbenchd started with `--bt-adapter` (a PC) has that one only.
+
+Everything kept per adapter is kept by its address, not its hciN: which controller gets hci0
+depends on the order they probe in, and a USB one can come first. On a board, a USB adapter's
+default alias is the board's name with the end of its address (`btbench-712d0b-5e2e`), so a phone
+that scans tells the two apart.
+
+A device is named by its address and, where it matters, `?adapter=hciN` (or the adapter's
+address) on every `/api/bluetooth/devices/...` and `/api/gatt/...` route: that adapter's object of
+the device, or a 404. Without it, the primary's, else the first adapter's that has it.
 `available` turns false only when BlueZ is not on the bus (or has no adapter); a read of its objects
 that goes unanswered (bluetoothd busy, a Zero W scanning a crowded room) leaves the last answer in
 place with `stale: true` until the next one. A device is:
@@ -132,9 +156,10 @@ member it answers) and `latency_ms`, an error `error_name` and `error`, and no `
 ### `PUT /api/bluetooth`
 
 Any of: `powered`, `alias`, `discoverable`, `discoverable_timeout_s`, `pairable` (on `adapter`,
-e.g. `"hci1"`; default the primary), `agent` (`"auto"` or `"ask"`), `agent_capability`
-(`DisplayOnly`, `DisplayYesNo`, `KeyboardOnly`, `NoInputNoOutput`, `KeyboardDisplay`), `reconnect`
-(bool). Answers with
+e.g. `"hci1"` or its address; default the primary), `primary` (an adapter, hciN or its address, to
+make the primary; `""` back to the board's own; 409 with `--bt-adapter`), `agent` (`"auto"` or
+`"ask"`), `agent_capability` (`DisplayOnly`, `DisplayYesNo`, `KeyboardOnly`, `NoInputNoOutput`,
+`KeyboardDisplay`), `reconnect` (bool). Answers with
 the new state. What is set is kept in `/data/btbench/bluetooth.json` and put back on the adapter
 whenever BlueZ shows it (a reboot, a bluetoothd restart), since BlueZ powers adapters on at start
 and forgets Pairable; a discoverable with a timeout is kept as off. On a board, an adapter whose
@@ -143,8 +168,8 @@ each other show up under names of their own; `"alias": ""` goes back to that (Bl
 stays `btbench`, is not changed).
 
 `reconnect` (on by default): when BlueZ appears with an adapter (a boot, a bluetoothd restart),
-btbenchd connects again, over BR/EDR, the paired devices that were connected over BR/EDR when it
-went: up to three tries, 35 s apart, after 5 s — and not before the board's own A2DP endpoints are
+btbenchd connects again, over BR/EDR and on the adapter they were connected to, the paired devices
+that were connected over BR/EDR when it went: up to three tries, 35 s apart, after 5 s — and not before the board's own A2DP endpoints are
 registered and have settled (up to 30 s): a device connected while PipeWire is still registering
 them discovers only part of them (without SBC, say) and keeps that list for the connection. A peer that saw the board shut down cleanly does
 not call back by itself, and BlueZ reconnects only after a link loss. `reconnect.devices` is that
@@ -159,9 +184,11 @@ negotiates (a new capability re-registers the agent).
 
 ### `POST /api/bluetooth/scan`
 
-`{"on": true, "transport": "auto|le|bredr", "rssi": -70, "duplicate_data": true, "uuids": ["180d"],
-"pattern": "", "seconds": 30}` — discovery with that filter (`SetDiscoveryFilter`) for `seconds`
-(0: until stopped). `{"on": false}` stops it and clears the filter. Every key of BlueZ's filter:
+`{"on": true, "adapter": "hci1", "transport": "auto|le|bredr", "rssi": -70, "duplicate_data": true,
+"uuids": ["180d"], "pattern": "", "seconds": 30}` — discovery on `adapter` (default the primary)
+with that filter (`SetDiscoveryFilter`) for `seconds` (0: until stopped). Each adapter scans on its
+own, with a filter of its own. `{"on": false, "adapter": ...}` stops that adapter's and clears its
+filter; `{"on": false}` alone stops every scan started here. Every key of BlueZ's filter:
 
 | key | what |
 |---|---|
@@ -174,7 +201,7 @@ negotiates (a new capability re-registers the agent).
 | `discoverable` | make the adapter visible while it scans |
 | `auto_connect` | connect to what `pattern` matches, as it is found (needs `pattern`) |
 
-`discovery.filters` lists the keys the adapter's BlueZ takes (`GetDiscoveryFilters`). A filter BlueZ
+An adapter's `discovery.filters` lists the keys its BlueZ takes (`GetDiscoveryFilters`). A filter BlueZ
 refuses fails the scan with its reason (400 for one btbenchd refuses itself: rssi with pathloss,
 auto_connect without a pattern, values out of range).
 

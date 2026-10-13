@@ -40,7 +40,7 @@ bool parse_handle(const std::string& s, uint16_t* out) {
 bool gatt_target(Deps& d, const httplib::Request& req, httplib::Response& res, std::string* path,
                  std::string* iface, uint16_t* handle) {
   const std::string addr = path_param(req, "addr");
-  const std::string dev = d.bt.device_path(addr);
+  const std::string dev = d.bt.device_path(addr, query(req, "adapter", ""));
   if (dev.empty()) {
     send_error(res, 404, "no such device");
     return false;
@@ -136,6 +136,9 @@ std::string strip_ansi(const std::string& s) {
 
 }  // namespace
 
+// A device is named by its address, and on a board with more than one adapter optionally by which
+// adapter's object of it (each adapter that has seen a device has one): ?adapter=hciN or the
+// adapter's address. Without it the primary adapter's, else the first adapter's that has it.
 void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   // ---- The adapter and the agent ----------------------------------------------------------------
 
@@ -150,10 +153,17 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     send_json(res, d.bt.state());
   });
 
-  // Body: any of powered, alias, discoverable, discoverable_timeout_s, pairable (on `adapter`, the
-  // primary by default), agent ("auto"|"ask"), agent_capability, reconnect (bool).
+  // Body: any of powered, alias, discoverable, discoverable_timeout_s, pairable (on `adapter`, hciN
+  // or an address, the primary by default), primary (hciN or an address: the adapter the
+  // advertisements, the GATT server and requests that name no adapter go to; "" the board's own),
+  // agent ("auto"|"ask"), agent_capability, reconnect (bool).
   svr.Put("/api/bluetooth", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     std::string err;
+    if (j.contains("primary")) {
+      if (!j["primary"].is_string()) return send_error(res, 400, "primary is an adapter: hciN or its address, or \"\"");
+      if (!d.bt.set_primary(j["primary"].get<std::string>(), &err))
+        return send_error(res, err == "no such adapter" ? 404 : 409, err);
+    }
     if (j.contains("agent") || j.contains("agent_capability")) {
       if (!d.bt.set_agent(j.value("agent", std::string{}), j.value("agent_capability", std::string{}), &err))
         return send_error(res, 400, err);
@@ -170,7 +180,8 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     send_json(res, d.bt.state());
   }));
 
-  // Body: {"on": bool, "transport": "auto|le|bredr", "rssi": -70, "duplicate_data": bool,
+  // Body: {"on": bool, "adapter": "hci1" (default the primary; with "on": false and none, every
+  // scan started here), "transport": "auto|le|bredr", "rssi": -70, "duplicate_data": bool,
   // "uuids": [...], "pattern": "...", "seconds": N (0 = until stopped; default 30)}.
   svr.Post("/api/bluetooth/scan", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     BtScanFilter f;
@@ -178,7 +189,8 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     if (!bt_scan_filter_from_json(j, &f, &err)) return send_error(res, 400, err);
     const bool on = j.value("on", true);
     const unsigned seconds = j.value("seconds", 30u);
-    if (!d.bt.scan(on, f, seconds, &err)) return send_error(res, 503, err);
+    if (!d.bt.scan(on, j.value("adapter", std::string{}), f, seconds, &err))
+      return send_error(res, err == "no such adapter" ? 404 : 503, err);
   }));
 
   // ---- Devices ----------------------------------------------------------------------------------
@@ -188,7 +200,7 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   });
 
   svr.Get("/api/bluetooth/devices/:addr", [&d](const httplib::Request& req, httplib::Response& res) {
-    const json dev = d.bt.device(path_param(req, "addr"));
+    const json dev = d.bt.device(path_param(req, "addr"), query(req, "adapter", ""));
     if (dev.is_null()) return send_error(res, 404, "no such device");
     send_json(res, dev);
   });
@@ -197,6 +209,7 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   // {"uuid": "110b"} for one profile), trust, untrust, block, unblock.
   svr.Post("/api/bluetooth/devices/:addr/:action", [&d](const httplib::Request& req, httplib::Response& res) {
     const std::string addr = path_param(req, "addr");
+    const std::string adapter = query(req, "adapter", "");
     const std::string act = path_param(req, "action");
     json body = json::object();
     if (!req.body.empty()) {
@@ -209,9 +222,9 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     std::string err;
     bool ok;
     if (act == "trust" || act == "untrust") {
-      ok = d.bt.set_device_props(addr, json{{"trusted", act == "trust"}}, &err);
+      ok = d.bt.set_device_props(addr, json{{"trusted", act == "trust"}}, &err, adapter);
     } else if (act == "block" || act == "unblock") {
-      ok = d.bt.set_device_props(addr, json{{"blocked", act == "block"}}, &err);
+      ok = d.bt.set_device_props(addr, json{{"blocked", act == "block"}}, &err, adapter);
     } else {
       BtManager::Action a;
       std::string arg;
@@ -236,7 +249,7 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
       } else {
         return send_error(res, 404, "no such action: " + act);
       }
-      ok = d.bt.device_action(addr, a, arg, &err);
+      ok = d.bt.device_action(addr, a, arg, &err, adapter);
     }
     if (!ok) return send_error(res, err == "no such device" ? 404 : err.find("UUID") != std::string::npos ? 400 : 503, err);
     send_ok(res);
@@ -247,7 +260,7 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   // Connection Information), the one place that has a live link's RSSI; asked when called (the
   // console asks every two seconds while a device is open), never in the background.
   svr.Get("/api/bluetooth/devices/:addr/link", [&d](const httplib::Request& req, httplib::Response& res) {
-    const json dev = d.bt.device(path_param(req, "addr"));
+    const json dev = d.bt.device(path_param(req, "addr"), query(req, "adapter", ""));
     if (dev.is_null()) return send_error(res, 404, "no such device");
     static const std::string btmgmt = [] {
       for (const char* p : {"/usr/bin/btmgmt", "/usr/local/bin/btmgmt"})
@@ -290,15 +303,16 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   svr.Put("/api/bluetooth/devices/:addr", json_route([&d](const json& j, const httplib::Request& req,
                                                           httplib::Response& res) {
     std::string err;
-    if (!d.bt.set_device_props(path_param(req, "addr"), j, &err))
+    const std::string adapter = query(req, "adapter", "");
+    if (!d.bt.set_device_props(path_param(req, "addr"), j, &err, adapter))
       return send_error(res, err == "no such device" ? 404 : 409, err);
-    const json dev = d.bt.device(path_param(req, "addr"));
+    const json dev = d.bt.device(path_param(req, "addr"), adapter);
     send_json(res, dev);
   }));
 
   svr.Delete("/api/bluetooth/devices/:addr", [&d](const httplib::Request& req, httplib::Response& res) {
     std::string err;
-    if (!d.bt.device_action(path_param(req, "addr"), BtManager::Action::Remove, "", &err))
+    if (!d.bt.device_action(path_param(req, "addr"), BtManager::Action::Remove, "", &err, query(req, "adapter", "")))
       return send_error(res, err == "no such device" ? 404 : 503, err);
     send_ok(res);
   });
@@ -326,7 +340,7 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
   // ---- GATT client ------------------------------------------------------------------------------
 
   svr.Get("/api/gatt/:addr", [&d](const httplib::Request& req, httplib::Response& res) {
-    const std::string dev = d.bt.device_path(path_param(req, "addr"));
+    const std::string dev = d.bt.device_path(path_param(req, "addr"), query(req, "adapter", ""));
     if (dev.empty()) return send_error(res, 404, "no such device");
     const auto objs = d.bt.objects();
     json j = model_gatt(*objs, dev);

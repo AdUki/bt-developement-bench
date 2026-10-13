@@ -109,10 +109,11 @@ std::string bt_device_path(const std::string& adapter_path, const std::string& a
 
 std::string bt_pick_adapter(const std::vector<BtAdapterId>& adapters, const std::string& want) {
   if (want.empty()) {
-    std::string path;
+    const BtAdapterId* best = nullptr;
+    const auto rank = [](const BtAdapterId& a) { return (a.usb ? 2 : 0) + (a.path == "/org/bluez/hci0" ? 0 : 1); };
     for (const BtAdapterId& a : adapters)
-      if (path.empty() || a.path == "/org/bluez/hci0") path = a.path;
-    return path;
+      if (!best || rank(a) < rank(*best)) best = &a;
+    return best ? best->path : std::string{};
   }
   const bool by_address = bt_address_ok(want);
   for (const BtAdapterId& a : adapters) {
@@ -126,6 +127,27 @@ std::vector<BtAdapterId> model_adapter_ids(const json& objs) {
   for (auto it = objs.begin(); it != objs.end(); ++it)
     if (it->contains(kAdapter)) out.push_back({it.key(), str_of((*it)[kAdapter], "Address")});
   return out;
+}
+
+std::string bt_company_name(int id) {
+  switch (id) {
+    case 2: return "Intel";
+    case 10: return "Qualcomm (CSR)";
+    case 13: return "Texas Instruments";
+    case 15: return "Broadcom";
+    case 29: return "Qualcomm";
+    case 70: return "MediaTek";
+    case 93: return "Realtek";
+    case 305: return "Cypress";
+    case 1521: return "Linux Foundation";  // a vhci
+    default: return {};
+  }
+}
+
+std::string bt_version_name(int v) {
+  static const char* const kNames[] = {"1.0b", "1.1", "1.2", "2.0", "2.1", "3.0", "4.0", "4.1",
+                                       "4.2", "5.0", "5.1", "5.2", "5.3", "5.4", "6.0", "6.1"};
+  return v >= 0 && v < static_cast<int>(sizeof kNames / sizeof *kNames) ? kNames[v] : std::string{};
 }
 
 json model_adapters(const json& objs) {
@@ -145,7 +167,10 @@ json model_adapters(const json& objs) {
            {"discovering", bool_of(a, "Discovering")},
            {"roles", strv_of(a, "Roles")},
            {"uuids", uuid_list(strv_of(a, "UUIDs"))},
-           {"adv", nullptr}};
+           {"adv", nullptr},
+           {"manufacturer", a.contains("Manufacturer") ? json(num_of(a, "Manufacturer")) : json(nullptr)},
+           {"manufacturer_name", bt_company_name(a.contains("Manufacturer") ? static_cast<int>(num_of(a, "Manufacturer")) : -1)},
+           {"version", a.contains("Version") ? json(bt_version_name(static_cast<int>(num_of(a, "Version")))) : json(nullptr)}};
     if (it->contains(kAdvMgr)) {
       const json& m = (*it)[kAdvMgr];
       j["adv"] = json{{"supported_instances", num_of(m, "SupportedInstances")},

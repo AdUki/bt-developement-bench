@@ -4,7 +4,27 @@
 // operation (a pairing waiting on a phone) shows up as the device's "busy", then its result.
 
 let btState = null;
-const devOpen = new Set();  // addresses whose details are expanded
+const devOpen = new Set();  // devKey()s whose details are expanded
+
+// A device is one adapter's: on a board with two adapters, each adapter that has seen a device has
+// its own object of it (its own pairing, its own connection). Its key, for a select or the rows
+// opened, is "AA:BB:CC:DD:EE:FF@hci1", and every request about it names the adapter.
+const devKey = d => d.address + '@' + d.adapter;
+const keyAddr = k => (k || '').split('@')[0];
+const keyQ = k => (k || '').includes('@') ? '?adapter=' + encodeURIComponent(k.split('@')[1]) : '';
+const devByKey = k => (btState && btState.devices.find(d => devKey(d) === k)) || null;
+const devUrl = (d, rest = '') => `/bluetooth/devices/${d.address}${rest}?adapter=${encodeURIComponent(d.adapter)}`;
+
+// The adapter the card, the scan and the device list are about: the primary until another is
+// picked, remembered in this browser by its address (an hciN can change at the next boot).
+let adSel = '';
+try { adSel = localStorage.getItem('btbench.adapter') || ''; } catch (e) { /* the primary */ }
+function selAdapter(b) {
+  const as = (b && b.adapters) || [];
+  return as.find(a => a.address === adSel) || (b && b.adapter) || as[0] || null;
+}
+const adWhat = a => [a.manufacturer_name || (a.manufacturer != null ? 'company ' + a.manufacturer : ''),
+  a.version ? 'Bluetooth ' + a.version : '', a.usb ? 'USB' : ''].filter(Boolean).join(' · ');
 
 function btApply(b) {
   btState = b;
@@ -18,12 +38,15 @@ function btApply(b) {
 // Whether the adapter's BlueZ takes a discovery filter key (GetDiscoveryFilters); unknown (an
 // empty list) counts as yes, and BlueZ says no itself if it is not.
 function scSupports(key) {
-  const f = btState && btState.discovery && btState.discovery.filters;
+  const a = selAdapter(btState);
+  const f = a && a.discovery && a.discovery.filters;
   return !f || !f.length || f.includes(key);
 }
 
 function renderScanOptions(b) {
-  const f = (b.discovery && b.discovery.filters) || [];
+  const a = selAdapter(b);
+  const disc = (a && a.discovery) || {};
+  const f = disc.filters || [];
   document.querySelectorAll('#sc-opts [data-filter]').forEach(el => {
     const keys = el.dataset.filter.split(' ');
     const ok = !f.length || keys.some(k => f.includes(k));
@@ -32,7 +55,7 @@ function renderScanOptions(b) {
   setText($('sc-note'), f.length ? 'This adapter takes: ' + f.join(', ') + '.' : '');
   $('sc-sig-val').disabled = !$('sc-sig').value || $('sc-sig').disabled;
   if (!scSupports('AutoConnect') || !$('sc-pattern').value.trim()) $('sc-auto').disabled = true;
-  const cur = b.discovery && b.discovery.on && b.discovery.ours ? b.discovery.filter : null;
+  const cur = disc.on && disc.ours ? disc.filter : null;
   const parts = cur ? [cur.transport === 'auto' ? 'dual' : cur.transport === 'le' ? 'LE' : 'BR/EDR',
     cur.rssi != null ? 'RSSI ≥ ' + cur.rssi : '', cur.pathloss != null ? 'path loss ≤ ' + cur.pathloss : '',
     cur.uuids.length ? cur.uuids.join(', ') : '', cur.pattern != null ? '“' + cur.pattern + '…”' : ''].filter(Boolean) : [];
@@ -40,9 +63,19 @@ function renderScanOptions(b) {
 }
 
 function renderAdapter(b) {
-  const a = b.adapter;
+  const a = selAdapter(b);
+  const as = b.adapters || [];
   setText($('ad-msg'), b.error || (b.stale ? 'BlueZ is slow to answer: the devices are as it last listed them.' : ''));
-  setText($('ad-name'), a ? `${a.name} ${a.address}` : '');
+  // Two adapters (the board's own and a USB one): which one this card is about, and which is the
+  // primary — the one the advertisements, the GATT server and the HID remote run on.
+  $('ad-pick').hidden = as.length < 2;
+  if (as.length > 1)
+    setHTML($('ad-pick'), as.map(x => `<button class="seg${a && x.address === a.address ? ' on' : ''}" data-ad="${esc(x.address)}"
+      title="${esc([x.alias, x.address, adWhat(x), x.primary ? 'primary' : ''].filter(Boolean).join(' · '))}">${esc(x.name)}${x.primary ? ' ★' : ''}</button>`).join(''));
+  setText($('ad-name'), a ? [as.length > 1 ? '' : a.name, a.address, adWhat(a)].filter(Boolean).join(' · ') : '');
+  setHTML($('ad-role'), !a || as.length < 2 ? ''
+    : a.primary ? '<span class="tag good" title="Advertising, the GATT server and the HID remote run on this adapter, and a request that names no adapter goes to it">primary</span>'
+    : `<button class="small-btn" data-act="primary" title="Move advertising, the GATT server and the HID remote to ${esc(a.name)}">Make primary</button>`);
   const on = !!(b.available && a);
   ['ad-powered', 'ad-discoverable', 'ad-pairable', 'ad-disc-timeout', 'ad-alias', 'ag-policy', 'ag-cap',
     'ad-reconnect', 'sc-toggle'].forEach(id => { $(id).disabled = !on; });
@@ -58,7 +91,7 @@ function renderAdapter(b) {
     if (idle($('ag-cap'))) $('ag-cap').value = b.agent.capability;
   }
   if (b.reconnect && idle($('ad-reconnect'))) $('ad-reconnect').checked = b.reconnect.on;
-  const d = b.discovery || {};
+  const d = (a && a.discovery) || {};
   setText($('sc-toggle'), d.on ? 'Stop' : 'Scan');
   const how = renderScanOptions(b);
   setText($('sc-state'), d.on
@@ -86,7 +119,7 @@ function bearerChips(d) {
 // Each bearer of a device: its state and a connect or disconnect for that transport alone, then
 // which one a dual-mode device connects on first, and why it last went down.
 function bearersHTML(d) {
-  const a = d.address;
+  const a = devKey(d);
   const b = d.bearers || {};
   const rows = ['bredr', 'le'].filter(k => b[k]).map(k => {
     const x = b[k];
@@ -98,10 +131,10 @@ function bearersHTML(d) {
     const here = d.busy && d.busy_on === k;
     const err = !d.busy && d.error && d.error_on === k ? `<span class="b-err small bad-text">${esc(d.error)}</span>` : '';
     return `<span class="b-name">${BEARER_NAME[k]}</span><span class="small">${here ? `<span class="warn-text"><span class="spin"></span>${esc(d.busy)} ${BEARER_NAME[k]}…</span>` : st}</span>
-      <button class="small-btn" data-act="bearer-${act}" data-bearer="${k}" data-addr="${a}"${d.busy ? ' disabled' : ''}>${x.connected ? 'Disconnect' : 'Connect'} ${BEARER_NAME[k]}</button>${err}`;
+      <button class="small-btn" data-act="bearer-${act}" data-bearer="${k}" data-key="${a}"${d.busy ? ' disabled' : ''}>${x.connected ? 'Disconnect' : 'Connect'} ${BEARER_NAME[k]}</button>${err}`;
   }).join('');
   const pref = d.preferred_bearer != null ? `<label class="row small">Connect first on
-      <select class="dev-pref" data-addr="${a}">${[['last-used', 'the last used'], ['last-seen', 'the last seen'], ['bredr', 'BR/EDR'], ['le', 'LE']]
+      <select class="dev-pref" data-key="${a}">${[['last-used', 'the last used'], ['last-seen', 'the last seen'], ['bredr', 'BR/EDR'], ['le', 'LE']]
         .map(([v, t]) => `<option value="${v}"${v === d.preferred_bearer ? ' selected' : ''}>${t}</option>`).join('')}</select>
       <span class="muted">(takes effect once disconnected)</span></label>` : '';
   const ld = d.last_disconnect;
@@ -112,10 +145,10 @@ function bearersHTML(d) {
 
 // The live link of a connected device (btmgmt conn-info): asked every two seconds while its
 // details are open, since BlueZ's RSSI comes from scanning only.
-const devLink = {};  // address → {bredr, le} or {error}
+const devLink = {};  // devKey → {bredr, le} or {error}
 let devLinkTimer = null;
 function linkHTML(d) {
-  const l = devLink[d.address];
+  const l = devLink[devKey(d)];
   if (!d.connected) return '';
   if (!l) return '<span class="muted">reading…</span>';
   if (l.error) return `<span class="muted">${esc(l.error)}</span>`;
@@ -130,10 +163,10 @@ function linkHTML(d) {
   }).join('') || '<span class="muted">no connected bearer</span>';
 }
 function pollLinks() {
-  const open = btState ? btState.devices.filter(d => devOpen.has(d.address) && d.connected) : [];
+  const open = btState ? btState.devices.filter(d => devOpen.has(devKey(d)) && d.connected) : [];
   if (!open.length || currentTab !== 'devices' || document.hidden) return;
-  Promise.all(open.map(d => api(`/bluetooth/devices/${d.address}/link`)
-    .then(r => { devLink[d.address] = r; }, e => { devLink[d.address] = {error: e.message || String(e)}; })))
+  Promise.all(open.map(d => api(devUrl(d, '/link'))
+    .then(r => { devLink[devKey(d)] = r; }, e => { devLink[devKey(d)] = {error: e.message || String(e)}; })))
     .then(() => renderDevices());
 }
 const tag = (text, cls) => `<span class="tag ${cls || ''}">${esc(text)}</span>`;
@@ -200,25 +233,35 @@ const uuidLabel = (d, u) => {
 // One row a device: a state LED, its name with what it is, and the one action its state calls for
 // (pair, connect or disconnect). The rest — trust, remove, profiles, a PIN, where else to take it —
 // waits behind a click on the row, since it is wanted for one device at a time.
+// A device that is one of this board's own adapters, as the other adapter sees it advertise.
+function ownAdapterTag(d) {
+  const own = ((btState && btState.adapters) || []).find(x => x.address === d.address);
+  return own ? `<span class="tag own" title="One of this board's own adapters, seen by the other one">this board · ${esc(own.name)}</span>` : '';
+}
+
 function deviceRow(d) {
-  const a = d.address;
+  const a = devKey(d);
   const busy = !!d.busy;
   const dis = busy ? ' disabled' : '';
   const open = devOpen.has(a);
-  const btn = (act, label, cls) => `<button data-act="${act}" data-addr="${a}" class="${cls || ''}"${dis}>${label}</button>`;
+  const btn = (act, label, cls) => `<button data-act="${act}" data-key="${a}" class="${cls || ''}"${dis}>${label}</button>`;
+  // One button of one width whatever it says, the work in progress included, so the row does not
+  // grow a line or move its neighbours while a device connects.
   let main;
-  if (busy && d.busy === 'pairing') main = `<button data-act="cancel-pairing" data-addr="${a}">Cancel pairing</button>`;
-  else if (d.connected) main = btn('disconnect', 'Disconnect');
-  else if (!d.paired) main = btn('pair', 'Pair', 'primary');
-  else main = btn('connect', 'Connect', 'primary');
+  if (busy && d.busy === 'pairing') main = `<button data-act="cancel-pairing" data-key="${a}" class="dev-main">Cancel pairing</button>`;
+  else if (busy) main = `<button class="dev-main" disabled><span class="spin"></span>${esc(d.busy.charAt(0).toUpperCase() + d.busy.slice(1))}…</button>`;
+  else if (d.connected) main = btn('disconnect', 'Disconnect', 'dev-main');
+  else if (!d.paired) main = btn('pair', 'Pair', 'primary dev-main');
+  else main = btn('connect', 'Connect', 'primary dev-main');
   const kind = d.appearance_name || d.class_major || '';
   const led = busy ? 'busy' : d.connected ? 'on' : d.paired ? 'paired' : '';
+  // What a connect changes comes last, so it does not push the rest around.
   const sub = [
-    `<span class="mono">${a}</span>`,
+    `<span class="mono">${d.address}</span>`,
     kind ? `<span>${esc(kind)}</span>` : '',
+    bearerChips(d),
     d.connected ? '<span class="good-text">connected</span>' : d.paired ? `<span>${d.bonded ? 'bonded' : 'paired'}</span>` : '',
     d.rssi != null && !d.connected ? `<span title="RSSI when last seen in a scan">${sigBars(d.rssi)} ${d.rssi} dBm</span>` : '',
-    bearerChips(d),
     profileTags(d),
   ].join('');
   let body = '';
@@ -246,7 +289,7 @@ function deviceRow(d) {
       d.legacy_pairing ? tag('legacy pairing') : '',
       d.connected && !d.services_resolved ? tag('resolving services', 'warn') : '',
     ].join(' ');
-    const dl = 'dev-uuids-' + a.replace(/:/g, '');
+    const dl = 'dev-uuids-' + a.replace(/[:@]/g, '');
     body = `<div class="rw-body">
       ${tags ? `<div class="row wrap" style="margin-bottom:.5rem">${tags}</div>` : ''}
       ${bearersHTML(d)}
@@ -254,32 +297,30 @@ function deviceRow(d) {
       <div class="kv">${kv}</div>
       <div class="acts">
         ${d.trusted ? btn('untrust', 'Untrust') : btn('trust', 'Trust')}
-        <button data-act="remove" data-addr="${a}" class="danger">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button>
+        <button data-act="remove" data-key="${a}" class="danger">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button>
         <span class="spacer"></span>
-        <button class="small-btn" data-act="goto-gatt" data-addr="${a}">GATT explorer</button>
-        <button class="small-btn" data-act="goto-obex" data-addr="${a}">Send files</button>
-        <button class="small-btn" data-act="goto-avdtp" data-addr="${a}">AVDTP probe</button>
+        <button class="small-btn" data-act="goto-gatt" data-key="${a}">GATT explorer</button>
+        <button class="small-btn" data-act="goto-obex" data-key="${a}">Send files</button>
+        <button class="small-btn" data-act="goto-avdtp" data-key="${a}">AVDTP probe</button>
       </div>
       <details class="more-fields">
         <summary>One profile, or a legacy PIN</summary>
         <div class="row wrap" style="margin-top:.5rem">
-          <input class="prof-uuid mono" data-addr="${a}" placeholder="profile UUID, e.g. 110b" list="${dl}">
+          <input class="prof-uuid mono" data-key="${a}" placeholder="profile UUID, e.g. 110b" list="${dl}">
           <datalist id="${dl}">${d.uuids.map(u => `<option value="${esc(u.uuid)}">${esc(u.name)}</option>`).join('')}</datalist>
           ${btn('connect-profile', 'Connect')}${btn('disconnect-profile', 'Disconnect')}
-          <input class="pair-pin" data-addr="${a}" placeholder="PIN for a legacy pair" maxlength="16">
+          <input class="pair-pin" data-key="${a}" placeholder="PIN for a legacy pair" maxlength="16">
           ${btn('pair', 'Pair with PIN')}
         </div>
       </details>
     </div>`;
   }
-  return `<div class="rw click${open ? ' open' : ''}">
-    <div class="rw-main" data-act="toggle" data-addr="${a}">
+  return `<div class="rw click${open ? ' open' : ''}" data-dev="${a}" data-state="${led}">
+    <div class="rw-main" data-act="toggle" data-key="${a}">
       <span class="rw-led ${led}"></span>
-      <div class="rw-title"><b>${esc(d.alias || d.address)}</b><span class="rw-sub">${sub}</span></div>
+      <div class="rw-title"><b>${esc(d.alias || d.address)}</b>${ownAdapterTag(d)}<span class="rw-sub">${sub}</span></div>
       <div class="rw-acts">${main}<span class="chev"></span></div>
     </div>
-    ${busy && !d.busy_on ? `<div class="rw-note warn-text"><span class="spin"></span>${esc(d.busy)}…</div>` : ''}
-    ${busy && d.busy_on && !open ? `<div class="rw-note warn-text"><span class="spin"></span>${esc(d.busy)} ${esc(BEARER_NAME[d.busy_on] || uuidLabel(d, d.busy_on))}…</div>` : ''}
     ${d.error && (!d.error_on || !open) ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
     ${body}
   </div>`;
@@ -308,48 +349,120 @@ function renderDevices() {
   const ae = document.activeElement;
   if (ae && (ae.classList.contains('prof-uuid') || ae.classList.contains('pair-pin') || ae.classList.contains('dev-pref'))) return;
   const f = $('dev-filter').value.trim().toLowerCase();
-  const list = b.devices.filter(d => !f || (d.alias + ' ' + d.address).toLowerCase().includes(f));
-  setHTML($('dev-list'), list.length ? list.map(deviceRow).join('')
-    : `<div class="empty">${b.available ? (f ? 'No device matches the filter.' : 'No devices yet. Press Scan to find some, or make the board visible and pair from the other side.')
+  // With two adapters, the devices of the one picked: what it has seen, paired and connected.
+  const a = (b.adapters || []).length > 1 ? selAdapter(b) : null;
+  const list = stableOrder(b.devices.filter(d => (!a || d.adapter === a.name) && (!f || (d.alias + ' ' + d.address).toLowerCase().includes(f))),
+    f + '@' + (a ? a.name : ''));
+  if (!list.length) {
+    setHTML($('dev-list'), `<div class="empty">${b.available ? (f ? 'No device matches the filter.' : `No devices${a ? ' on ' + esc(a.name) : ''} yet. Press Scan to find some, or make the board visible and pair from the other side.`)
       : esc(b.error || 'Bluetooth is not available.')}</div>`);
+    return;
+  }
+  patchRows($('dev-list'), list.map(d => [devKey(d), deviceRow(d)]));
+}
+
+// Rows keep the place they were first shown in: a connect, a pairing or a new RSSI does not move
+// them under the pointer. A new device goes last; coming back to the view, or another filter or
+// adapter, sorts them again (the daemon's order: connected, paired, then by name).
+let devOrder = new Map();  // devKey → position
+let devOrderFor = null;
+function stableOrder(list, view) {
+  if (view !== devOrderFor) {
+    devOrder = new Map();
+    devOrderFor = view;
+  }
+  const known = list.filter(d => devOrder.has(devKey(d)));
+  const fresh = list.filter(d => !devOrder.has(devKey(d)));
+  known.sort((x, y) => devOrder.get(devKey(x)) - devOrder.get(devKey(y)));
+  const out = known.concat(fresh);
+  devOrder = new Map(out.map((d, i) => [devKey(d), i]));
+  return out;
+}
+
+// Updates the rows in place, [key, html] in order: only a row that changed is rebuilt, the rest
+// keep their DOM (and with it hover, focus and text selection). A rebuilt row keeps its open
+// <details>, and a change of state (connected, paired, busy) is flashed rather than jumped to.
+function patchRows(list, rows) {
+  list._html = null;  // setHTML's cache no longer says what is there
+  const have = new Map([...list.children].filter(el => el.dataset.dev).map(el => [el.dataset.dev, el]));
+  [...list.children].filter(el => !el.dataset.dev).forEach(el => el.remove());
+  let at = list.firstElementChild;
+  for (const [key, html] of rows) {
+    let el = have.get(key);
+    have.delete(key);
+    if (!el || el._html !== html) {
+      const t = document.createElement('template');
+      t.innerHTML = html.trim();
+      const fresh = t.content.firstElementChild;
+      fresh._html = html;
+      if (el) {
+        const opened = [...el.querySelectorAll('details')].map(x => x.open);
+        fresh.querySelectorAll('details').forEach((x, i) => { if (opened[i]) x.open = true; });
+        if (el.dataset.state !== fresh.dataset.state) fresh.classList.add('changed');
+        el.replaceWith(fresh);
+        if (at === el) at = fresh;
+      }
+      el = fresh;
+    }
+    if (el !== at) list.insertBefore(el, at);
+    else at = at.nextElementSibling;
+  }
+  have.forEach(el => el.remove());
 }
 
 function refreshBt() { return api('/bluetooth').then(btApply).catch(fail); }
 
-function deviceAction(addr, act, el) {
-  const path = `/bluetooth/devices/${addr}`;
+function deviceAction(key, act, el) {
+  const addr = keyAddr(key);
+  const d = devByKey(key);
+  const url = (rest = '') => `/bluetooth/devices/${addr}${rest}${keyQ(key)}`;
   const uuidOf = () => {
-    const i = document.querySelector(`input.prof-uuid[data-addr="${addr}"]`);
+    const i = document.querySelector(`input.prof-uuid[data-key="${key}"]`);
     return i ? i.value.trim() : '';
   };
   let req;
-  if (act === 'goto-gatt') return openOnDevice('le/explore', 'gx-dev', addr);
+  if (act === 'goto-gatt') return openOnDevice('le/explore', 'gx-dev', d ? devKey(d) : key);
   if (act === 'goto-obex') return openOnDevice('obex/sessions', 'ob-dev', addr);
   if (act === 'goto-avdtp') return openOnDevice('audio/bt', 'av-dev', addr);
   if (act === 'toggle') {
-    if (devOpen.has(addr)) devOpen.delete(addr); else devOpen.add(addr);
+    if (devOpen.has(key)) devOpen.delete(key); else devOpen.add(key);
     renderDevices();
     return;
   } else if (act === 'remove') {
-    if (!twoClick('rm' + addr, renderDevices)) return;
-    req = del(path);
+    if (!twoClick('rm' + key, renderDevices)) return;
+    req = del(url());
   } else if (act === 'pair') {
-    const pin = document.querySelector(`input.pair-pin[data-addr="${addr}"]`);
-    req = post(`${path}/pair`, pin && pin.value.trim() ? {pin: pin.value.trim()} : undefined);
+    const pin = document.querySelector(`input.pair-pin[data-key="${key}"]`);
+    req = post(url('/pair'), pin && pin.value.trim() ? {pin: pin.value.trim()} : undefined);
   } else if (act === 'bearer-connect' || act === 'bearer-disconnect') {
-    req = post(`${path}/${act.split('-')[1]}`, {bearer: el.dataset.bearer});
+    req = post(url('/' + act.split('-')[1]), {bearer: el.dataset.bearer});
   } else if (act === 'connect-profile' || act === 'disconnect-profile') {
     const u = uuidOf();
     if (!u) return toast('Type a profile UUID first (e.g. 110b for A2DP sink)');
-    req = post(`${path}/${act.split('-')[0]}`, {uuid: u});
+    req = post(url('/' + act.split('-')[0]), {uuid: u});
   } else {
-    req = post(`${path}/${act}`);
+    req = post(url('/' + act));
   }
   req.then(() => setTimeout(refreshBt, 200)).catch(fail);
 }
 
 function setupDevices() {
-  const send = body => put('/bluetooth', body).then(btApply).catch(e => { fail(e); refreshBt(); });
+  // The adapter settings go to the adapter picked; the agent's and the reconnect are the bench's.
+  const send = body => {
+    const a = selAdapter(btState);
+    return put('/bluetooth', a ? Object.assign({adapter: a.address}, body) : body).then(btApply).catch(e => { fail(e); refreshBt(); });
+  };
+  $('adapter-card').addEventListener('click', e => {
+    const seg = e.target.closest('[data-ad]');
+    if (seg) {
+      adSel = seg.dataset.ad;
+      try { localStorage.setItem('btbench.adapter', adSel); } catch (e2) { /* this visit only */ }
+      renderDevices();
+      return;
+    }
+    const pr = e.target.closest('[data-act="primary"]');
+    if (pr) send({primary: selAdapter(btState).address});
+  });
   $('ad-powered').onchange = e => send({powered: e.target.checked});
   $('ad-discoverable').onchange = e => send({discoverable: e.target.checked});
   $('ad-pairable').onchange = e => send({pairable: e.target.checked});
@@ -383,9 +496,11 @@ function setupDevices() {
   $('sc-opts').addEventListener('change', scSync);
   scSync();
   $('sc-toggle').onclick = () => {
-    const on = !(btState && btState.discovery && btState.discovery.on);
+    const a = selAdapter(btState);
+    const on = !(a && a.discovery && a.discovery.on);
     const body = {on, transport: $('sc-transport').value, seconds: parseInt($('sc-secs').value, 10) || 0,
       duplicate_data: $('sc-dup').checked};
+    if (a) body.adapter = a.address;
     const sig = $('sc-sig').value, v = $('sc-sig-val').value.trim();
     if (sig && v !== '') body[sig] = parseInt(v, 10);
     const uuids = $('sc-uuids').value.split(/[\s,]+/).filter(Boolean);
@@ -398,20 +513,23 @@ function setupDevices() {
   };
   $('dev-list').addEventListener('change', e => {
     if (e.target.classList.contains('dev-pref'))
-      put(`/bluetooth/devices/${e.target.dataset.addr}`, {preferred_bearer: e.target.value})
+      put(`/bluetooth/devices/${keyAddr(e.target.dataset.key)}${keyQ(e.target.dataset.key)}`, {preferred_bearer: e.target.value})
         .then(() => setTimeout(refreshBt, 200)).catch(e2 => { fail(e2); refreshBt(); });
   });
   setInterval(pollLinks, 2000);
   $('dev-filter').oninput = renderDevices;
   $('dev-list').onclick = e => {
     const b = e.target.closest('[data-act]');
-    if (b && !b.disabled && b.tagName !== 'SELECT') deviceAction(b.dataset.addr, b.dataset.act, b);
+    if (b && !b.disabled && b.tagName !== 'SELECT') deviceAction(b.dataset.key, b.dataset.act, b);
   };
 }
 
 registerTab('devices', {
   topics: () => ['bt'],
-  show: refreshBt,
+  show() {
+    devOrderFor = null;
+    return refreshBt();
+  },
   onMessage: (topic, data) => { if (topic === 'bt') btApply(data); },
 });
 setupDevices();

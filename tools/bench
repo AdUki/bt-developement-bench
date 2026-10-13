@@ -6,7 +6,9 @@
 #   BENCH=192.168.1.42 bench devices bench -b btbench.local:8080 mon
 #
 # BENCH (or -b) is the board: host, host:port or a URL. Default 10.55.0.1 (the USB gadget link),
-# or localhost when run on the board. Needs curl and jq; `mon` also tput.
+# or localhost when run on the board. On a board with two adapters, BENCH_ADAPTER (or -a) names the
+# one to scan, pair and connect with: hciN or its address (default the primary). Needs curl and jq;
+# `mon` also tput.
 set -uo pipefail
 
 VERSION=1
@@ -39,6 +41,7 @@ default_bench() {
 while [ $# -gt 0 ]; do
   case "$1" in
     -b|--bench) [ $# -ge 2 ] || die "$1 needs a host"; BENCH=$2; shift 2 ;;
+    -a|--adapter) [ $# -ge 2 ] || die "$1 needs an adapter (hciN or its address)"; BENCH_ADAPTER=$2; shift 2 ;;
     --json) JSON=1; shift ;;
     -y|--yes) YES=1; shift ;;
     --) shift; break ;;
@@ -47,6 +50,10 @@ while [ $# -gt 0 ]; do
 done
 
 BENCH=${BENCH:-$(default_bench)}
+ADAPTER=${BENCH_ADAPTER-}
+# The adapter a device request is about: each adapter has its own object of a device it has seen.
+AQ=""
+[ -n "$ADAPTER" ] && AQ="?adapter=$ADAPTER"
 case "$BENCH" in
   http://*|https://*) URL=${BENCH%/} ;;
   *) URL="http://${BENCH%/}" ;;
@@ -98,16 +105,29 @@ confirm() {
 
 # ---- Bluetooth ---------------------------------------------------------------------------------
 
+# The devices of a GET /api/bluetooth: with -a only that adapter's, and with two adapters and no -a
+# an ADAPTER column (a device seen by both is listed once per adapter).
 DEVICE_TABLE='
   def flags: (if .connected then "C" else "-" end) + (if .paired then "P" else "-" end)
            + (if .bonded then "B" else "-" end) + (if .trusted then "T" else "-" end)
            + (if .blocked then "X" else "-" end);
-  ["ADDRESS", "TYPE", "RSSI", "CPBTX", "NAME"],
-  (.[] | [.address, (.address_type // "" | if . == "" then "-" else . end),
-          (if .rssi == null then "-" else (.rssi | tostring) end), flags,
-          (.alias + (if (.busy // "") != "" then "  [" + .busy + "…]" else "" end)
+  (.adapters | map(select($a != "" and (.name == $a or (.address | ascii_upcase) == ($a | ascii_upcase)))) | first | .name) as $sel
+  | ((.adapters | length) > 1 and $sel == null) as $many
+  | (["ADDRESS", "TYPE", "RSSI", "CPBTX"] + (if $many then ["ADAPTER"] else [] end) + ["NAME"]),
+    (.devices[] | select($sel == null or .adapter == $sel)
+     | [.address, (.address_type // "" | if . == "" then "-" else . end),
+        (if .rssi == null then "-" else (.rssi | tostring) end), flags]
+       + (if $many then [.adapter] else [] end)
+       + [(.alias + (if (.busy // "") != "" then "  [" + .busy + "…]" else "" end)
                   + (if (.error // "") != "" then "  !" + .error else "" end))])
   | @tsv'
+
+ADAPTER_LINE='.name + "  " + .address + "  "
+  + ([.manufacturer_name, (if .version != null then "BT " + .version else empty end), (if .usb then "USB" else empty end)]
+     | map(select(. != "")) | join(" · "))
+  + "  \"" + .alias + "\"  " + (if .powered then "on" else "off" end)
+  + (if .discoverable then ", discoverable" else "" end) + (if .pairable then ", pairable" else "" end)
+  + (if .discovering then ", scanning" else "" end) + (if .primary then "  (primary)" else "" end)'
 
 cmd_status() {
   get /api/bluetooth | show '
@@ -123,11 +143,32 @@ cmd_status() {
        + ([.devices[] | select(.paired)] | length | tostring) + " paired)",
     (if .request != null then "request   " + .request.kind + " from " + .request.name + " " + .request.address
        + (if .request.passkey != "" then " code " + .request.passkey else "" end) + "  (bench agent)" else empty end),
-    (.adapters | if length > 1 then "adapters  " + ([.[] | .name + " " + .address] | join(", ")) else empty end)'
+    (.adapters | if length > 1 then "adapters  " + ([.[] | .name + " " + .address + (if .manufacturer_name != "" then " " + .manufacturer_name else "" end)
+       + (if .primary then " (primary)" else "" end)] | join(", ")) else empty end)'
 }
 
 cmd_devices() {
-  get /api/bluetooth/devices | show "$DEVICE_TABLE" | column -t -s $'\t'
+  local s
+  s=$(get /api/bluetooth) || exit 1
+  if [ "$JSON" = 1 ]; then jq '.devices' <<<"$s"; return; fi
+  jq -r --arg a "$ADAPTER" "$DEVICE_TABLE" <<<"$s" | column -t -s $'\t'
+}
+
+# bench adapters             every adapter: maker, Bluetooth version, USB or the board's own, state
+# bench primary [hciN|ADDR|default]   the adapter advertising, the GATT server and the HID remote
+#                            run on, and that requests naming none go to
+cmd_adapters() {
+  get /api/bluetooth | show '.adapters[] | '"$ADAPTER_LINE"
+}
+
+cmd_primary() {
+  if [ $# -eq 0 ]; then
+    get /api/bluetooth | show 'if .adapter == null then "no adapter" else .adapter | '"$ADAPTER_LINE"' end'
+    return
+  fi
+  local want=$1
+  [ "$want" = default ] && want=""
+  put /api/bluetooth "$(jq -nc --arg p "$want" '{primary:$p}')" | show '"primary " + .adapter.name + " " + .adapter.address'
 }
 
 cmd_scan() {
@@ -139,7 +180,8 @@ cmd_scan() {
       *) die "usage: bench scan [le|bredr|auto] [seconds]" ;;
     esac
   done
-  post /api/bluetooth/scan "$(jq -nc --arg t "$transport" --argjson s "$secs" '{on:true, transport:$t, seconds:$s}')" >/dev/null || exit 1
+  post /api/bluetooth/scan "$(jq -nc --arg t "$transport" --argjson s "$secs" --arg a "$ADAPTER" \
+    '{on:true, transport:$t, seconds:$s} + (if $a == "" then {} else {adapter:$a} end)')" >/dev/null || exit 1
   local i
   for ((i = secs; i > 0; i--)); do
     if [ -t 1 ]; then
@@ -155,7 +197,7 @@ cmd_scan() {
 cmd_info() {
   [ $# -ge 1 ] || die "usage: bench info ADDR"
   addr_ok "$1"
-  get "/api/bluetooth/devices/$(upper "$1")" | show '
+  get "/api/bluetooth/devices/$(upper "$1")$AQ" | show '
     .alias + "  " + .address + " (" + .address_type + ")" + (if .name != .alias and .name != "" then "  name \"" + .name + "\"" else "" end),
     "  adapter " + .adapter + "  "
       + ([(select(.connected) | "connected"), (select(.paired) | "paired"), (select(.bonded) | "bonded"),
@@ -219,7 +261,7 @@ wait_device() {
   for ((i = 0; i < limit * 2; i++)); do
     sleep 0.5
     [ -t 0 ] && [ $((i % 2)) = 1 ] && answer_request
-    d=$(get "/api/bluetooth/devices/$addr") || return 1
+    d=$(get "/api/bluetooth/devices/$addr$AQ") || return 1
     busy=$(jq -r .busy <<<"$d"); err=$(jq -r .error <<<"$d")
     if [ -z "$busy" ]; then
       if [ -n "$err" ]; then echo "${red}$what failed${off}: $err" >&2; return 1; fi
@@ -238,17 +280,17 @@ cmd_device_op() {
   local addr; addr=$(upper "$1"); shift
   case "$op" in
     pair)
-      post "/api/bluetooth/devices/$addr/pair" "$(jq -nc --arg p "${1-}" 'if $p == "" then {} else {pin:$p} end')" >/dev/null || exit 1
+      post "/api/bluetooth/devices/$addr/pair$AQ" "$(jq -nc --arg p "${1-}" 'if $p == "" then {} else {pin:$p} end')" >/dev/null || exit 1
       wait_device "$addr" pair ;;
     connect|disconnect)
-      post "/api/bluetooth/devices/$addr/$op" "$(jq -nc --arg u "${1-}" 'if $u == "" then {} else {uuid:$u} end')" >/dev/null || exit 1
+      post "/api/bluetooth/devices/$addr/$op$AQ" "$(jq -nc --arg u "${1-}" 'if $u == "" then {} else {uuid:$u} end')" >/dev/null || exit 1
       wait_device "$addr" "$op" 40 ;;
     trust|untrust|block|unblock)
-      post "/api/bluetooth/devices/$addr/$op" >/dev/null && echo "$op $addr: done" ;;
+      post "/api/bluetooth/devices/$addr/$op$AQ" >/dev/null && echo "$op $addr: done" ;;
     cancel)
-      post "/api/bluetooth/devices/$addr/cancel-pairing" >/dev/null && echo "pairing with $addr cancelled" ;;
+      post "/api/bluetooth/devices/$addr/cancel-pairing$AQ" >/dev/null && echo "pairing with $addr cancelled" ;;
     remove)
-      del "/api/bluetooth/devices/$addr" >/dev/null && echo "removed $addr" ;;
+      del "/api/bluetooth/devices/$addr$AQ" >/dev/null && echo "removed $addr" ;;
   esac
 }
 
@@ -257,8 +299,9 @@ cmd_discoverable() {
   case "${1-}" in
     on) on=true ;; off) on=false ;; *) die "usage: bench discoverable on|off [seconds]" ;;
   esac
-  put /api/bluetooth "$(jq -nc --argjson on "$on" --arg t "${2-}" \
-    '{discoverable:$on} + (if $t == "" then {} else {discoverable_timeout_s: ($t | tonumber)} end)')" >/dev/null &&
+  put /api/bluetooth "$(jq -nc --argjson on "$on" --arg t "${2-}" --arg a "$ADAPTER" \
+    '{discoverable:$on} + (if $t == "" then {} else {discoverable_timeout_s: ($t | tonumber)} end)
+     + (if $a == "" then {} else {adapter:$a} end)')" >/dev/null &&
     echo "discoverable $1"
 }
 
@@ -287,7 +330,7 @@ cmd_gatt() {
   local op=${1-}
   case "$op" in
     "")
-      get "/api/gatt/$addr" | show '
+      get "/api/gatt/$addr$AQ" | show '
         def hex4: . as $n | [($n / 4096 | floor), (($n / 256 | floor) % 16), (($n / 16 | floor) % 16), ($n % 16)]
           | map("0123456789abcdef"[.:.+1]) | "0x" + join("");
         (if .connected then empty elif (.services | length) == 0 then "(not connected)"
@@ -303,24 +346,24 @@ cmd_gatt() {
               + (if .value != null and .value != "" then "  = " + .value else "" end))))' ;;
     read)
       [ $# -ge 2 ] || die "usage: bench gatt ADDR read HANDLE"
-      get "/api/gatt/$addr/$2" | show '.value + (if .text != "" then "  \"" + .text + "\"" else "" end)' ;;
+      get "/api/gatt/$addr/$2$AQ" | show '.value + (if .text != "" then "  \"" + .text + "\"" else "" end)' ;;
     write)
       [ $# -ge 3 ] || die "usage: bench gatt ADDR write HANDLE HEX [cmd|req|reliable]"
       local type=request
       case "${4-req}" in cmd|command) type=command ;; req|request) type=request ;; reliable) type=reliable ;;
         *) die "write type is cmd, req or reliable" ;; esac
-      put "/api/gatt/$addr/$2" "$(jq -nc --arg v "$3" --arg t "$type" '{value:$v, type:$t}')" | show '"wrote " + .value' ;;
+      put "/api/gatt/$addr/$2$AQ" "$(jq -nc --arg v "$3" --arg t "$type" '{value:$v, type:$t}')" | show '"wrote " + .value' ;;
     notify)
       [ $# -ge 2 ] || die "usage: bench gatt ADDR notify HANDLE"
       local h=$2 last="" v
-      post "/api/gatt/$addr/$h/notify" '{"on":true}' >/dev/null || exit 1
-      trap 'post "/api/gatt/'"$addr/$h"'/notify" "{\"on\":false}" >/dev/null; echo; exit 0' INT TERM
+      post "/api/gatt/$addr/$h/notify$AQ" '{"on":true}' >/dev/null || exit 1
+      trap 'post "/api/gatt/'"$addr/$h"'/notify'"$AQ"'" "{\"on\":false}" >/dev/null; echo; exit 0' INT TERM
       echo "${dim}notifications from $h (Ctrl-C stops)${off}"
       # The tree carries the value BlueZ last got; read at 4 Hz, printed when it changes. (curl
       # has no WebSocket to follow gatt.notify with; the console does.)
       local hd; hd=$(printf '%d' "$h")
       while true; do
-        v=$(get "/api/gatt/$addr" | jq -r --argjson h "$hd" \
+        v=$(get "/api/gatt/$addr$AQ" | jq -r --argjson h "$hd" \
           '[.services[].characteristics[] | select(.handle == $h)][0].value // empty')
         if [ -n "$v" ] && [ "$v" != "$last" ]; then echo "$(date +%T.%3N)  $v"; last=$v; fi
         sleep 0.25
@@ -843,14 +886,15 @@ cmd_completion() {
 # bash completion for bench:  source <(bench completion)
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
-  local cmds="status scan devices info pair connect disconnect trust untrust block unblock cancel remove
+  local cmds="status adapters primary scan devices info pair connect disconnect trust untrust block unblock cancel remove
     discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel btdebug sys logs dbus bt-args run ssh help completion"
-  if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -b --json -y" -- "$cur")); return; fi
+  if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -a -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
     play) COMPREPLY=($(compgen -W "tone sweep noise silence url capture" -- "$cur")) ;;
     player) COMPREPLY=($(compgen -W "play pause stop next previous fast-forward rewind repeat shuffle" -- "$cur")) ;;
     discoverable) COMPREPLY=($(compgen -W "on off" -- "$cur")) ;;
+    -a|--adapter|primary) COMPREPLY=($(compgen -W "$(bench adapters 2>/dev/null | awk '{ print $1 }') default" -- "$cur")) ;;
     agent) COMPREPLY=($(compgen -W "auto ask" -- "$cur")) ;;
     ask|auto) COMPREPLY=($(compgen -W "DisplayOnly DisplayYesNo KeyboardOnly NoInputNoOutput KeyboardDisplay" -- "$cur")) ;;
     adv) COMPREPLY=($(compgen -W "ls start stop" -- "$cur")) ;;
@@ -883,6 +927,8 @@ ${bold}bench${off} — the Bluetooth bench from a terminal ($URL)
 
 ${bold}Bluetooth${off}
   status                          adapter, agent, devices, pending pairing question
+  adapters                        every adapter: maker, Bluetooth version, USB, state, which is primary
+  primary [hciN|ADDR|default]     show or move the primary adapter (advertising, GATT server, HID remote)
   scan [le|bredr|auto] [secs]     discover (default auto, 10 s), then list
   devices                         C connected, P paired, B bonded, T trusted, X blocked
   info ADDR                       everything BlueZ knows: UUIDs, class, adv data, ...
@@ -933,7 +979,8 @@ ${bold}Board${off}
   run TOOL ARGS...                l2ping, l2test, btgatt-client, iperf3, ... on the board
   ssh [CMD]                       root@$HOST
 
-Options: -b HOST[:PORT] (or BENCH=), --json (raw API answers), -y (no confirmations).
+Options: -b HOST[:PORT] (or BENCH=), -a hciN|ADDR (or BENCH_ADAPTER=: the adapter to scan, pair,
+connect and discover with; default the primary), --json (raw API answers), -y (no confirmations).
 Completion: source <(bench completion)        API reference: $URL/api
 EOF
 }
@@ -943,6 +990,8 @@ EOF
 cmd=${1-help}; [ $# -gt 0 ] && shift
 case "$cmd" in
   status) cmd_status ;;
+  adapters) cmd_adapters ;;
+  primary) cmd_primary "$@" ;;
   devices|ls) cmd_devices ;;
   scan) cmd_scan "$@" ;;
   info) cmd_info "$@" ;;

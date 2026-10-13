@@ -38,6 +38,20 @@ BT_HCI=hci0
 HCI=${BT_HCI:-hci0}
 INDEX=${HCI#hci}
 
+# The board's own controller is BT_HCI (hci0) only while nothing else is plugged in: a USB adapter
+# (a dongle, the VIM3L's BE200 card) can probe before the board's UART controller and take hci0.
+# The board's own is the one not on USB. /sys/class/bluetooth also lists the connections
+# (hci0:3585): only the controllers count.
+own_hci() {
+    for h in /sys/class/bluetooth/hci*; do
+        case "${h##*/}" in *:*) continue ;; esac
+        [ -e "$h/device" ] || continue
+        case "$(readlink -f "$h/device")" in */usb*) continue ;; esac
+        echo "${h##*/}"
+        return
+    done
+}
+
 log() { echo "btbench-bdaddr: $*"; }
 
 # --- 1. pairings ---------------------------------------------------------------------------
@@ -101,7 +115,12 @@ controller() {
 addr=""
 i=0
 while [ "$i" -lt 30 ]; do
-    if [ -e "/sys/class/bluetooth/$HCI" ]; then
+    own=$(own_hci)
+    # Still none after 10 s: every controller is on USB (a board without its own), BT_HCI as before.
+    [ -z "$own" ] && [ "$i" -ge 10 ] && [ -e "/sys/class/bluetooth/$BT_HCI" ] && own=$BT_HCI
+    if [ -n "$own" ]; then
+        HCI=$own
+        INDEX=${HCI#hci}
         addr=$(controller)
         [ -n "$addr" ] && break
     fi

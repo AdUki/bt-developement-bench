@@ -305,6 +305,34 @@ void test_endpoints() {
   CHECK_EQ(pix["address"].get<std::string>(), std::string("5C:E9:1E:22:40:01"));  // from the node name
   CHECK(pix["default"].get<bool>());  // the metadata value as a string, too
   CHECK(endpoints_from_pw_dump(json::object())["sinks"].empty());
+  CHECK(jbl["adapter"].is_null());  // no device object in this dump
+
+  // One device connected on two adapters: two nodes of one name, told apart by the adapter of
+  // their device and targeted by serial.
+  const json two = json::parse(R"([
+    {"id": 63, "type": "PipeWire:Interface:Device", "info": {"props": {"device.name": "bluez_card.B8_27_EB_8F_D1_56",
+      "api.bluez5.path": "/org/bluez/hci1/dev_B8_27_EB_8F_D1_56"}}},
+    {"id": 79, "type": "PipeWire:Interface:Device", "info": {"props": {"device.name": "bluez_card.B8_27_EB_8F_D1_56",
+      "api.bluez5.path": "/org/bluez/hci0/dev_B8_27_EB_8F_D1_56"}}},
+    {"id": 71, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink",
+      "node.name": "bluez_output.B8_27_EB_8F_D1_56.1", "device.api": "bluez5", "device.id": 63,
+      "api.bluez5.address": "B8:27:EB:8F:D1:56", "node.description": "btbench-702ea9", "object.serial": 312}}},
+    {"id": 78, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink",
+      "node.name": "bluez_output.B8_27_EB_8F_D1_56.1", "device.api": "bluez5", "device.id": 79,
+      "api.bluez5.address": "B8:27:EB:8F:D1:56", "node.description": "btbench-702ea9", "object.serial": 327}}},
+    {"id": 80, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink",
+      "node.name": "bluez_output.10_2C_6B_A2_0A_0F.1", "device.api": "bluez5",
+      "api.bluez5.address": "10:2C:6B:A2:0A:0F", "node.description": "btbench-712d0b", "object.serial": 330}}}
+  ])");
+  const json t = endpoints_from_pw_dump(two)["sinks"];
+  CHECK_EQ(t.size(), size_t(3));
+  CHECK_EQ(t[0]["label"].get<std::string>(), std::string("btbench-702ea9 (hci0)"));
+  CHECK_EQ(t[0]["id"].get<std::string>(), std::string("327"));
+  CHECK_EQ(t[0]["adapter"].get<std::string>(), std::string("hci0"));
+  CHECK_EQ(t[1]["label"].get<std::string>(), std::string("btbench-702ea9 (hci1)"));
+  CHECK_EQ(t[1]["id"].get<std::string>(), std::string("312"));
+  CHECK_EQ(t[2]["id"].get<std::string>(), std::string("bluez_output.10_2C_6B_A2_0A_0F.1"));  // a name of its own
+  CHECK(endpoint_id_ok("312"));
 
   // Without PipeWire only the loopback card is left to play into and capture from.
   const json a = endpoints_from_alsa(true);

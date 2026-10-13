@@ -67,7 +67,11 @@ queue with the page closed. The volume slider sets what a person means: the Blue
 own volume when the link has one, else the stream's level, or this browser's.
 
 
-**Devices** — the adapter bar: powered, visible, pairable, and under *Settings* the name others
+**Devices** — the adapter bar. With two adapters (the board's own and a USB one) it starts with a
+picker (`hci0 ★ | hci1`, ★ the primary, a hover says the maker, Bluetooth version and USB): the bar,
+the scan and the device list are then that adapter's, the choice is remembered in the browser, and
+*Make primary* moves advertising, the GATT server and the HID remote to it. Then: powered, visible,
+pairable, and under *Settings* the name others
 see (the board's hostname, `btbench-<mac>`, until one is typed; emptied, it goes back to that), how long it stays visible, how pairing questions are answered (automatically, or asked here)
 and the IO capability (which decides the pairing method a peer gets). *Scan* finds devices; its
 *Options* are every filter BlueZ has: the transport (dual: LE and BR/EDR, LE only, BR/EDR only),
@@ -78,8 +82,12 @@ and the options are remembered in the browser. While a scan runs its filter is s
 the button. A device is one row: a light (green connected, pale paired, amber busy), its name,
 address, kind, signal (bars and dBm, from the scan) and its transports (BR/EDR, LE; lit where
 connected), and the one action its state calls for — pair, connect, disconnect, or cancel a
-pairing; a connected device also shows the profiles it has up (A2DP, AVRCP, HFP, HID, PAN, GATT; lit
-while streaming). A click on the row opens the rest: each transport with its own state (connected,
+pairing (one button of one width, which shows the work in progress itself); a connected device also
+shows the profiles it has up (A2DP, AVRCP, HFP, HID, PAN, GATT; lit while streaming). One of the
+board's own adapters, seen advertising by the other, is tagged *this board · hciN*. Rows keep their
+place while they change (a connect, a pairing, a new RSSI) and only a row that changed is redrawn,
+with a short highlight when its state does; new devices go last, and the list is sorted again
+(connected, paired, then by name) when the view is opened or the filter or adapter changes. A click on the row opens the rest: each transport with its own state (connected,
 bonded or paired, connectable) and its own connect or disconnect (whose progress and failure show
 on that transport's line, not the device's), which transport a dual-mode device
 connects on first, why it last disconnected; *Profiles*: each one connected — an A2DP link with

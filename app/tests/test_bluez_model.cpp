@@ -21,7 +21,7 @@ json tree() {
       "org.bluez.LEAdvertisingManager1": {"ActiveInstances": 1, "SupportedInstances": 4,
                                           "SupportedIncludes": ["tx-power", "appearance", "local-name"]}
     },
-    "/org/bluez/hci1": {"org.bluez.Adapter1": {"Address": "00:1B:DC:08:4B:CC", "Alias": "vhci"}},
+    "/org/bluez/hci1": {"org.bluez.Adapter1": {"Address": "00:1B:DC:08:4B:CC", "Alias": "vhci", "Manufacturer": 2, "Version": 13}},
     "/org/bluez/hci0/dev_C0_FF_EE_00_00_01": {"org.bluez.Device1": {
       "Address": "c0:ff:ee:00:00:01", "AddressType": "random", "Name": "Bench HRM", "Alias": "Bench HRM",
       "Paired": false, "Connected": true, "ServicesResolved": true, "RSSI": -61, "TxPower": 4,
@@ -76,6 +76,24 @@ void test_adapter_choice() {
   CHECK_EQ(bt_pick_adapter(two, "hci2"), std::string());
   CHECK_EQ(bt_pick_adapter({}, ""), std::string());
   CHECK_EQ(model_adapter_ids(tree()).size(), size_t(2));
+  // A USB adapter that probed first and took hci0 is not the board's own controller.
+  std::vector<BtAdapterId> dongle = {{"/org/bluez/hci0", "44:A3:BB:36:5E:2E", true}, {"/org/bluez/hci1", "10:2C:6B:A2:0A:0F", false}};
+  CHECK_EQ(bt_pick_adapter(dongle, ""), std::string("/org/bluez/hci1"));
+  CHECK_EQ(bt_pick_adapter(dongle, "44:A3:BB:36:5E:2E"), std::string("/org/bluez/hci0"));
+  // Only USB adapters (a PC, a board without its own): hci0 as before.
+  dongle[1].usb = true;
+  CHECK_EQ(bt_pick_adapter(dongle, ""), std::string("/org/bluez/hci0"));
+  const std::vector<BtAdapterId> one_usb = {{"/org/bluez/hci2", "44:A3:BB:36:5E:2E", true}};
+  CHECK_EQ(bt_pick_adapter(one_usb, ""), std::string("/org/bluez/hci2"));
+}
+
+void test_controller_names() {
+  CHECK_EQ(bt_company_name(2), std::string("Intel"));
+  CHECK_EQ(bt_company_name(15), std::string("Broadcom"));
+  CHECK_EQ(bt_company_name(-1), std::string());
+  CHECK_EQ(bt_version_name(8), std::string("4.2"));
+  CHECK_EQ(bt_version_name(13), std::string("5.4"));
+  CHECK_EQ(bt_version_name(99), std::string());
 }
 
 void test_adapters() {
@@ -86,6 +104,11 @@ void test_adapters() {
   CHECK_EQ(a[0]["adv"]["supported_instances"].get<int>(), 4);
   CHECK_EQ(a[0]["uuids"][0]["uuid"].get<std::string>(), std::string("110b"));
   CHECK(a[1]["adv"].is_null());
+  CHECK(a[0]["manufacturer"].is_null());
+  CHECK(a[0]["version"].is_null());
+  CHECK_EQ(a[1]["manufacturer"].get<int>(), 2);
+  CHECK_EQ(a[1]["manufacturer_name"].get<std::string>(), std::string("Intel"));
+  CHECK_EQ(a[1]["version"].get<std::string>(), std::string("5.4"));
 }
 
 void test_devices() {
@@ -318,6 +341,7 @@ int main() {
   uuid_names().load(std::string(BTB_WWW_DIR) + "/uuids.json", &err);
   test_addresses();
   test_adapter_choice();
+  test_controller_names();
   test_adapters();
   test_devices();
   test_bearers();

@@ -38,10 +38,11 @@ function leOnBt(b) {
   }).join('')
     : '<div class="empty">No advertisers seen. Scan from Devices (LE, or LE and classic) and they show here.</div>');
 
-  // The explorer offers every device, connected ones first.
+  // The explorer offers every device, connected ones first; with two adapters, each adapter's.
   const sel = $('gx-dev');
+  const many = (b.adapters || []).length > 1;
   const opts = b.devices.slice().sort((x, y) => (y.connected - x.connected))
-    .map(d => `<option value="${d.address}">${esc(d.alias || d.address)}${d.connected ? ' · connected' : ''}</option>`).join('');
+    .map(d => `<option value="${devKey(d)}">${esc(d.alias || d.address)}${many ? ' · ' + esc(d.adapter) : ''}${d.connected ? ' · connected' : ''}</option>`).join('');
   if (idle(sel)) {
     const keep = sel.value;
     setHTML(sel, opts);
@@ -49,7 +50,7 @@ function leOnBt(b) {
   }
   // The first time, the explorer follows the selection by itself (a connected device first).
   if (!gx.addr && sel.value) gx.addr = sel.value;
-  const cur = b.devices.find(d => d.address === sel.value);
+  const cur = devByKey(sel.value);
   // A dual-mode device (a speaker, a phone) connected over classic alone has no LE GATT to show:
   // the explorer connects and disconnects its LE bearer, not the whole device.
   const le = gattBearer(cur);
@@ -59,12 +60,13 @@ function leOnBt(b) {
     : 'Not connected: Connect to read its services.') + (cur.busy ? ' · ' + cur.busy : '') + (cur.error ? ' · ' + cur.error : '') : '');
   setText($('gx-connect'), `${on ? 'Disconnect' : 'Connect'}${le ? ' LE' : ''}`);
   // A device that just resolved its services gets its tree without another click.
-  if (cur && cur.services_resolved && gx.addr === cur.address && !gx.loaded) loadGatt();
+  if (cur && cur.services_resolved && gx.addr === devKey(cur) && !gx.loaded) loadGatt();
 }
 
 // ---------------------------------------------------------------- GATT explorer
 
-const gx = {addr: '', loaded: false, tree: null, open: new Set()};
+const gx = {addr: '', loaded: false, tree: null, open: new Set()};  // addr: a devKey()
+const gxUrl = (rest = '') => `/gatt/${keyAddr(gx.addr)}${rest}${keyQ(gx.addr)}`;
 
 // "le" for a device seen on both transports, whose LE bearer the explorer drives; null otherwise.
 const gattBearer = d => d && d.bearers && d.bearers.le && d.bearers.bredr ? 'le' : null;
@@ -114,7 +116,7 @@ function loadGatt() {
   const addr = $('gx-dev').value;
   if (!addr) return;
   gx.addr = addr;
-  api(`/gatt/${addr}`).then(t => {
+  api(gxUrl()).then(t => {
     gx.tree = t;
     gx.loaded = t.services_resolved;
     renderGatt();
@@ -122,9 +124,8 @@ function loadGatt() {
 }
 
 function gattAction(op, handle, btn) {
-  const base = `/gatt/${gx.addr}/${handle}`;
   if (op === 'read') {
-    api(base).then(r => {
+    api(gxUrl('/' + handle)).then(r => {
       const v = $('gv-' + handle);
       if (v) v.textContent = r.value || '(empty)';
       const t = $('gt-' + handle);
@@ -135,13 +136,13 @@ function gattAction(op, handle, btn) {
     const raw = document.querySelector(`input.g-val[data-h="${handle}"]`).value.trim();
     const type = document.querySelector(`select.g-type[data-h="${handle}"]`).value;
     const body = raw.startsWith('text:') ? {text: raw.slice(5), type} : {value: raw, type};
-    put(base, body).then(r => logLine($('gx-log'), `${fmtTime(Date.now())} wrote 0x${Number(handle).toString(16)} (${type}): ${r.value}`))
+    put(gxUrl('/' + handle), body).then(r => logLine($('gx-log'), `${fmtTime(Date.now())} wrote 0x${Number(handle).toString(16)} (${type}): ${r.value}`))
       .catch(fail);
   } else if (op === 'notify') {
     const on = btn.dataset.on === '1';
     btn.disabled = true;
     // Only this button changes: a re-render would drop what is typed in the write fields.
-    post(`${base}/notify`, {on}).then(() => {
+    post(gxUrl(`/${handle}/notify`), {on}).then(() => {
       const c = findChar(Number(handle));
       if (c) c.notifying = on;
       btn.dataset.on = on ? '0' : '1';
@@ -219,13 +220,13 @@ function setupLe() {
   $('gx-load').onclick = loadGatt;
   $('gx-dev').onchange = () => { gx.addr = $('gx-dev').value; gx.tree = null; gx.loaded = false; gx.open.clear(); renderGatt(); loadGatt(); };
   $('gx-connect').onclick = () => {
-    const d = btState && btState.devices.find(x => x.address === $('gx-dev').value);
+    const d = devByKey($('gx-dev').value);
     if (!d) return;
-    gx.addr = d.address;
+    gx.addr = devKey(d);
     gx.loaded = false;
     const le = gattBearer(d);
     const on = le ? d.bearers.le.connected : d.connected;
-    post(`/bluetooth/devices/${d.address}/${on ? 'disconnect' : 'connect'}`, le ? {bearer: le} : {}).catch(fail);
+    post(devUrl(d, `/${on ? 'disconnect' : 'connect'}`), le ? {bearer: le} : {}).catch(fail);
   };
   $('gx-clear').onclick = () => logClear($('gx-log'));
   // Remembered per service, so a reload or a notify keeps what was opened.
@@ -274,7 +275,7 @@ registerTab('le', {
   onMessage(topic, d) {
     if (topic === 'gatt.notify') {
       logLine($('gx-log'), `${fmtTime(d.ts)} ${d.address} 0x${d.handle.toString(16).padStart(4, '0')} ${d.uuid}: ${d.value}${d.text ? ' “' + d.text + '”' : ''}`);
-      if (d.address === gx.addr) {
+      if (d.address === keyAddr(gx.addr)) {
         const v = $('gv-' + d.handle);
         if (v) v.textContent = d.value || '(empty)';
         const t = $('gt-' + d.handle);

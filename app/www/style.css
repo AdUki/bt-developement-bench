@@ -309,6 +309,17 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 .rw-sub .mono { font-size: 0.78rem; }
 .rw-acts { display: flex; gap: 0.35rem; align-items: center; }
 .rw-note { padding: 0 1rem 0.5rem 2.6rem; font-size: 0.82rem; }
+/* The row's main action keeps one width whatever it says, the work in progress included. */
+.rw-acts .dev-main { min-width: 9.5rem; text-align: center; white-space: nowrap; }
+.rw-acts .dev-main:disabled:has(.spin) { opacity: 0.8; }
+.rw-acts .dev-main .spin { display: inline-block; width: 0.85em; height: 0.85em; vertical-align: -0.12em; margin-right: 0.4em; }
+.rw-title .tag.own { align-self: center; color: var(--accent); border: 1px dashed var(--accent); background: none; }
+/* A row whose state changed (connected, paired, busy) says so briefly instead of jumping. */
+.rw.changed { animation: rw-changed 1.2s ease-out; }
+.rw.changed .rw-led { animation: rw-led 0.5s ease-out; }
+@keyframes rw-changed { from { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); } }
+@keyframes rw-led { from { transform: scale(1.8); } }
+@media (prefers-reduced-motion: reduce) { .rw.changed, .rw.changed .rw-led { animation: none; } }
 .rw-body { padding: 0.2rem 1rem 0.9rem 2.6rem; }
 .rw-body .acts { margin-top: 0.7rem; }
 .rw-body .acts .spacer { flex: 1; }

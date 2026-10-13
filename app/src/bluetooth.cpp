@@ -1,6 +1,7 @@
 #include "bluetooth.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <poll.h>
 #include <string.h>
 #include <sys/eventfd.h>
@@ -225,6 +226,7 @@ json bt_scan_filter_json(const BtScanFilter& f) {
 
 json bt_request_json(const BtRequest& r) {
   return json{{"id", r.id},           {"kind", r.kind},       {"address", r.address},
+              {"adapter", r.adapter},
               {"name", r.name},       {"passkey", r.passkey}, {"uuid", r.uuid},
               {"uuid_name", r.uuid.empty() ? std::string{} : uuid_names().name(r.uuid)},
               {"expires_s", r.expires_s}};
@@ -321,7 +323,36 @@ std::string host_name() {
   return h;
 }
 
+// Whether the controller behind an adapter object is on USB: its hci device's parent in sysfs is a
+// USB interface (/sys/class/bluetooth/hci1/device → …/usb1/1-1/1-1.1/1-1.1:1.0), where the board's
+// own is a serdev on a UART or an SDIO function. False for an adapter with no hci in sysfs (a fake
+// BlueZ's).
+bool adapter_on_usb(const std::string& apath) {
+  const std::string name = adapter_from_path(apath);
+  if (name.empty() || name.find('/') != std::string::npos) return false;
+  char buf[PATH_MAX];
+  const char* r = realpath(("/sys/class/bluetooth/" + name + "/device").c_str(), buf);
+  return r && strstr(r, "/usb") != nullptr;
+}
+
 }  // namespace
+
+std::vector<BtAdapterId> BtManager::adapter_ids(const json& objs) const {
+  std::vector<BtAdapterId> ids = model_adapter_ids(objs);
+  for (BtAdapterId& a : ids) {
+    a.address = upper(a.address);
+    a.usb = adapter_on_usb(a.path);
+  }
+  return ids;
+}
+
+// The board's name (btbench-257bfc) for its own controller; a USB adapter adds the end of its own
+// address (btbench-257bfc-5e2e), so a phone that scans tells the two apart.
+std::string BtManager::default_alias(const BtAdapterId& a) const {
+  std::string host = host_name();
+  if (host.empty() || !a.usb || a.address.size() != 17) return host;
+  return host + "-" + lower(a.address.substr(12, 2) + a.address.substr(15, 2));
+}
 
 void BtManager::set_state_file(std::string path) {
   state_file_ = std::move(path);
@@ -334,10 +365,15 @@ void BtManager::set_state_file(std::string path) {
     if (policy == "auto" || policy == "ask") agent_policy_ = policy;
     if (bt_agent_capability_ok(cap)) agent_capability_ = cap;
     if (j.contains("adapters") && j["adapters"].is_object()) kept_adapters_ = j["adapters"];
+    primary_ = upper(j.value("primary", std::string{}));
     reconnect_on_ = j.value("reconnect", true);
+    // Plain addresses are from before there were several adapters: the primary's devices.
     if (j.contains("reconnect_devices") && j["reconnect_devices"].is_array())
-      for (const json& a : j["reconnect_devices"])
-        if (a.is_string()) reconnect_.push_back(a.get<std::string>());
+      for (const json& a : j["reconnect_devices"]) {
+        if (a.is_string()) reconnect_.push_back({"", upper(a.get<std::string>())});
+        else if (a.is_object() && a.contains("device"))
+          reconnect_.push_back({upper(a.value("adapter", std::string{})), upper(a.value("device", std::string{}))});
+      }
   } catch (const std::exception& e) {
     // A broken file is replaced by the next change; until then the defaults hold.
     LOG_WARN("bluetooth: {}: {}", state_file_, e.what());
@@ -348,8 +384,10 @@ void BtManager::save_state_locked() const {
   if (state_file_.empty()) return;
   const std::string tmp = state_file_ + ".tmp";
   std::ofstream f(tmp);
+  json rc = json::array();
+  for (const Reconnect& r : reconnect_) rc.push_back(json{{"adapter", r.adapter}, {"device", r.device}});
   f << json{{"agent", agent_policy_}, {"agent_capability", agent_capability_}, {"adapters", kept_adapters_},
-            {"reconnect", reconnect_on_}, {"reconnect_devices", reconnect_}}.dump(2)
+            {"primary", primary_}, {"reconnect", reconnect_on_}, {"reconnect_devices", rc}}.dump(2)
     << "\n";
   f.close();
   if (!f || std::rename(tmp.c_str(), state_file_.c_str()) != 0)
@@ -373,32 +411,63 @@ void BtManager::set_reconnect(bool on) {
   save_state_locked();
 }
 
-void BtManager::forget_reconnect(const std::string& address) {
+void BtManager::forget_reconnect(const std::string& apath, const std::string& address) {
   std::lock_guard<std::mutex> lk(m_);
-  forgotten_.insert(upper(address));
-  const auto it = std::find(reconnect_.begin(), reconnect_.end(), upper(address));
-  if (it == reconnect_.end()) return;
-  reconnect_.erase(it);
-  save_state_locked();
+  forgotten_.insert(bt_device_path(apath, upper(address)));
+  std::string aaddr;
+  for (const BtAdapterId& a : ids_)
+    if (a.path == apath) aaddr = a.address;
+  const size_t before = reconnect_.size();
+  reconnect_.erase(std::remove_if(reconnect_.begin(), reconnect_.end(),
+                                  [&](const Reconnect& r) {
+                                    return r.device == upper(address) &&
+                                           (r.adapter == aaddr || (r.adapter.empty() && apath == adapter_path_));
+                                  }),
+                   reconnect_.end());
+  if (reconnect_.size() != before) save_state_locked();
 }
 
-// Bus thread, on every re-read. A device joins the list when it is seen connected over BR/EDR and
-// leaves it when it is disconnected or removed from here (forget_reconnect) or is no longer paired;
-// a device that went away by itself, or with the bench, stays: that is the one to call back.
-void BtManager::note_connected(const json& objs, const std::string& apath) {
-  if (apath.empty()) return;
-  const std::vector<std::string> now = bt_bredr_connected(objs, apath);
+// Bus thread, on every re-read. A device joins the list when it is seen connected over BR/EDR to
+// one of the bench's adapters and leaves it when it is disconnected or removed from here
+// (forget_reconnect) or is no longer paired; a device that went away by itself, or with the bench,
+// stays: that is the one to call back. A device of an adapter that is not there (a dongle
+// unplugged) stays until the adapter is back to say.
+void BtManager::note_connected(const json& objs, const std::vector<BtAdapterId>& ids) {
   std::lock_guard<std::mutex> lk(m_);
   bool changed = false;
-  for (auto it = forgotten_.begin(); it != forgotten_.end();)
-    it = std::find(now.begin(), now.end(), *it) == now.end() ? forgotten_.erase(it) : std::next(it);
-  for (const std::string& a : now)
-    if (!forgotten_.count(a) && std::find(reconnect_.begin(), reconnect_.end(), a) == reconnect_.end()) {
-      reconnect_.push_back(a);
-      changed = true;
+  // A list kept before the adapters were told apart is the primary's.
+  for (const BtAdapterId& a : ids)
+    if (a.path == adapter_path_)
+      for (Reconnect& r : reconnect_)
+        if (r.adapter.empty()) {
+          r.adapter = a.address;
+          changed = true;
+        }
+  if (changed)
+    for (size_t i = 0; i < reconnect_.size(); ++i)
+      for (size_t j = reconnect_.size(); j-- > i + 1;)
+        if (reconnect_[j] == reconnect_[i]) reconnect_.erase(reconnect_.begin() + static_cast<long>(j));
+  std::set<std::string> up;  // device paths connected over BR/EDR now
+  for (const BtAdapterId& a : ids) {
+    if (!want_adapter_.empty() && a.path != adapter_path_) continue;
+    for (const std::string& d : bt_bredr_connected(objs, a.path)) {
+      const std::string path = bt_device_path(a.path, d);
+      up.insert(path);
+      const Reconnect r{a.address, d};
+      if (!forgotten_.count(path) && std::find(reconnect_.begin(), reconnect_.end(), r) == reconnect_.end()) {
+        reconnect_.push_back(r);
+        changed = true;
+      }
     }
+  }
+  for (auto it = forgotten_.begin(); it != forgotten_.end();) it = up.count(*it) ? std::next(it) : forgotten_.erase(it);
   for (auto it = reconnect_.begin(); it != reconnect_.end();) {
-    const std::string path = bt_device_path(apath, *it);
+    const auto a = std::find_if(ids.begin(), ids.end(), [&](const BtAdapterId& x) { return x.address == it->adapter; });
+    if (a == ids.end()) {
+      ++it;
+      continue;
+    }
+    const std::string path = bt_device_path(a->path, it->device);
     const bool paired = objs.contains(path) && objs[path].contains(kDeviceIface) &&
                         bool_of(objs[path][kDeviceIface], "Paired");
     if (paired) {
@@ -412,42 +481,54 @@ void BtManager::note_connected(const json& objs, const std::string& apath) {
 }
 
 // Bus thread. Up to three tries, 35 s apart (a Connect gives up after 30): a speaker that is still
-// booting, or busy connecting to us itself, gets another chance. The adapter must be powered first;
-// waiting for that is not a try.
+// booting, or busy connecting to us itself, gets another chance. Each device is called on the
+// adapter it was connected to, and that adapter must be powered first; waiting for that is not a
+// try.
 void BtManager::reconnect_tick(uint64_t now) {
   if (!reconnect_at_ns_ || now < reconnect_at_ns_) return;
   std::shared_ptr<const json> objs;
-  std::string apath;
-  std::vector<std::string> list;
+  std::vector<Reconnect> list;
+  std::vector<BtAdapterId> ids;
+  std::string primary;
   bool on;
   {
     std::lock_guard<std::mutex> lk(m_);
     objs = objs_;
-    apath = adapter_path_;
     list = reconnect_;
+    ids = ids_;
+    primary = adapter_path_;
     on = reconnect_on_;
   }
   reconnect_at_ns_ = 0;
-  if (!on || list.empty() || apath.empty() || !objs->contains(apath)) return;
-  if (!bool_of((*objs)[apath][kAdapterIface], "Powered")) {
-    reconnect_at_ns_ = now + s_to_ns(2);
-    return;
+  if (!on || list.empty()) return;
+  std::vector<std::pair<std::string, std::string>> todo;  // adapter path, device address
+  for (const Reconnect& r : list) {
+    std::string apath = r.adapter.empty() ? primary : std::string{};
+    for (const BtAdapterId& a : ids)
+      if (a.address == r.adapter) apath = a.path;
+    if (!apath.empty() && objs->contains(apath)) todo.push_back({apath, r.device});
   }
-  // Not before the board's own A2DP endpoints are there and have settled: a device connected
+  // Not before an adapter's own A2DP endpoints are there and have settled: a device connected
   // while PipeWire is still registering them (a Zero W's boot, an audio restart) discovers only
   // those registered so far — without SBC, say — and keeps that list for the connection. Its
   // Audio Source/Sink UUIDs show the first endpoint; the rest follow within a second or two.
-  // An audio stack that does not come (switched off) is not waited for past 30 s.
-  const std::string& uu = adapter_uuids_;
-  const bool audio = uu.find("0000110a") != std::string::npos || uu.find("0000110b") != std::string::npos;
-  if (now - adapter_up_ns_ < s_to_ns(30) && (!audio || now - adapter_uuids_at_ns_ < s_to_ns(4))) {
-    reconnect_at_ns_ = now + s_to_ns(1);
-    return;
+  // An adapter that stays off, or an audio stack that does not come (switched off), is not waited
+  // for past 30 s.
+  for (const auto& t : todo) {
+    const AdapterSeen& seen = seen_[t.first];
+    if (now - seen.up_ns >= s_to_ns(30)) continue;
+    const std::string& uu = seen.uuids;
+    const bool audio = uu.find("0000110a") != std::string::npos || uu.find("0000110b") != std::string::npos;
+    if (!bool_of((*objs)[t.first][kAdapterIface], "Powered") || !audio || now - seen.uuids_at_ns < s_to_ns(4)) {
+      reconnect_at_ns_ = now + s_to_ns(1);
+      return;
+    }
   }
-  const std::vector<std::string> connected = bt_bredr_connected(*objs, apath);
   ++reconnect_tries_;
   bool tried = false;
-  for (const std::string& a : list) {
+  for (const auto& [apath, a] : todo) {
+    if (!bool_of((*objs)[apath][kAdapterIface], "Powered")) continue;
+    const std::vector<std::string> connected = bt_bredr_connected(*objs, apath);
     if (std::find(connected.begin(), connected.end(), a) != connected.end()) continue;
     const std::string path = bt_device_path(apath, a);
     if (!objs->contains(path)) continue;
@@ -456,7 +537,7 @@ void BtManager::reconnect_tick(uint64_t now) {
       const auto ds = dev_state_.find(path);
       if (ds != dev_state_.end() && !ds->second.busy.empty()) continue;
     }
-    LOG_INFO("bluetooth: reconnecting {} (try {} of 3)", a, reconnect_tries_);
+    LOG_INFO("bluetooth: reconnecting {} on {} (try {} of 3)", a, adapter_from_path(apath), reconnect_tries_);
     // Over BR/EDR on purpose: a dual-mode device's Connect may pick LE, which is not the link the
     // audio profiles need.
     const bool bearer = (*objs)[path].contains(kBearerBredrIface);
@@ -469,22 +550,49 @@ void BtManager::reconnect_tick(uint64_t now) {
 // Bus thread. Each adapter gets its kept settings once each time BlueZ shows it, so a bluetoothd
 // restarted by Setup, or a controller rebound after it hung, comes back as it was set. The writes
 // are queued without waiting: bluetoothd handles them in order, and a refusal is only logged.
-void BtManager::restore_adapters(const json& objs) {
+// An adapter that appears (BlueZ starting, a dongle plugged in) is also asked which discovery
+// filter keys it takes, and is a reason to call the devices back.
+void BtManager::restore_adapters(const json& objs, const std::vector<BtAdapterId>& ids) {
   std::set<std::string> present;
-  for (const BtAdapterId& a : model_adapter_ids(objs)) {
+  for (const BtAdapterId& a : ids) {
     present.insert(a.path);
     if (restored_.count(a.path)) continue;
     restored_.insert(a.path);
-    const std::string name = a.path.substr(a.path.rfind('/') + 1);
+    seen_[a.path] = AdapterSeen{};
+    seen_[a.path].up_ns = mono_ns();
+    // A few seconds' grace lets the adapter power up, and a peer that reconnects by itself do so.
+    reconnect_tries_ = 0;
+    reconnect_at_ns_ = mono_ns() + s_to_ns(5);
+
+    std::vector<std::string> filters;
+    sd_bus_message* reply = nullptr;
+    sd_bus_error fe = SD_BUS_ERROR_NULL;
+    if (sd_bus_call_method(bus_, kBluez, a.path.c_str(), kAdapterIface, "GetDiscoveryFilters", &fe, &reply, "") >= 0) {
+      json v;
+      if (read_json(reply, &v) > 0 && v.is_array())
+        for (const json& x : v)
+          if (x.is_string()) filters.push_back(x.get<std::string>());
+    }
+    sd_bus_message_unref(reply);
+    sd_bus_error_free(&fe);
+
+    const std::string name = adapter_from_path(a.path);
     DDict props;
     bool own_alias = false;
     {
       std::lock_guard<std::mutex> lk(m_);
-      if (kept_adapters_.contains(name)) props = bt_restore_adapter_props(kept_adapters_[name]);
-      own_alias = kept_adapters_.contains(name) && kept_adapters_[name].contains("alias");
+      discovery_filters_[a.path] = std::move(filters);
+      if (!kept_adapters_.contains(a.address) && kept_adapters_.contains(name)) {
+        LOG_INFO("bluetooth: {}'s kept settings are {}'s from now on", name, a.address);
+        kept_adapters_[a.address] = kept_adapters_[name];
+        kept_adapters_.erase(name);
+        save_state_locked();
+      }
+      if (kept_adapters_.contains(a.address)) props = bt_restore_adapter_props(kept_adapters_[a.address]);
+      own_alias = kept_adapters_.contains(a.address) && kept_adapters_[a.address].contains("alias");
     }
     // No alias set here: the board's name, unless BlueZ already has it.
-    const std::string host = default_alias_ && !own_alias ? host_name() : std::string{};
+    const std::string host = default_alias_ && !own_alias ? default_alias(a) : std::string{};
     if (!host.empty() && str_of(objs[a.path][kAdapterIface], "Alias") != host) props.push_back({"Alias", DVar::str(host)});
     if (props.empty()) continue;
     LOG_INFO("bluetooth: {}: restoring {} kept setting(s)", name, props.size());
@@ -500,7 +608,17 @@ void BtManager::restore_adapters(const json& objs) {
     }
     dirty_ = true;
   }
-  for (auto it = restored_.begin(); it != restored_.end();) it = present.count(*it) ? std::next(it) : restored_.erase(it);
+  for (auto it = restored_.begin(); it != restored_.end();) {
+    if (present.count(*it)) {
+      ++it;
+      continue;
+    }
+    seen_.erase(*it);
+    std::lock_guard<std::mutex> lk(m_);
+    discovery_filters_.erase(*it);
+    scans_.erase(*it);
+    it = restored_.erase(it);
+  }
 }
 void BtManager::add_user(BusUser* u) { users_.push_back(u); }
 void BtManager::on_notify(NotifyFn fn) { notify_ = std::move(fn); }
@@ -602,7 +720,12 @@ void BtManager::run() {
     }
   }
   if (bus_) {
-    if (scan_until_ns_ || scanning_) stop_scan();
+    std::vector<std::string> ours;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      for (const auto& kv : scans_) ours.push_back(kv.first);
+    }
+    for (const std::string& a : ours) stop_scan(a);
     close_bus();
   }
 }
@@ -659,7 +782,7 @@ void BtManager::close_bus() {
     available_ = false;
     stale_ = false;
     agent_registered_shared_ = false;
-    scanning_ = false;
+    scans_.clear();
     objs_ = std::make_shared<const json>(json::object());
   }
   changed(false);
@@ -738,10 +861,11 @@ void BtManager::on_signal(sd_bus_message* m) {
 
 void BtManager::tick() {
   const uint64_t now = mono_ns();
-  uint64_t scan_until;
+  std::vector<std::string> expired;  // adapters whose scan's time is up
   {
     std::lock_guard<std::mutex> lk(m_);
-    scan_until = scan_until_ns_;
+    for (const auto& kv : scans_)
+      if (kv.second.until_ns && now >= kv.second.until_ns) expired.push_back(kv.first);
   }
   // A slow read (a Zero W while scanning) spaces the reads out: the chatter's to a quarter of
   // the time at most, a change's and the periodic one's in proportion.
@@ -757,9 +881,9 @@ void BtManager::tick() {
   }
   expire_request(now);
   reconnect_tick(now);
-  if (scan_until && now >= scan_until) {
-    LOG_INFO("bluetooth: scan time is up");
-    stop_scan();
+  for (const std::string& a : expired) {
+    LOG_INFO("bluetooth: {}: scan time is up", adapter_from_path(a));
+    stop_scan(a);
   }
   for (BusUser* u : users_) u->tick(bus_, now);
 
@@ -847,6 +971,7 @@ void BtManager::refreshed(sd_bus_message* reply) {
       return;
     }
     restored_.clear();
+    seen_.clear();
     if (!ready_adapter_.empty()) {
       ready_adapter_.clear();
       for (BusUser* u : users_) u->bluez_gone();
@@ -857,16 +982,28 @@ void BtManager::refreshed(sd_bus_message* reply) {
       stale_ = false;
       error_ = why;
       objs_ = std::make_shared<const json>(json::object());
+      ids_.clear();
       adapter_path_.clear();
+      discovery_filters_.clear();
+      scans_.clear();
     }
     changed(false);
     return;
   }
   sd_bus_error_free(&e);
   if (!agent_registered_ || agent_cap_registered_ != agent_capability_) register_agent();
-  restore_adapters(*objs);
+  const std::vector<BtAdapterId> ids = adapter_ids(*objs);
+  restore_adapters(*objs, ids);
 
-  const std::string apath = bt_pick_adapter(model_adapter_ids(*objs), want_adapter_);
+  // Confined to one adapter (set_adapter), that one; else the primary chosen while it is there, or
+  // the board's own controller.
+  std::string primary;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    primary = primary_;
+  }
+  std::string apath = bt_pick_adapter(ids, want_adapter_.empty() ? primary : want_adapter_);
+  if (apath.empty() && want_adapter_.empty()) apath = bt_pick_adapter(ids, "");
   std::string err;
   if (apath.empty()) {
     err = want_adapter_.empty()
@@ -875,13 +1012,13 @@ void BtManager::refreshed(sd_bus_message* reply) {
   }
   if (err != logged_error_) {
     if (!err.empty()) LOG_WARN("bluetooth: {}", err);
-    else if (!apath.empty()) LOG_INFO("bluetooth: adapter {}", apath);
     logged_error_ = err;
   }
 
   {
     std::lock_guard<std::mutex> lk(m_);
     objs_ = objs;
+    ids_ = ids;
     adapter_path_ = apath;
     available_ = !apath.empty();
     error_ = err;
@@ -891,46 +1028,27 @@ void BtManager::refreshed(sd_bus_message* reply) {
       it = objs->contains(it->first) ? std::next(it) : dev_state_.erase(it);
   }
 
+  // The advertisements and the local GATT applications follow the primary: a change of primary
+  // takes them off the old one and registers them with the new one.
   if (apath != ready_adapter_) {
-    // The filter keys this adapter's BlueZ takes, for the console to offer only those.
-    std::vector<std::string> filters;
-    if (!apath.empty()) {
-      sd_bus_message* reply = nullptr;
-      sd_bus_error fe = SD_BUS_ERROR_NULL;
-      if (sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "GetDiscoveryFilters", &fe, &reply,
-                             "") >= 0) {
-        json v;
-        if (read_json(reply, &v) > 0 && v.is_array())
-          for (const json& x : v)
-            if (x.is_string()) filters.push_back(x.get<std::string>());
-      }
-      sd_bus_message_unref(reply);
-      sd_bus_error_free(&fe);
-    }
-    {
-      std::lock_guard<std::mutex> lk(m_);
-      discovery_filters_ = std::move(filters);
-    }
     if (!ready_adapter_.empty())
       for (BusUser* u : users_) u->bluez_gone();
     ready_adapter_ = apath;
-    if (!apath.empty())
+    if (!apath.empty()) {
+      LOG_INFO("bluetooth: primary adapter {} of {}", adapter_from_path(apath), ids.size());
       for (BusUser* u : users_) u->bluez_ready(bus_, apath);
-    // BlueZ (re)appeared with an adapter: at boot, or after a restart that dropped every link.
-    // A few seconds' grace lets the adapter power up, and a peer that reconnects by itself do so.
-    reconnect_tries_ = 0;
-    reconnect_at_ns_ = apath.empty() ? 0 : mono_ns() + s_to_ns(5);
-    adapter_up_ns_ = mono_ns();
-  }
-  if (!apath.empty()) {
-    std::string uu;
-    for (const std::string& u : strv_of((*objs)[apath][kAdapterIface], "UUIDs")) uu += u + " ";
-    if (uu != adapter_uuids_) {
-      adapter_uuids_ = uu;
-      adapter_uuids_at_ns_ = mono_ns();
     }
   }
-  note_connected(*objs, apath);
+  for (const BtAdapterId& a : ids) {
+    std::string uu;
+    for (const std::string& u : strv_of((*objs)[a.path][kAdapterIface], "UUIDs")) uu += u + " ";
+    AdapterSeen& seen = seen_[a.path];
+    if (uu != seen.uuids) {
+      seen.uuids = uu;
+      seen.uuids_at_ns = mono_ns();
+    }
+  }
+  note_connected(*objs, ids);
 
   // A pairing in progress whose prompt is only for show is over once the device is paired.
   if (pending_ && !pending_->msg && objs->contains(pending_->dev_path) &&
@@ -981,15 +1099,16 @@ void BtManager::unregister_agent() {
 
 // ---- Scanning ------------------------------------------------------------------------------------
 
-void BtManager::start_scan() {
-  std::string apath;
+void BtManager::start_scan(const std::string& apath) {
   BtScanFilter f;
   {
     std::lock_guard<std::mutex> lk(m_);
-    apath = adapter_path_;
-    f = filter_;
+    const auto it = scans_.find(apath);
+    if (it == scans_.end()) return;
+    f = it->second.filter;
   }
   if (!bus_ || apath.empty()) return;
+  const std::string name = adapter_from_path(apath);
   sd_bus_message* m = nullptr;
   sd_bus_error e = SD_BUS_ERROR_NULL;
   DDict d{{"Transport", DVar::str(f.transport)}, {"DuplicateData", DVar::boolean(f.duplicate_data)}};
@@ -1007,13 +1126,12 @@ void BtManager::start_scan() {
   sd_bus_message_unref(m);
   if (r < 0) {
     // Not a scan without the filter: what it found would look filtered and not be.
-    const std::string why = "discovery filter refused: " + friendly(&e);
+    const std::string why = name + ": discovery filter refused: " + friendly(&e);
     LOG_WARN("bluetooth: {}", why);
     sd_bus_error_free(&e);
     std::lock_guard<std::mutex> lk(m_);
     error_ = why;
-    scanning_ = false;
-    scan_until_ns_ = 0;
+    scans_.erase(apath);
     dirty_ = true;
     return;
   }
@@ -1021,26 +1139,22 @@ void BtManager::start_scan() {
 
   r = sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "StartDiscovery", &e, nullptr, "");
   if (r < 0 && !is_error(&e, "org.bluez.Error.InProgress")) {
-    const std::string why = "cannot scan: " + friendly(&e);
+    const std::string why = name + ": cannot scan: " + friendly(&e);
     LOG_WARN("bluetooth: {}", why);
     std::lock_guard<std::mutex> lk(m_);
     error_ = why;
-    scanning_ = false;
-    scan_until_ns_ = 0;
+    scans_.erase(apath);
   } else {
-    LOG_INFO("bluetooth: scanning ({})", f.transport);
+    LOG_INFO("bluetooth: {} scanning ({})", name, f.transport);
   }
   sd_bus_error_free(&e);
   dirty_ = true;
 }
 
-void BtManager::stop_scan() {
-  std::string apath;
+void BtManager::stop_scan(const std::string& apath) {
   {
     std::lock_guard<std::mutex> lk(m_);
-    scan_until_ns_ = 0;
-    scanning_ = false;
-    apath = adapter_path_;
+    scans_.erase(apath);
   }
   if (!bus_ || apath.empty()) return;
   sd_bus_error e = SD_BUS_ERROR_NULL;
@@ -1247,6 +1361,7 @@ void BtManager::hold_request(sd_bus_message* m, BtAsk ask, const std::string& ki
   p->req.passkey = passkey;
   p->req.uuid = uuid.empty() ? std::string{} : uuid_short(uuid);
   p->req.address = address_from_path(dev_path);
+  p->req.adapter = adapter_from_path(dev_path);
   {
     std::shared_ptr<const json> objs;
     {
@@ -1320,18 +1435,32 @@ std::string BtManager::adapter_path() const {
   return adapter_path_;
 }
 
+std::string BtManager::find_adapter_locked(const std::string& want) const {
+  if (want.empty()) return adapter_path_;
+  const std::string p = bt_pick_adapter(ids_, want);
+  // Confined to one adapter (a PC): the desktop's others are not the bench's to use.
+  if (!want_adapter_.empty() && p != adapter_path_) return {};
+  return p;
+}
+
+std::string BtManager::find_adapter(const std::string& want) const {
+  std::lock_guard<std::mutex> lk(m_);
+  return find_adapter_locked(want);
+}
+
 json BtManager::state() const {
   std::shared_ptr<const json> objs;
   std::string apath, error;
-  bool available, has_req, scanning, agent_reg, stale;
+  bool available, has_req, agent_reg, stale;
   BtRequest req;
-  uint64_t deadline, scan_until;
+  uint64_t deadline;
   std::map<std::string, DevState> ds;
   std::string policy, cap;
   bool reconnect_on;
-  std::vector<std::string> reconnect;
-  BtScanFilter filter;
-  std::vector<std::string> filters;
+  std::vector<Reconnect> reconnect;
+  std::map<std::string, Scan> scans;
+  std::map<std::string, std::vector<std::string>> filters;
+  std::vector<BtAdapterId> ids;
   {
     std::lock_guard<std::mutex> lk(m_);
     objs = objs_;
@@ -1345,10 +1474,9 @@ json BtManager::state() const {
     ds = dev_state_;
     policy = agent_policy_;
     cap = agent_capability_;
-    scanning = scanning_;
-    scan_until = scan_until_ns_;
-    filter = filter_;
+    scans = scans_;
     filters = discovery_filters_;
+    ids = ids_;
     agent_reg = agent_registered_shared_;
     reconnect_on = reconnect_on_;
     reconnect = reconnect_;
@@ -1360,8 +1488,30 @@ json BtManager::state() const {
   const uint64_t now = mono_ns();
   json adapters = model_adapters(*objs);
   json adapter = nullptr;
-  for (const json& a : adapters)
-    if (a["path"] == apath) adapter = a;
+  json discovery = nullptr;
+  for (json& a : adapters) {
+    const std::string p = a["path"].get<std::string>();
+    const auto id = std::find_if(ids.begin(), ids.end(), [&](const BtAdapterId& x) { return x.path == p; });
+    const auto sc = scans.find(p);
+    const auto fl = filters.find(p);
+    a["primary"] = p == apath;
+    a["usb"] = id != ids.end() && id->usb;
+    a["discovery"] = json{
+        {"on", a.value("discovering", false)},
+        {"ours", sc != scans.end()},
+        {"filter", bt_scan_filter_json(sc != scans.end() ? sc->second.filter : BtScanFilter{})},
+        // The keys the adapter's BlueZ takes (GetDiscoveryFilters): UUIDs, RSSI, Pathloss, ...
+        {"filters", fl != filters.end() ? json(fl->second) : json::array()},
+        {"until_s", sc != scans.end() && sc->second.until_ns > now ? json((sc->second.until_ns - now) / 1000000000ull)
+                                                                   : json(nullptr)}};
+    if (p == apath) {
+      adapter = a;
+      discovery = a["discovery"];
+    }
+  }
+  if (discovery.is_null())
+    discovery = json{{"on", false}, {"ours", false}, {"filter", bt_scan_filter_json(BtScanFilter{})},
+                     {"filters", json::array()}, {"until_s", nullptr}};
   json devices = model_devices(*objs, want_adapter_.empty() ? std::string{} : apath);
   for (json& d : devices) {
     const auto it = ds.find(d["path"].get<std::string>());
@@ -1373,7 +1523,14 @@ json BtManager::state() const {
                                                                                  : it->second.last_disconnect;
   }
   if (has_req) req.expires_s = deadline > now ? static_cast<unsigned>((deadline - now) / 1000000000ull) : 0;
-  const bool discovering = adapter.is_object() && adapter.value("discovering", false);
+  // The devices to call back, each with its adapter: hciN while it is there, else its address.
+  json rc = json::array();
+  for (const Reconnect& r : reconnect) {
+    std::string name = r.adapter;
+    for (const BtAdapterId& a : ids)
+      if (a.address == r.adapter || (r.adapter.empty() && a.path == apath)) name = adapter_from_path(a.path);
+    rc.push_back(json{{"adapter", name}, {"address", r.device}});
+  }
   return json{{"available", available},
               {"error", error},
               // BlueZ did not answer the last read in time: the devices are as it last said.
@@ -1383,40 +1540,42 @@ json BtManager::state() const {
               {"devices", devices},
               {"request", has_req ? bt_request_json(req) : json(nullptr)},
               {"agent", {{"policy", policy}, {"capability", cap}, {"registered", agent_reg}}},
-              {"reconnect", {{"on", reconnect_on}, {"devices", reconnect}}},
-              {"discovery",
-               {{"on", discovering},
-                {"ours", scanning},
-                {"filter", bt_scan_filter_json(filter)},
-                // The keys the adapter's BlueZ takes (GetDiscoveryFilters): UUIDs, RSSI, Pathloss, ...
-                {"filters", filters},
-                {"until_s", scan_until > now ? json((scan_until - now) / 1000000000ull) : json(nullptr)}}}};
+              {"reconnect", {{"on", reconnect_on}, {"devices", rc}}},
+              {"discovery", discovery}};
 }
 
-std::string BtManager::device_path(const std::string& address) const {
+std::string BtManager::device_path(const std::string& address, const std::string& adapter) const {
   if (!bt_address_ok(address)) return {};
   std::shared_ptr<const json> objs;
   std::string apath;
+  std::vector<BtAdapterId> ids;
   {
     std::lock_guard<std::mutex> lk(m_);
     objs = objs_;
-    apath = adapter_path_;
+    apath = find_adapter_locked(adapter);
+    ids = ids_;
   }
-  // The primary adapter's first; then any adapter's (a vhci's), unless one was named.
+  const auto has = [&](const std::string& p) { return objs->contains(p) && (*objs)[p].contains(kDeviceIface); };
+  // An adapter named: its object of the device, or none.
+  if (!adapter.empty()) {
+    const std::string p = apath.empty() ? std::string{} : bt_device_path(apath, address);
+    return !p.empty() && has(p) ? p : std::string{};
+  }
+  // The primary adapter's first; then any adapter's, unless the bench is confined to one.
   if (!apath.empty()) {
     const std::string p = bt_device_path(apath, address);
-    if (objs->contains(p) && (*objs)[p].contains(kDeviceIface)) return p;
+    if (has(p)) return p;
   }
   if (!want_adapter_.empty()) return {};
-  for (const BtAdapterId& a : model_adapter_ids(*objs)) {
+  for (const BtAdapterId& a : ids) {
     const std::string p = bt_device_path(a.path, address);
-    if (objs->contains(p) && (*objs)[p].contains(kDeviceIface)) return p;
+    if (has(p)) return p;
   }
   return {};
 }
 
-json BtManager::device(const std::string& address) const {
-  const std::string path = device_path(address);
+json BtManager::device(const std::string& address, const std::string& adapter) const {
+  const std::string path = device_path(address, adapter);
   if (path.empty()) return nullptr;
   std::shared_ptr<const json> objs;
   DevState st;
@@ -1466,13 +1625,16 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
     return false;
   }
   std::string path;
+  BtAdapterId id;
   {
     std::lock_guard<std::mutex> lk(m_);
-    path = adapter.empty() ? adapter_path_ : "/org/bluez/" + adapter;
+    path = find_adapter_locked(adapter);
     if (path.empty() || !objs_->contains(path)) {
       *err = adapter.empty() ? "no adapter" : "no such adapter";
       return false;
     }
+    for (const BtAdapterId& a : ids_)
+      if (a.path == path) id = a;
   }
   // Every field is checked before anything is applied, so a rejected body changes nothing.
   DDict props;
@@ -1485,7 +1647,7 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
         return false;
       }
       // Empty: back to the default — the board's name, or BlueZ's (its Name) on a PC.
-      const std::string host = a.empty() && default_alias_ ? host_name() : std::string{};
+      const std::string host = a.empty() && default_alias_ ? default_alias(id) : std::string{};
       props.push_back({"Alias", DVar::str(host.empty() ? a : host)});
     }
     // The timeout first: BlueZ starts counting when Discoverable goes on, with the value in force.
@@ -1507,7 +1669,7 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
   }
   {
     std::lock_guard<std::mutex> lk(m_);
-    const std::string name = path.substr(path.rfind('/') + 1);
+    const std::string name = id.address.empty() ? path.substr(path.rfind('/') + 1) : id.address;
     uint32_t timeout = 0;
     if (j.contains("discoverable_timeout_s")) timeout = j["discoverable_timeout_s"].get<uint32_t>();
     else if (objs_->contains(path) && (*objs_)[path].contains(kAdapterIface))
@@ -1517,6 +1679,38 @@ bool BtManager::set_adapter_props(const std::string& adapter, const json& j, std
     if (j.contains("alias") && j["alias"].get<std::string>().empty()) kept_adapters_[name].erase("alias");
     save_state_locked();
   }
+  touch();
+  return true;
+}
+
+bool BtManager::set_primary(const std::string& want, std::string* err) {
+  if (!running_.load()) {
+    *err = "Bluetooth is not running";
+    return false;
+  }
+  std::string address;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    if (!want_adapter_.empty()) {
+      *err = "the bench runs on " + want_adapter_ + " only (--bt-adapter)";
+      return false;
+    }
+    if (!want.empty()) {
+      const std::string p = bt_pick_adapter(ids_, want);
+      for (const BtAdapterId& a : ids_)
+        if (a.path == p) address = a.address;
+      if (address.empty()) {
+        *err = "no such adapter";
+        return false;
+      }
+    }
+    primary_ = address;
+    save_state_locked();
+    // Shown at once; the next read moves the advertisements and the GATT applications over.
+    const std::string p = bt_pick_adapter(ids_, address);
+    adapter_path_ = p.empty() ? bt_pick_adapter(ids_, "") : p;
+  }
+  LOG_INFO("bluetooth: primary adapter: {}", address.empty() ? std::string("the board's own") : address);
   touch();
   return true;
 }
@@ -1541,37 +1735,45 @@ bool BtManager::set_agent(const std::string& policy, const std::string& capabili
   return true;
 }
 
-bool BtManager::scan(bool on, const BtScanFilter& f, unsigned seconds, std::string* err) {
+bool BtManager::scan(bool on, const std::string& adapter, const BtScanFilter& f, unsigned seconds,
+                     std::string* err) {
   if (!running_.load()) {
     *err = "Bluetooth is not running";
     return false;
   }
+  std::vector<std::string> paths;
   {
     std::lock_guard<std::mutex> lk(m_);
-    if (on && adapter_path_.empty()) {
-      *err = "no adapter";
-      return false;
+    if (on || !adapter.empty()) {
+      const std::string p = find_adapter_locked(adapter);
+      if (p.empty()) {
+        *err = adapter.empty() ? "no adapter" : "no such adapter";
+        return false;
+      }
+      paths.push_back(p);
+    } else {
+      // Stop with no adapter named: every scan started here, or the primary's (one started elsewhere).
+      for (const auto& kv : scans_) paths.push_back(kv.first);
+      if (paths.empty() && !adapter_path_.empty()) paths.push_back(adapter_path_);
     }
-    if (on) {
-      filter_ = f;
-      scanning_ = true;
-      scan_until_ns_ = seconds ? mono_ns() + s_to_ns(seconds) : 0;
-    }
+    if (on) scans_[paths[0]] = Scan{f, seconds ? mono_ns() + s_to_ns(seconds) : 0};
   }
-  post([this, on](sd_bus*) {
-    if (on) start_scan();
-    else stop_scan();
+  post([this, on, paths](sd_bus*) {
+    for (const std::string& p : paths) {
+      if (on) start_scan(p);
+      else stop_scan(p);
+    }
   });
   return true;
 }
 
 bool BtManager::device_action(const std::string& address, Action action, const std::string& arg,
-                              std::string* err) {
+                              std::string* err, const std::string& adapter) {
   if (!running_.load()) {
     *err = "Bluetooth is not running";
     return false;
   }
-  const std::string path = device_path(address);
+  const std::string path = device_path(address, adapter);
   if (path.empty()) {
     *err = "no such device";
     return false;
@@ -1592,7 +1794,7 @@ bool BtManager::device_action(const std::string& address, Action action, const s
   // Disconnected or removed on purpose: not to be called back at the next start.
   if ((action == Action::Disconnect && arg.empty()) || action == Action::Remove ||
       (action == Action::DisconnectBearer && arg == "bredr"))
-    forget_reconnect(address);
+    forget_reconnect(path.substr(0, path.rfind('/')), address);
   const bool bearer = action == Action::ConnectBearer || action == Action::DisconnectBearer;
   if (bearer && arg != "le" && arg != "bredr") {
     std::lock_guard<std::mutex> lk(m_);
@@ -1660,12 +1862,13 @@ bool BtManager::device_action(const std::string& address, Action action, const s
   return true;
 }
 
-bool BtManager::set_device_props(const std::string& address, const json& j, std::string* err) {
+bool BtManager::set_device_props(const std::string& address, const json& j, std::string* err,
+                                 const std::string& adapter) {
   if (!running_.load()) {
     *err = "Bluetooth is not running";
     return false;
   }
-  const std::string path = device_path(address);
+  const std::string path = device_path(address, adapter);
   if (path.empty()) {
     *err = "no such device";
     return false;

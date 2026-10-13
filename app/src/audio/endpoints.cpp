@@ -4,6 +4,7 @@
 #include <map>
 #include <sstream>
 #include <cctype>
+#include <cstdlib>
 
 #include "util/strings.h"
 
@@ -42,6 +43,13 @@ std::string default_name(const json& dump, const char* key) {
     }
   }
   return {};
+}
+
+// The adapter (hci1) of a BlueZ object path: /org/bluez/hci1/dev_AA_BB_... .
+std::string bt_adapter(const std::string& path) {
+  const std::string root = "/org/bluez/";
+  if (path.compare(0, root.size(), root) != 0) return {};
+  return path.substr(root.size(), path.find('/', root.size()) - root.size());
 }
 
 std::string bt_address(std::string a) {
@@ -88,6 +96,12 @@ json endpoints_from_pw_dump(const json& dump) {
   // name a device that is not there. Only the former marks an endpoint.
   const std::string def_sink = default_name(dump, "default.audio.sink");
   const std::string def_source = default_name(dump, "default.audio.source");
+  // A Bluetooth node's adapter is its device's (api.bluez5.path): a board with two adapters can have
+  // a device connected on both, and then two nodes with one node.name.
+  std::map<long long, std::string> adapter_of;
+  for (const json& o : dump)
+    if (o.value("type", "") == "PipeWire:Interface:Device" && o.contains("info") && o["info"].contains("props"))
+      adapter_of[o.value("id", -1LL)] = bt_adapter(prop(o["info"]["props"], "api.bluez5.path"));
   for (const json& o : dump) {
     if (o.value("type", "") != "PipeWire:Interface:Node") continue;
     if (!o.contains("info") || !o["info"].contains("props")) continue;
@@ -109,7 +123,11 @@ json endpoints_from_pw_dump(const json& dump) {
     const std::string api = prop(p, "device.api");
     std::string kind = "hardware";
     json address = nullptr;
+    json adapter = nullptr;
     if (api == "bluez5" || starts_with(name, "bluez_")) {
+      const std::string dev = prop(p, "device.id");
+      const auto ad = dev.empty() ? adapter_of.end() : adapter_of.find(std::atoll(dev.c_str()));
+      if (ad != adapter_of.end() && !ad->second.empty()) adapter = ad->second;
       kind = "bluetooth";
       std::string a = prop(p, "api.bluez5.address");
       if (a.empty()) {
@@ -130,6 +148,7 @@ json endpoints_from_pw_dump(const json& dump) {
            {"label", label},
            {"kind", kind},
            {"address", address},
+           {"adapter", adapter},
            {"profile", prop(p, "api.bluez5.profile")},
            {"codec", prop(p, "api.bluez5.codec")},
            {"serial", prop(p, "object.serial")},
@@ -138,6 +157,17 @@ json endpoints_from_pw_dump(const json& dump) {
            {"rate", p.contains("audio.rate") && p["audio.rate"].is_number() ? p["audio.rate"] : json(nullptr)},
            {"channels", p.contains("audio.channels") && p["audio.channels"].is_number() ? p["audio.channels"] : json(nullptr)}};
     (sink ? sinks : sources).push_back(std::move(e));
+  }
+  // Two nodes of one name (a device connected on two adapters) are told apart by their adapter, and
+  // named as a target by their object.serial, which PipeWire takes as well.
+  for (json* list : {&sinks, &sources}) {
+    std::map<std::string, int> n;
+    for (const json& e : *list) ++n[e["id"].get<std::string>()];
+    for (json& e : *list)
+      if (n[e["id"].get<std::string>()] > 1 && !e["serial"].get<std::string>().empty()) {
+        e["id"] = e["serial"];
+        if (e["adapter"].is_string()) e["label"] = e["label"].get<std::string>() + " (" + e["adapter"].get<std::string>() + ")";
+      }
   }
   // Bluetooth first (they are what the bench is for), then by label.
   auto order = [](const json& a, const json& b) {

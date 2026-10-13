@@ -19,16 +19,25 @@ std::string bt_device_path(const std::string& adapter_path, const std::string& a
 struct BtAdapterId {
   std::string path;
   std::string address;
+  // On USB: a dongle or an M.2 card on an adapter, not the board's own controller. Not in BlueZ's
+  // tree (the caller fills it in from sysfs).
+  bool usb = false;
 };
-// `want` is an hci name ("hci1") or an address, for a machine whose other adapters belong to
-// someone else (a PC's, to its desktop); "" is hci0, or the first. "" when none matches.
+// `want` is an hci name ("hci1") or an address. "" is the board's own controller: the first not on
+// USB, hci0 among those first — a dongle can probe before the board's UART controller and take
+// hci0 at boot. "" when none matches.
 std::string bt_pick_adapter(const std::vector<BtAdapterId>& adapters, const std::string& want);
 std::vector<BtAdapterId> model_adapter_ids(const nlohmann::json& objs);
 
 // Every adapter: {name:"hci0", path, address, address_type, alias, powered, discoverable,
 // discoverable_timeout_s, pairable, discovering, roles, uuids:[...], adv:{supported_instances,
-// active_instances, supported_includes}|null}.
+// active_instances, supported_includes}|null, manufacturer:2|null, manufacturer_name:"Intel",
+// version:"5.4"|null (the controller's HCI version)}.
 nlohmann::json model_adapters(const nlohmann::json& objs);
+// A Bluetooth company identifier's name, for the controller makers a bench meets ("" for others),
+// and an HCI/LMP version number as the spec's version ("5.4"; "" when unknown).
+std::string bt_company_name(int id);
+std::string bt_version_name(int v);
 
 // One device from its Device1 properties: address, address_type, name, alias, adapter, icon,
 // paired, bonded, trusted, blocked, connected, services_resolved, legacy_pairing, rssi|null,

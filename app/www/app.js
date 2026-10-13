@@ -492,7 +492,9 @@ function renderRequest(r) {
     return;
   }
   request = Object.assign({}, r, {deadline});
-  const who = `<b>${esc(r.name)}</b> <span class="mono small muted">${esc(r.address)}</span>`;
+  // On a board with two adapters, which of them it asks.
+  const many = typeof btState !== 'undefined' && btState && (btState.adapters || []).length > 1;
+  const who = `<b>${esc(r.name)}</b> <span class="mono small muted">${esc(r.address)}${many && r.adapter ? ' → ' + esc(r.adapter) : ''}</span>`;
   const code = r.passkey ? `<div class="code">${esc(r.passkey)}</div>` : '';
   let body, acts;
   const yesNo = (yes, no) => `<button class="primary" data-a="yes">${yes}</button><button data-a="no">${no}</button>`;
