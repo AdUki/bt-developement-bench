@@ -267,12 +267,20 @@ answer within 5 s is reset: its driver is unbound and bound again in sysfs (`hci
 with a mark saying so in the capture. BlueZ then shows the adapter afresh, the bench restores its
 settings and calls its devices back. At most once a minute per controller, five times per run.
 
-Seen on the Zero W's BCM43430 (UART, Raspberry Pi OS's BCM43430A1.hcd) after some minutes of
-aptX HD to a sink: its radio keeps the link up, but from one moment it sends the host nothing —
-the UART's receive counter and interrupts stop, CTS stays asserted and the host's bytes still go
-out — so every command times out (adapter settings fail as "Authentication Failed", connects as
-no answer) and the kernel only notices minutes later, or never. Without the reset only a reboot
-brought it back.
+Seen on the Zero W's BCM43430 (UART, Raspberry Pi OS's BCM43430A1.hcd) under aptX HD to a sink:
+its radio keeps the link up, but from one moment it sends the host nothing — the UART's receive
+counter and interrupts stop, CTS stays asserted and the host's bytes still go out — so every
+command timed out (adapter settings fail as "Authentication Failed", connects as no answer) and
+the kernel only noticed minutes later, or never. Without the reset only a reboot brought it back.
+
+The cause was bytes lost on their way to the controller: once it answered an "Unknown HCI
+Command" 0xed59 that the host never sent — the bytes 01 59 ed of an RTP header it had just been
+sent, read as a command after it lost its place in the H4 stream — and wedged 180 ms later.
+Mainline's PL011 driver lacks the Raspberry Pi kernel's fixes for the BCM2835's TX FIFO (a
+character written to a full FIFO is dropped, and a busy Zero W fills it ~1300 times a second):
+the bench's kernel carries them (src/linux, `serial: amba-pl011: ...`), with
+`cts-event-workaround` on uart0 (boards/dts/rpi0w-btbench.dtsi). The reset stays as the net for
+whatever else stops a controller.
 
 ## Live capture in Wireshark
 

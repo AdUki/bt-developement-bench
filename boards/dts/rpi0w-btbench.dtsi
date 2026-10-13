@@ -14,6 +14,15 @@
  */
 
 /*
+ * uart0 carries the Bluetooth controller with RTS/CTS flow control, which under a busy link (A2DP)
+ * changes CTS all the time: the BCM2835's PL011 then needs the CTS event workaround the Raspberry
+ * Pi kernel sets on every Pi's uart0, or it can stop transmitting.
+ */
+&uart0 {
+	cts-event-workaround;
+};
+
+/*
  * The data micro-USB port is the dev link: a USB device to the PC (configfs gadget, NCM + ACM).
  * Mainline leaves it in "otg" mode, which depends on ID pin detection; "peripheral" makes it a
  * device whatever the cable. For a USB host (a Bluetooth dongle with an LE Audio capable

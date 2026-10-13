@@ -58,7 +58,13 @@ In a tree, `origin` is the fork; add the upstream for rebasing, e.g.
 `https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git` for the kernel,
 `https://gitlab.freedesktop.org/pipewire/{pipewire,wireplumber}.git`).
 
-A change goes in as a commit on `bench`, pushed to the fork, then pinned:
+The kernel's own changes are kept per SoC: a branch `soc/<soc>` (`soc/bcm2835`: the PL011 fixes
+the Zero W's Bluetooth UART needs) holds one SoC's commits on the pin, and `bench` is the pin with
+each of them merged in (`git merge --no-ff soc/<soc>`). A board's work that is not ready to share
+stays on a local `soc/` branch that is neither merged nor pushed (`soc/imx8mm`, the s1955).
+
+A change goes in as a commit on `bench` (the kernel: on its `soc/` branch, merged into `bench`),
+pushed to the fork, then pinned:
 
 ```bash
 git -C src/bluez push origin bench
