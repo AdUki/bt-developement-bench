@@ -461,15 +461,14 @@ function openLib(kind, chosen) {
   }
 }
 
-// The stations, each with a remove, and under them a station to add by its URL. The board keeps the
-// whole list (PUT /audio/radio), the one Audio's "Edit stations" edits too.
+// The stations, each with a remove, and under them a station to add by its URL: the board names it
+// (what the stream calls itself). The board keeps the whole list (PUT /audio/radio), the one
+// Audio's "Edit stations" edits too.
 function renderStations(r) {
   pl.libItems = r.stations.map(s => ({kind: 'station', title: s.name, url: s.url}));
-  renderLib('<div class="empty-line">No stations yet.</div>');
-  $('np-lib').insertAdjacentHTML('beforeend', `<form class="radio-add row wrap" id="np-radio-add">
-    <input type="url" name="url" class="grow" placeholder="Stream URL (MP3, AAC, .pls, .m3u)" required>
-    <input type="text" name="name" placeholder="Name (optional)" maxlength="120">
-    <button class="small-btn">${svg(PL_SVG.plus)} Add station</button></form>`);
+  renderLib('<div class="empty-line">No stations yet.</div>', `<form class="radio-add row" id="np-radio-add">
+    <input type="url" name="url" class="grow" placeholder="Add a station: its stream URL (MP3, AAC, .pls, .m3u)" required>
+    <button class="small-btn">${svg(PL_SVG.plus)} Add</button></form>`);
 }
 
 // The list as the board has it now, changed by `edit`, saved, and shown.
@@ -479,9 +478,13 @@ function stationsSave(edit) {
 }
 
 function stationAdd(f) {
-  const url = f.url.value.trim(), name = f.name.value.trim();
-  if (!url) return;
-  stationsSave(list => list.concat([{name: name || url, url}])).then(() => toast(`Added ${name || url}`)).catch(fail);
+  const url = f.url.value.trim();
+  const btn = f.querySelector('button');
+  if (!url || btn.disabled) return;
+  btn.disabled = true;
+  stationsSave(list => list.concat([{url}]))
+    .then(r => { const s = r.stations[r.stations.length - 1]; toast(`Added ${s ? s.name : url}`); })
+    .catch(e => { btn.disabled = false; fail(e); });
 }
 
 function stationRemove(i) {
@@ -679,7 +682,8 @@ function renderCrumbs() {
 // network than this browser, a broken link).
 const libArt = (it, icon) => `${svg(icon)}${it.thumb || it.art ? `<img alt="" loading="lazy" decoding="async" src="${esc(it.thumb || it.art)}" onerror="this.remove()">` : ''}`;
 
-function renderLib(empty) {
+// `foot` goes under the rows (the stations' add form).
+function renderLib(empty, foot) {
   const items = pl.libItems;
   const tracks = items.filter(x => x.kind === 'track');
   const here = pl.lib === 'upnp' ? pl.libPath[pl.libPath.length - 1] : null;
@@ -705,7 +709,7 @@ function renderLib(empty) {
   if (grid) {
     setHTML($('np-lib'), `<div class="lib-grid">${libTiles(items, 0)}</div>`);
   } else {
-    setHTML($('np-lib'), head + (libRowsHTML(items, 0, inAlbum) || empty || '<div class="empty-line">Empty.</div>'));
+    setHTML($('np-lib'), head + (libRowsHTML(items, 0, inAlbum) || empty || '<div class="empty-line">Empty.</div>') + (foot || ''));
   }
   libMoreLine();
 }

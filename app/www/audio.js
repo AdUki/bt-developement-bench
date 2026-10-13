@@ -1061,7 +1061,7 @@ function setupAudio() {
   $('rd-save').onclick = () => {
     const stations = $('rd-text').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
       const i = l.lastIndexOf('|');
-      return i < 0 ? {name: l, url: l} : {name: l.slice(0, i).trim(), url: l.slice(i + 1).trim()};
+      return i < 0 ? {url: l} : {name: l.slice(0, i).trim(), url: l.slice(i + 1).trim()};  // the board names it
     });
     put('/audio/radio', {stations}).then(r => { renderRadio(r); $('rd-editor').hidden = true; }).catch(fail);
   };

@@ -626,6 +626,31 @@ bool fetch_icy(const std::string& curl, const std::string& url, const std::atomi
   return got;
 }
 
+// The stream a .pls/.m3u playlist URL names first; any other URL as it is.
+std::string playlist_stream(const std::string& curl, const std::string& url) {
+  if (!looks_like_playlist(url) || curl.empty()) return url;
+  const ExecResult r = run_cmd({curl, "-sSL", "-A", "btbenchd/1.0", "--max-time", "8", "--max-filesize", "65536", url}, 10000, 65536);
+  if (!r.ok()) return url;
+  const std::string first = playlist_first_url(r.out);
+  return first.empty() || !url_ok(first) ? url : first;
+}
+
+// A station added by its URL alone: the name its stream gives itself (icy-name), else the URL's
+// host.
+std::string station_name(const std::string& curl, const std::string& url) {
+  if (!curl.empty()) {
+    const std::atomic<bool> stop{false};
+    std::string meta, headers;
+    fetch_icy(curl, playlist_stream(curl, url), stop, &meta, &headers);
+    const std::string n = http_header(headers, "icy-name");
+    if (!n.empty() && lower(n) != "unspecified name") return n;
+  }
+  const size_t a = url.find("://");
+  std::string host = url.substr(a == std::string::npos ? 0 : a + 3);
+  host = host.substr(0, host.find_first_of(":/?#"));
+  return starts_with(host, "www.") ? host.substr(4) : host;
+}
+
 // The cover a station's StreamUrl leads to (pcm.h image_url_in_json): the URL itself, or the image
 // its now-playing JSON names. "" for none.
 std::string resolve_art(const std::string& curl, const std::string& stream_url) {
@@ -758,14 +783,7 @@ struct AudioEngine::Stream {
     }
   }
 
-  std::string resolve_playlist(const std::string& url) {
-    if (!looks_like_playlist(url)) return url;
-    if (tools->curl.empty()) return url;
-    const ExecResult r = run_cmd({tools->curl, "-sSL", "-A", "btbenchd/1.0", "--max-time", "8", "--max-filesize", "65536", url}, 10000, 65536);
-    if (!r.ok()) return url;
-    const std::string first = playlist_first_url(r.out);
-    return first.empty() || !url_ok(first) ? url : first;
-  }
+  std::string resolve_playlist(const std::string& url) { return playlist_stream(tools->curl, url); }
 
   // A start that failed: the reason, and nothing left running (the title poller included).
   void abandon(const std::string& why) {
@@ -1507,7 +1525,9 @@ bool AudioEngine::set_radio(const json& body, std::string* err) {
       *err = "not an http(s) URL: " + url;
       return false;
     }
-    clean.push_back(json{{"name", s.value("name", url).substr(0, 120)}, {"url", url}});
+    std::string name = s.contains("name") && s["name"].is_string() ? trim(s["name"].get<std::string>()) : "";
+    if (name.empty()) name = station_name(tools_.curl, url);
+    clean.push_back(json{{"name", name.substr(0, 120)}, {"url", url}});
     if (clean.size() >= 100) break;
   }
   const std::string path = data_dir_ + "/radio.json";

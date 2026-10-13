@@ -740,7 +740,7 @@ td.acts > * { margin-right: 0.25rem; }
 .icon-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .empty-line { padding: 1rem 0.4rem; color: var(--muted); }
 .radio-add { padding: 0.8rem 0.4rem 0.2rem; }
-.radio-add input[name=name] { flex: 0 1 12rem; min-width: 0; }
+.radio-add .small-btn { flex: none; }
 .segs { display: inline-flex; background: var(--well); border-radius: 8px; padding: 2px; }
 .seg { border: 0; background: transparent; padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.82rem; color: var(--muted); }
 .seg.on { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }

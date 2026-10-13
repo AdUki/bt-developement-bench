@@ -52,8 +52,8 @@ this board* · Internet radio or Media server, and the output it plays on. *Up n
 click plays that track. *Library*, a page of its own so long folders get the screen, has the
 phone's own folders and search (for a browsable player), the radio stations, and the media servers
 on the LAN: a station plays on its own, a track plays with the rest of its folder after it as the
-queue, and **+** adds a track to the end of the queue. Under the stations a URL (and a name) adds
-one, and **×** on a station removes it. Media servers show their covers: a folder of
+queue, and **+** adds a track to the end of the queue. Under the stations a stream's URL adds
+it, named as the stream calls itself, and **×** on a station removes it. Media servers show their covers: a folder of
 albums is a grid of them (title, artist, year), an album opens with its cover, artist, year, genre,
 track count and length, *Play all* and *Add all*, and its tracks by number with their format
 (`FLAC 24/96`, `MP3 44.1 kHz`); a track without a cover of its own shows its album's in Now

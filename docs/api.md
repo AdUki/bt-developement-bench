@@ -616,7 +616,8 @@ board; MP3 plays with mpg123). `tools/fake-upnp/server.py` is a media server to 
 
 `GET /api/audio/radio` — `{"stations": [{"name", "url"}], "saved": false}` (a starter list until
 one is saved); `PUT /api/audio/radio` `{"stations": [...]}` saves them to
-`/data/btbench/radio.json`.
+`/data/btbench/radio.json`. A station without a `name` gets the one its stream gives itself
+(`icy-name`), else its URL's host: asking the stream takes a second or so per station.
 
 ## OBEX
 
