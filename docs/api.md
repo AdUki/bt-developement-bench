@@ -536,7 +536,8 @@ first), is the spec as normalised plus:
 {"id": 3, "label": "tone 1 kHz → bluez_output.F8_DF_15_0A_11_3C.1", "node": "btbench-stream-3",
  "state": "running", "error": "", "started_ms": 1791557330192, "ended_ms": null, "seconds": 12.3,
  "listeners": 1, "level": {"peak_db": [-12.0, -12.0], "rms_db": [-15.0, -15.0], "clipped": 0},
- "meta": {"name": "Groove Salad: ...", "title": "Artist - Song", "url": "<the URL played>"},
+ "meta": {"name": "Groove Salad: ...", "title": "Artist - Song", "url": "<the URL played>",
+          "art": "https://somafm.com/logos/512/groovesalad512.jpg", "description": ""},
  "track": 0, "track_seconds": 12.3, "paused": false}
 ```
 
@@ -544,7 +545,10 @@ first), is the spec as normalised plus:
 was not listened to for 30 s ends too, saying so in `error`), `failed` (`error` has the tool's
 last words: a refused URL, a sink that went away), `stopped`. `level` is the last 250 ms after the
 gain. `meta` carries an ICY stream's station name and current title (from the decoder, or —
-when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to. `node` is
+when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to.
+`meta.art` is the cover the station sends with its title (ICY `StreamUrl`: an image, or a
+now-playing JSON such as Bauer's eventdata, whose image is looked up), often its logo, `""` for
+none; `meta.description` its `icy-description` header. `node` is
 the PipeWire stream's name (`wpctl status`, `pw-top`). A URL stream's `track` is its position in
 `source.playlist` (`meta.title` is that item's title), `track_seconds` how much of it has played
 (paused time not counted); the stream ends after the last track, unless it repeats. With repeat

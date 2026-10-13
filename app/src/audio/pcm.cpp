@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <nlohmann/json.hpp>
+
 #include "util/strings.h"
 
 namespace btb::audio {
@@ -304,11 +306,9 @@ bool parse_icy_line(const std::string& raw, std::string* key, std::string* value
   }
   if (starts_with(line, "ICY-META:")) {
     const std::string m = line.substr(9);
-    const size_t a = m.find("StreamTitle='");
-    if (a == std::string::npos) return false;
-    const size_t b = m.find("';", a + 13);
+    if (m.find("StreamTitle='") == std::string::npos) return false;
     *key = "title";
-    *value = trim(m.substr(a + 13, b == std::string::npos ? std::string::npos : b - (a + 13)));
+    *value = icy_field(m, "StreamTitle");
     return true;
   }
   // ffmpeg: "    icy-name        : Groove Salad" / "      StreamTitle     : Artist - Title"
@@ -325,14 +325,27 @@ bool parse_icy_line(const std::string& raw, std::string* key, std::string* value
   return false;
 }
 
-bool icy_title_from(const std::string& headers, const std::string& body, std::string* title,
-                    size_t* need) {
-  size_t metaint = 0;
+std::string icy_field(const std::string& meta, const std::string& key) {
+  const std::string open = key + "='";
+  const size_t a = meta.find(open);
+  if (a == std::string::npos) return {};
+  const size_t from = a + open.size();
+  const size_t b = meta.find("';", from);
+  return trim(meta.substr(from, b == std::string::npos ? std::string::npos : b - from));
+}
+
+std::string http_header(const std::string& headers, const std::string& name) {
+  std::string v;
   for (const std::string& line : split(headers, '\n')) {
+    if (starts_with(line, "HTTP/")) v.clear();  // a response after a redirect: its headers count
     const size_t c = line.find(':');
-    if (c != std::string::npos && lower(trim(line.substr(0, c))) == "icy-metaint")
-      metaint = static_cast<size_t>(std::strtoul(trim(line.substr(c + 1)).c_str(), nullptr, 10));
+    if (c != std::string::npos && lower(trim(line.substr(0, c))) == name) v = trim(line.substr(c + 1));
   }
+  return v;
+}
+
+bool icy_meta_from(const std::string& headers, const std::string& body, std::string* meta, size_t* need) {
+  const size_t metaint = static_cast<size_t>(std::strtoul(http_header(headers, "icy-metaint").c_str(), nullptr, 10));
   *need = 0;
   if (metaint == 0 || metaint > (1u << 20)) return false;
   if (body.size() <= metaint) {
@@ -344,12 +357,50 @@ bool icy_title_from(const std::string& headers, const std::string& body, std::st
     *need = metaint + 1 + len;
     return false;
   }
-  const std::string meta = body.substr(metaint + 1, len);
-  const size_t a = meta.find("StreamTitle='");
-  if (a == std::string::npos) return false;
-  const size_t b = meta.find("';", a + 13);
-  *title = trim(meta.substr(a + 13, b == std::string::npos ? std::string::npos : b - (a + 13)));
-  return true;
+  *meta = body.substr(metaint + 1, len);
+  meta->erase(std::find(meta->begin(), meta->end(), '\0'), meta->end());
+  return meta->find("StreamTitle='") != std::string::npos;
+}
+
+bool url_is_image(const std::string& url) {
+  const std::string l = lower(url);
+  if (!starts_with(l, "http://") && !starts_with(l, "https://")) return false;
+  const std::string path = l.substr(0, l.find_first_of("?#"));
+  for (const char* ext : {".jpg", ".jpeg", ".png", ".webp", ".gif"})
+    if (path.size() > strlen(ext) && path.compare(path.size() - strlen(ext), std::string::npos, ext) == 0) return true;
+  return false;
+}
+
+namespace {
+
+// The image URLs under keys with "image" in their name, anywhere in `j`: full size first.
+void json_images(const nlohmann::json& j, std::vector<std::string>* big, std::vector<std::string>* small) {
+  if (j.is_array()) {
+    for (const auto& v : j) json_images(v, big, small);
+    return;
+  }
+  if (!j.is_object()) return;
+  for (const auto& [k, v] : j.items()) {
+    const std::string lk = lower(k);
+    if (v.is_string() && lk.find("image") != std::string::npos) {
+      const std::string u = v.get<std::string>();
+      const std::string lu = lower(u);
+      if (!starts_with(lu, "http://") && !starts_with(lu, "https://")) continue;
+      (lk.find("small") != std::string::npos || lk.find("thumb") != std::string::npos ? small : big)->push_back(u);
+    } else {
+      json_images(v, big, small);
+    }
+  }
+}
+
+}  // namespace
+
+std::string image_url_in_json(const std::string& body) {
+  const nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+  if (j.is_discarded()) return {};
+  std::vector<std::string> big, small;
+  json_images(j, &big, &small);
+  return !big.empty() ? big.front() : !small.empty() ? small.front() : std::string();
 }
 
 }  // namespace btb::audio

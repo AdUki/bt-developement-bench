@@ -153,11 +153,26 @@ bool looks_like_playlist(const std::string& url_or_type);
 // "    StreamTitle : y"). Returns true and sets *key ("name" or "title") and *value for those.
 bool parse_icy_line(const std::string& line, std::string* key, std::string* value);
 
+// A field of an ICY metadata block ("StreamTitle='A - B';StreamUrl='http://...';"), "" when it has
+// none. A value can hold a quote ("Britain's"): it ends at the next "';".
+std::string icy_field(const std::string& meta, const std::string& key);
+
 // An ICY stream read with "Icy-MetaData: 1": `headers` as curl dumps them (every response of a
 // redirect chain), `body` the first bytes of the stream. The metadata block sits after
-// icy-metaint bytes of audio: a length byte (×16), then "StreamTitle='...';...". Returns the
-// size of the prefix that has to be read (metaint + 1 + the block) in *need when body is short.
-bool icy_title_from(const std::string& headers, const std::string& body, std::string* title,
-                    size_t* need);
+// icy-metaint bytes of audio: a length byte (×16), then "StreamTitle='...';...". Returns true and
+// sets *meta to the block (NULs trimmed); else the size of the prefix that has to be read (metaint
+// + 1 + the block) in *need when body is short, 0 when there is no metadata to wait for.
+bool icy_meta_from(const std::string& headers, const std::string& body, std::string* meta, size_t* need);
+
+// A header of the last response in `headers` (as curl dumps a redirect chain), "" when absent.
+std::string http_header(const std::string& headers, const std::string& name);
+
+// The cover a station's StreamUrl leads to. Most send the image itself (SomaFM its logo, Radio
+// Paradise the album's cover): a URL whose path ends in an image's extension. Others send a URL
+// of their now-playing JSON (Bauer's eventdata): the image is the first http(s) value of a key
+// with "image" in its name, a full-size one before a "small" or "thumb" one; "" when there is none
+// or `body` is not JSON.
+bool url_is_image(const std::string& url);
+std::string image_url_in_json(const std::string& body);
 
 }  // namespace btb::audio

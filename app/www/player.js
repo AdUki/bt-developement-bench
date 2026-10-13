@@ -105,8 +105,8 @@ function renderNowPlaying() {
   setHTML($('np-src'), chips.length > 1 ? chips.map(x =>
     `<button class="chip${x.on ? ' on' : ''}" data-src="${esc(x.key)}">${svg(x.icon)}${esc(x.label)}</button>`).join('') : '');
 
-  let artSrc = '', artLoading = false;
-  let art = svg(PL_SVG.note, 'ph'), title = 'Nothing playing', sub = '', sub2 = '', playing = false, pos = 0, dur = 0;
+  let artSrc = '', artLoading = false, ph = PL_SVG.note;
+  let art = svg(ph, 'ph'), title = 'Nothing playing', sub = '', sub2 = '', playing = false, pos = 0, dur = 0;
   let can = {prev: false, next: false, play: false, stop: false};
   if (c.kind === 'phone') {
     const p = c.p, t = p.track || {};
@@ -138,18 +138,20 @@ function renderNowPlaying() {
     title = s.meta.title || item.title || s.source.title || 'Internet radio';
     sub = list.length > 1 ? [item.artist, item.album, `track ${s.track + 1} of ${list.length}`].filter(Boolean).join(' — ')
       : (s.meta.name || s.source.title || '');
-    sub2 = '';
+    // A station: what it says about itself, and the cover (or its logo) it sends with the title.
+    sub2 = list.length > 1 || s.meta.description === sub ? '' : s.meta.description || '';
     pos = (s.track_seconds || 0) * 1000;
     dur = item.duration_ms || (item.duration_s || 0) * 1000;
-    if (item.art) artSrc = item.art;
-    else art = svg(list.length > 1 ? PL_SVG.note : PL_SVG.radio, 'ph');
+    if (list.length <= 1) ph = PL_SVG.radio;
+    artSrc = item.art || (list.length > 1 ? '' : s.meta.art || '');
+    art = svg(ph, 'ph');
     // Repeating all, the first track's previous is the last, and the last one's next the first.
     const round = s.source.repeat === 'all' || s.source.shuffle;
     can = {prev: round ? list.length > 1 : s.track > 0, next: round ? list.length > 1 : s.track + 1 < list.length, play: true, stop: true};
   }
   // An image: loading until it arrived (or failed: then the note stays).
   if (artSrc) {
-    art = svg(PL_SVG.note, 'ph') + `<img alt="" src="${esc(artSrc)}" onload="npArtDone(this, true)" onerror="npArtDone(this, false)"${pl.artDone[artSrc] === true ? '' : ' hidden'}>`;
+    art = svg(ph, 'ph') + `<img alt="" src="${esc(artSrc)}" onload="npArtDone(this, true)" onerror="npArtDone(this, false)"${pl.artDone[artSrc] === true ? '' : ' hidden'}>`;
     artLoading = pl.artDone[artSrc] === undefined;
   }
   setHTML($('np-art'), art);

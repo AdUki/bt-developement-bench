@@ -43,8 +43,9 @@ questions from a terminal.
 **Listen** — the console as a music player, for using the board rather than testing it. Two
 views. *Now playing* shows whichever source plays: a connected phone (its AVRCP player — track,
 cover art, progress, previous / play / pause / next / stop, repeat and shuffle when the player has
-them, the link's volume) or the board itself (a radio station, or tracks from a UPnP media server
-with their artist, album and length, and repeat and shuffle for a playlist). Chips switch between
+them, the link's volume) or the board itself (a radio station, with the cover or logo it sends and
+its description, or tracks from a UPnP media server with their artist, album and length, and repeat
+and shuffle for a playlist). Chips switch between
 them when there are several. Above the title it says where the sound comes from: *Bluetooth · from*
 a device (and whether its audio is streaming into the board, or only its player is known), or *On
 this board* · Internet radio or Media server, and the output it plays on. *Up next* is the phone's now-playing list, or the board's queue; a

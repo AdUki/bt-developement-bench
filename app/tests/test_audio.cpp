@@ -140,19 +140,41 @@ void test_playlists() {
   CHECK(!parse_icy_line("    icy-br          : 128", &k, &v));
   CHECK(!parse_icy_line("Playing MPEG stream 1 of 1", &k, &v));
 
-  const std::string hdrs = "HTTP/1.1 302 Found\r\nLocation: x\r\n\r\nHTTP/1.0 200 OK\r\nicy-metaint: 4\r\n\r\n";
-  std::string title;
+  CHECK(parse_icy_line("ICY-META: StreamTitle='Leading Britain's Conversation';StreamUrl='';", &k, &v));
+  CHECK_EQ(v, std::string("Leading Britain's Conversation"));
+
+  CHECK_EQ(icy_field("StreamTitle='A - B';StreamUrl='http://img.example/c/1.jpg';", "StreamUrl"),
+           std::string("http://img.example/c/1.jpg"));
+  CHECK_EQ(icy_field("StreamTitle='A - B';", "StreamUrl"), std::string());
+
+  const std::string hdrs = "HTTP/1.1 302 Found\r\nicy-metaint: 9\r\nLocation: x\r\n\r\n"
+                           "HTTP/1.0 200 OK\r\nicy-metaint: 4\r\nicy-description: Eclectic\r\n\r\n";
+  CHECK_EQ(http_header(hdrs, "icy-metaint"), std::string("4"));  // the last response's
+  CHECK_EQ(http_header(hdrs, "icy-description"), std::string("Eclectic"));
+  CHECK_EQ(http_header(hdrs, "icy-name"), std::string());
+  std::string meta;
   size_t need = 0;
-  CHECK(!icy_title_from(hdrs, "abc", &title, &need));
+  CHECK(!icy_meta_from(hdrs, "abc", &meta, &need));
   CHECK_EQ(need, size_t(5));
   std::string body = "abcd";
-  body.push_back(2);
-  body += "StreamTitle='T1';";
-  body.resize(4 + 1 + 32, '\0');
-  CHECK(icy_title_from(hdrs, body, &title, &need));
-  CHECK_EQ(title, std::string("T1"));
-  CHECK(!icy_title_from("HTTP/1.1 200 OK\r\n\r\n", body, &title, &need));  // no ICY metadata
+  body.push_back(3);
+  body += "StreamTitle='T1';StreamUrl='http://x/a.png';";
+  body.resize(4 + 1 + 48, '\0');
+  CHECK(icy_meta_from(hdrs, body, &meta, &need));
+  CHECK_EQ(icy_field(meta, "StreamTitle"), std::string("T1"));
+  CHECK_EQ(meta.find('\0'), std::string::npos);
+  CHECK(!icy_meta_from("HTTP/1.1 200 OK\r\n\r\n", body, &meta, &need));  // no ICY metadata
   CHECK_EQ(need, size_t(0));
+
+  CHECK(url_is_image("http://img.radioparadise.com/covers/l/7152.jpg"));
+  CHECK(url_is_image("https://somafm.com/logos/512/groovesalad512.JPG?v=2"));
+  CHECK(!url_is_image("https://listenapi.planetradio.co.uk/api9.2/eventdata/420431971"));
+  CHECK(!url_is_image("file:///etc/a.png"));
+  CHECK_EQ(image_url_in_json(R"({"eventId": 1, "eventImageUrlSmall": "https://m/t/160x160/1.jpg",
+    "eventImageUrl": "https://m/t/1.jpg", "eventSongTitle": "x"})"), std::string("https://m/t/1.jpg"));
+  CHECK_EQ(image_url_in_json(R"({"now": [{"image_thumb": "http://a/1.png"}]})"), std::string("http://a/1.png"));
+  CHECK_EQ(image_url_in_json(R"({"image": "/relative.png"})"), std::string());
+  CHECK_EQ(image_url_in_json("<html>"), std::string());
 }
 
 void test_specs() {

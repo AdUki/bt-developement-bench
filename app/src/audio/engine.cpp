@@ -587,15 +587,18 @@ bool read_some(int fd, std::string* out, size_t want, const std::atomic<bool>& s
   return true;
 }
 
-// The current StreamTitle of an ICY stream, read on a connection of its own: for a stream ffmpeg
-// decodes, which does not report title changes. Reads one metadata block's worth (tens of KB) and
-// hangs up. "" when the server sends no ICY metadata.
-std::string fetch_icy_title(const std::string& curl, const std::string& url, const std::atomic<bool>& stop) {
+// The current metadata block of an ICY stream (StreamTitle, StreamUrl), and the response's headers
+// (icy-description), read on a connection of its own: for a stream ffmpeg decodes, which does not
+// report title changes. Reads one metadata block's worth (tens of KB) and hangs up. False when the
+// server sends no ICY metadata.
+bool fetch_icy(const std::string& curl, const std::string& url, const std::atomic<bool>& stop, std::string* meta,
+               std::string* headers) {
   Spawned p;
   std::string err;
   if (!spawn({curl, "-sSL", "-A", "btbenchd/1.0", "--max-time", "10", "-H", "Icy-MetaData: 1", "-D", "/dev/stderr", url}, &p, &err))
-    return {};
-  std::string headers, body, title;
+    return false;
+  std::string body;
+  bool got = false;
   size_t need = 1;
   const int64_t until = mono_ms() + 10000;
   bool out_open = true, err_open = true;
@@ -610,17 +613,26 @@ std::string fetch_icy_title(const std::string& curl, const std::string& url, con
         (i == 0 ? out_open : err_open) = false;
         continue;
       }
-      (i == 0 ? body : headers).append(buf, static_cast<size_t>(n));
+      (i == 0 ? body : *headers).append(buf, static_cast<size_t>(n));
     }
     if (body.size() >= need) {
-      if (icy_title_from(headers, body, &title, &need) || need == 0) break;
+      if ((got = icy_meta_from(*headers, body, meta, &need)) || need == 0) break;
     }
   }
   close(p.out_fd);
   close(p.err_fd);
   kill_group(p.pid, 200);
   waitpid(p.pid, nullptr, 0);
-  return title;
+  return got;
+}
+
+// The cover a station's StreamUrl leads to (pcm.h image_url_in_json): the URL itself, or the image
+// its now-playing JSON names. "" for none.
+std::string resolve_art(const std::string& curl, const std::string& stream_url) {
+  if (stream_url.empty() || url_is_image(stream_url)) return stream_url;
+  if (!url_ok(stream_url)) return {};
+  const ExecResult r = run_cmd({curl, "-sSL", "-A", "btbenchd/1.0", "--max-time", "5", "--max-filesize", "65536", stream_url}, 7000, 65536);
+  return r.ok() ? image_url_in_json(r.out) : std::string();
 }
 
 }  // namespace
@@ -643,6 +655,8 @@ struct AudioEngine::Stream {
   std::string error;
   std::string resolved_url;  // a playlist's stream
   std::string meta_name, meta_title;
+  std::string meta_art, meta_description;  // a station's cover (or logo) and what it says about itself
+  std::string art_src;                     // its StreamUrl, resolved into meta_art by the title poller
   int64_t started_ms = 0, ended_ms = 0;
   uint64_t frames = 0;
   bool params_dirty = false;
@@ -675,7 +689,8 @@ struct AudioEngine::Stream {
                   {"track_seconds", std::round(static_cast<double>(track_frames) / spec.rate * 10) / 10},
                   {"paused", paused},
                   {"level", lv},
-                  {"meta", json{{"name", meta_name}, {"title", meta_title}, {"url", resolved_url}}}});
+                  {"meta", json{{"name", meta_name}, {"title", meta_title}, {"url", resolved_url}, {"art", meta_art},
+                                {"description", meta_description}}}});
     return j;
   }
 
@@ -738,6 +753,8 @@ struct AudioEngine::Stream {
     } else {
       meta_title = v;
       decoder_title_ms.store(mono_ms());
+      // mpg123 prints the whole block: the cover's URL with the title.
+      if (line.find("StreamUrl='") != std::string::npos) art_src = icy_field(line, "StreamUrl");
     }
   }
 
@@ -813,24 +830,42 @@ void AudioEngine::Stream::run() {
       }
       ok = decoder_argv(sp.source, url, rate, ch, *tools, &argv, &err);
       // ffmpeg does not report title changes, and mpg123 may not (its https helper): ask the
-      // server every 15 s, unless the decoder has reported a title within the last 30 s. A
-      // playlist's tracks are files with their titles known: no polling — nor for one such track
-      // (a length says it is a file, not a station).
+      // server every 15 s, unless the decoder has reported a title within the last 30 s. The first
+      // time regardless: the station's description is in the headers only. A playlist's tracks
+      // are files with their titles known: no polling — nor for one such track (a length says it
+      // is a file, not a station). The same thread looks up the cover a new StreamUrl leads to.
       const bool file = sp.source.playlist.size() > 1 ||
                         (sp.source.playlist.size() == 1 && sp.source.playlist.front().duration_ms);
       if (ok && !tools->curl.empty() && !file && lower(url).find(".m3u8") == std::string::npos) {
         titles = std::thread([this, url] {
           // Track titles can wait; the pump is what this thread was forked from.
           set_thread_nice(kBackgroundNice);
+          std::string art_for;
+          bool first = true;
           for (int64_t next = mono_ms() + 2000; !stop.load(); std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs))) {
+            std::string want;
+            {
+              std::lock_guard<std::mutex> lk(m);
+              want = art_src;
+            }
+            if (want != art_for) {
+              art_for = want;
+              const std::string art = resolve_art(tools->curl, want);
+              std::lock_guard<std::mutex> lk(m);
+              if (art_src == want) meta_art = art;
+            }
             if (mono_ms() < next) continue;
             next = mono_ms() + 15000;
-            if (mono_ms() - decoder_title_ms.load() < 30000) continue;
-            const std::string t = fetch_icy_title(tools->curl, url, stop);
-            if (!t.empty()) {
-              std::lock_guard<std::mutex> lk(m);
-              meta_title = t;
-            }
+            if (!first && mono_ms() - decoder_title_ms.load() < 30000) continue;
+            first = false;
+            std::string meta, headers;
+            if (!fetch_icy(tools->curl, url, stop, &meta, &headers)) continue;
+            std::lock_guard<std::mutex> lk(m);
+            const std::string t = icy_field(meta, "StreamTitle");
+            if (!t.empty()) meta_title = t;
+            if (meta.find("StreamUrl='") != std::string::npos) art_src = icy_field(meta, "StreamUrl");
+            const std::string d = http_header(headers, "icy-description");
+            if (!d.empty() && lower(d) != "unspecified description") meta_description = d;
           }
         });
       }
