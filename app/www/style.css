@@ -325,6 +325,10 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 .rw-body .acts .spacer { flex: 1; }
 .tag { font-size: 0.75rem; color: var(--muted); background: var(--well); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 0.35rem; white-space: nowrap; }
 .tag.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, transparent); background: color-mix(in srgb, var(--good) 8%, transparent); }
+/* A profile that streams (devices.js profileTags): a dot that breathes before its name. */
+.tag.live::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 0.3em; vertical-align: 0.1em; animation: tag-live 1.6s ease-in-out infinite; }
+@keyframes tag-live { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .tag.live::before { animation: none; } }
 .tag.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 .tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .chev { width: 7px; height: 7px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform 0.12s; margin: 0 0.2rem; }

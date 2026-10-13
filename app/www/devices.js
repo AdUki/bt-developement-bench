@@ -199,17 +199,20 @@ function deviceProfiles(d) {
     ps.push({name: PROFILE_KIND[act.kind] || act.kind, detail: [act.codec, 'PipeWire: ' + act.name].filter(Boolean).join(' · '), state: 'connected'});
   return ps;
 }
-// In the row: each profile once (a duplex link has two A2DP transports), lit while it streams.
+// In the row: each profile once (a duplex link has two A2DP transports). Every one shown is
+// connected, and looks it, as the bearer beside it does; one that streams also has a dot. (Lit
+// only while streaming, an idle A2DP and AVRCP, which never streams, read as not connected.)
 function profileTags(d) {
   if (!d.connected) return '';
   const by = new Map();
   deviceProfiles(d).filter(p => p.name !== 'Battery').forEach(p => {
-    const x = by.get(p.name) || {on: false, details: []};
-    x.on = x.on || p.state === 'active';
+    const x = by.get(p.name) || {live: false, details: []};
+    x.live = x.live || p.state === 'active';
     if (p.detail) x.details.push(p.detail);
     by.set(p.name, x);
   });
-  return [...by].map(([name, x]) => `<span class="tag${x.on ? ' good' : ''}" title="${esc(x.details.join('; '))}">${esc(name)}</span>`).join('');
+  return [...by].map(([name, x]) => `<span class="tag good${x.live ? ' live' : ''}" title="${esc(
+    [x.live ? 'connected, streaming' : 'connected'].concat(x.details).join('; '))}">${esc(name)}</span>`).join('');
 }
 // A profile's UUID (busy_on, error_on: a bearer is "le" or "bredr").
 const isUuid = s => !!s && s.length > 5;
