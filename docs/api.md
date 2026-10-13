@@ -736,6 +736,19 @@ a main.conf btbenchd writes and passes with `--configfile` (both in `BLUETOOTHD_
 `60-btbench-profiles.conf`, obexd's `-P` (OBEX servers), and the HID remote. On a PC (`--pc`) the
 files are written into the data directory and nothing is restarted (`pending: true`).
 
+What there is to set follows the installed stack: the built-in tables give labels and help, and
+are narrowed and extended by what the machine says about itself, read on every `GET`:
+
+| source | gives |
+|---|---|
+| the image's `/etc/bluetooth/main.conf` | every key BlueZ documents there: those not in the table as `type: "text"`, `more: true` (help: BlueZ's comment); `default` (the commented-out example) and `image` (a live line) for all; the UUIDs `KernelExperimental` takes, with their names |
+| the kernel (mgmt: Read Index List, Controller Information, Experimental Features) | `controllers` (index, address, supported/current settings, experimental features), `kernel_experimental` (the global ones); each `General.KernelExperimental` option's `note` (where it is offered, where on); a feature the kernel offers that bluetoothd cannot set listed `disabled`; a LE Audio profile's `note` when no adapter reports what it `needs` (`cis-central`, `cis-peripheral`, `iso-broadcaster`, `sync-receiver`) |
+| `/usr/share/bluez5/builtin-plugins` (the image's BlueZ build) and `/usr/lib/bluetooth/plugins` | `plugins`: only those this bluetoothd has, unknown ones added; a profile whose plugin is missing `available: false` |
+| PipeWire's `spa-0.2/bluez5/libspa-codec-bluez5-*.so` | a codec option without its plugin `missing: true`; a setting for such a codec `available: false`; a plugin the table does not know in the setting's `note` |
+| WirePlumber's `wireplumber.conf` (`wireplumber.settings.schema`) and the image's fragments | every `bluetooth.*` setting as `Settings.<name>` with its `default`; `image`: what the image's fragments set (`monitor.bluez.properties`, `wireplumber.settings`) |
+
+`sources` says which were read. A source that cannot be read leaves its table as built.
+
 `GET /api/setup`:
 
 ```json
@@ -744,7 +757,11 @@ files are written into the data directory and nothing is restarted (`pending: tr
  "plugins": [{"name": "policy", "label": "Policy", "help": "...", "on": true}, ...],
  "settings": [{"key": "LE.MinConnectionInterval", "label": "Connection interval, min", "help": "...",
                "type": "number", "file": "main.conf", "min": 7.5, "max": 4000, "unit": "ms", "step": 1.25,
-               "value": null}, ...],
+               "default": null, "value": null}, ...],
+ "controllers": [{"index": 0, "address": "44:A3:BB:36:5E:2E", "supported": ["br/edr", "le", "cis-central", ...],
+                  "current": [...], "experimental": [{"uuid": "6fbaf188-...", "flags": 1}]}],
+ "kernel_experimental": [{"uuid": "6fbaf188-05e0-496a-9885-d6ddfdb4e03e", "flags": 1}],
+ "sources": {"controllers": "mgmt", "bluez_plugins": "...", "codecs": "...", "wireplumber_schema": "..."},
  "roles": ["a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "bap_bcast_sink", "bap_bcast_source",
            "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"],
  "apply": true, "files": {"main_conf": null, "bluetoothd_env": "...", "wireplumber": "..."}}
@@ -759,7 +776,8 @@ BlueZ's HFP and the remote, as the image has them.
 Settings (`value` null: BlueZ's or the image's default): `General.ControllerMode`
 `dual|bredr|le`, `General.SecureConnections` `on|off|only`, `General.Privacy`,
 `General.JustWorksRepairing`, `General.FastConnectable`, `General.AlwaysPairable`,
-`General.NameResolving`, `General.Experimental`, `General.KernelExperimental`, `BR.PageTimeout`
+`General.NameResolving`, `General.Experimental`, `General.KernelExperimental` (a list of the
+kernel features' UUIDs; empty writes `false`), `BR.PageTimeout`
 and `BR.LinkSupervisionTimeout` (ms), `LE.MinConnectionInterval` / `LE.MaxConnectionInterval`
 (ms, 7.5..4000), `LE.ConnectionLatency`, `LE.ConnectionSupervisionTimeout` (ms),
 `LE.Min/MaxAdvertisementInterval` (ms), `GATT.Cache`, `GATT.KeySize`, `GATT.ExchangeMTU`,
@@ -767,7 +785,8 @@ and `BR.LinkSupervisionTimeout` (ms), `LE.MinConnectionInterval` / `LE.MaxConnec
 `Policy.ResumeDelay`; and WirePlumber's: `Monitor.bluez5.codecs` (a list), `Monitor.bluez5.enable-sbc-xq`,
 `Monitor.bluez5.enable-msbc`, `Monitor.bluez5.enable-hw-volume`, `Monitor.bluez5.hfphsp-backend`,
 `Monitor.bluez5.default.rate`, `Device.bluez5.a2dp.ldac.quality`, `Device.bluez5.a2dp.aac.bitratemode`,
-`Settings.bluetooth.autoswitch-to-headset-profile`, `Settings.bluetooth.use-persistent-storage`.
+`Settings.bluetooth.autoswitch-to-headset-profile`, `Settings.bluetooth.use-persistent-storage`; and
+those the sources above add (main.conf's other keys, WirePlumber's other `bluetooth.*` settings).
 Times are given in ms and written in BlueZ's units (1.25 ms, 10 ms, 0.625 ms slots).
 
 `PUT /api/setup` `{"profiles": {"a2dp_source": false}, "plugins": {"policy": false},

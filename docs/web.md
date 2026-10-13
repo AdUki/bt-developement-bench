@@ -255,11 +255,18 @@ the HID remote), Network (PAN), Files (the OBEX servers) and Device info. *Bluet
 main.conf — the radio (classic and LE, classic only, LE only), Secure Connections, privacy,
 re-pairing, fast connectable, the classic page and supervision timeouts, the LE connection and
 advertising intervals, latency and supervision timeout, the GATT cache, key size, MTU and EATT
-channels, and the policy plugin's reconnects — each with *Default* to leave the image's value.
+channels, and the policy plugin's reconnects — each with *Default* to leave the image's value (and
+what that value is, when main.conf says). Above them the adapters, with what the kernel says each
+can do; the kernel's experimental features are a list of those this BlueZ can set, each with the
+adapters the kernel offers it on. Every other key of main.conf is folded under its section with
+BlueZ's own comment as help.
 *Audio settings*: WirePlumber's Bluetooth settings — the codecs offered, SBC-XQ, mSBC, hardware volume,
 the HFP backend, the default rate, LDAC quality, AAC's bitrate mode, switching to the headset
-profile when recording, remembering profiles. *Plugins*: every BlueZ plugin on its own (policy,
-autopair, the LE Audio services, …). Changes collect until *Apply*: the bar says how many there
+profile when recording, remembering profiles, and any other Bluetooth setting WirePlumber's schema
+has. Codecs and settings for codecs whose PipeWire plugin is not installed are left out. These
+lists follow the installed kernel, BlueZ, PipeWire and WirePlumber (docs/api.md, Setup).
+*Plugins*: every plugin this bluetoothd was built with, on its own (policy, autopair, the LE Audio
+services, …). Changes collect until *Apply*: the bar says how many there
 are and what applying restarts (bluetoothd, WirePlumber, obexd), since a restart drops every
 connection.
 

@@ -805,9 +805,14 @@ label.set-row { cursor: pointer; }
 .set-t .hint { margin: 0; }
 .set-row select { max-width: 15rem; }
 .set-row .num { display: inline-flex; align-items: center; gap: 0.35rem; }
-.set-row .num input { width: 6.5rem; }
+.set-row .num input { width: 8rem; }
 .codec-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.25rem 0.8rem; }
 .codec-pick .small-btn { grid-column: 1 / -1; justify-self: start; margin-top: 0.4rem; }
+.codec-pick.wide { grid-template-columns: minmax(0, 1fr); }
+.codec-pick label.check:has(input:disabled) { opacity: 0.55; }
+.set-t .hint.pre { white-space: pre-line; }
+.set-row input.set-text { width: 15rem; }
+details.more-fields > .set-row:first-of-type { border-top: 0; }
 .apply-bar {
   position: sticky; bottom: 1rem; z-index: 12; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 0.6rem 0.8rem;
@@ -818,7 +823,7 @@ label.set-row { cursor: pointer; }
   .apply-bar { bottom: 4.8rem; }
   /* A setting's control goes under its text: side by side, the text was squeezed to a word a line. */
   div.set-row { flex-direction: column; align-items: stretch; gap: 0.4rem; }
-  div.set-row select, div.set-row .num, div.set-row details.more { max-width: none; width: 100%; }
+  div.set-row select, div.set-row .num, div.set-row details.more, div.set-row input.set-text { max-width: none; width: 100%; }
   div.set-row .num input { flex: 1; width: auto; }
   label.set-row { gap: 0.8rem; }
 }

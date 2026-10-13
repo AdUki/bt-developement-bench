@@ -116,12 +116,14 @@ add_library(btbench_core STATIC
   src/obex/obex.cpp
   src/journal.cpp
   src/logview.cpp
+  src/mgmt.cpp
   src/scripts.cpp
   src/setup.cpp
   src/system.cpp
   src/util/exec.cpp
   src/util/log.cpp
   src/util/prio.cpp
+  src/util/spa_json.cpp
   src/util/strings.cpp
   src/util/sysinfo.cpp
   src/uuids.cpp

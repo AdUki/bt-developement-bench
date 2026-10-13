@@ -105,7 +105,8 @@ bbopts: ## Re-read the configure options of bluez5, pipewire, wireplumber from b
 # CONFIGURE_FLAGS (--host, --with-libtool-sysroot); the recipe's options come from .bbopts;
 # --enable-debug on top. configure runs again when .bbopts or configure is newer than the last
 # run. The uninstalled tools the image packages (btgatt-client, the testers, ...) are copied
-# into the stage's /usr/bin, as the recipe does. bear records the compile commands; --append
+# into the stage's /usr/bin, and the list of built-in plugins (Setup's) into /usr/share/bluez5, as
+# the recipe does. bear records the compile commands; --append
 # keeps the files an incremental build did not touch. BlueZ's own make must not inherit this
 # make's MAKEFLAGS: they carry the command line's variables (TARGET=..., BOARD=...), which would
 # override BlueZ's Makefile variables of the same name.
@@ -139,6 +140,9 @@ bluez: check-sdk $(BLUEZ_B)/.bbopts ## Build src/bluez with the SDK and the imag
 	  if [ -f "$$t" ]; then install -m 0755 "$$t" "$$stage/usr/bin/"; \
 	  else echo "warning: $$t (packaged by the recipe) was not built"; fi; \
 	done; \
+	install -d "$$stage/usr/share/bluez5"; \
+	grep -o '__bluetooth_builtin_[a-z0-9_]*' src/builtin.h | sed 's/^__bluetooth_builtin_//' | sort -u \
+	  > "$$stage/usr/share/bluez5/builtin-plugins"; \
 	[ ! -f compile_commands.json ] || ln -sfn "$$b/compile_commands.json" "$$src/compile_commands.json"; \
 	stray=$$(find "$$stage" -path '*sysroots*' -print -quit); \
 	[ -z "$$stray" ] || echo -e "$(BOLD)warning:$(OFF) an SDK path leaked into the install: $$stray"; \

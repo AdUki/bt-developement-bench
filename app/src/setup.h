@@ -14,6 +14,12 @@
 //     btbenchd writes (60-btbench-profiles.conf), PipeWire mode only;
 //   - OBEX server profiles: obexd's --noplugin, when btbenchd starts it;
 //   - the HID remote: btbenchd's own (hid_device.h).
+// What there is to set follows the installed stack (SetupSources): the built-in tables give the
+// labels and help, and are narrowed and extended by what this machine says about itself — every
+// key of the image's main.conf (with BlueZ's default and the image's value), the experimental
+// features the kernel offers on each adapter, bluetoothd's built-in plugins, the codec plugins
+// PipeWire has, and WirePlumber's own settings schema. A source that cannot be read leaves its
+// table as built.
 // A change is applied by restarting what reads it (bluetooth, wireplumber, obexd) — on the board
 // only: on a PC the files go to the data directory and nothing of the desktop's is touched.
 
@@ -27,12 +33,27 @@
 
 namespace btb {
 
+// Where the schema's installed-stack parts are read; empty (or missing) leaves that table as built.
+struct SetupSources {
+  std::string bluez_plugin_list;   // bluetoothd's built-in plugins, one per line (the image's build writes it)
+  std::string bluez_plugin_dir;    // its external plugins (*.so)
+  std::string spa_bluez5_dir;      // PipeWire's Bluetooth codec plugins (libspa-codec-bluez5-*.so)
+  std::string wireplumber_conf;    // WirePlumber's own wireplumber.conf: wireplumber.settings.schema
+  std::vector<std::string> wireplumber_fragment_dirs;  // the image's fragments: what it sets
+  std::string wireplumber_own;     // btbenchd's own fragment, not the image's (Setup sets it)
+  // The adapters and the kernel's experimental features (mgmt_read_controllers).
+  std::function<bool(nlohmann::json* out, std::string* err)> controllers;
+};
+// This machine's: the board's paths, or a PC's (PipeWire's plugin directory looked for).
+SetupSources setup_sources_here();
+
 struct SetupOptions {
   std::string data_dir = "/data/btbench";
   std::string base_main_conf = "/etc/bluetooth/main.conf";
   // On the board /etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf links to it.
   std::string wireplumber_conf = "/data/btbench/wireplumber-profiles.conf";
   bool apply = true;  // restart services (false on a PC)
+  SetupSources sources;  // base_main_conf is read too: its keys, comments and values
 };
 
 // What is switched, as kept in /data/btbench/setup.json.
@@ -45,15 +66,18 @@ struct SetupState {
   std::map<std::string, nlohmann::json> settings;  // "LE.MinConnectionInterval" → 7.5 (in the API's unit)
 };
 
-// The tables the API and the console show.
-nlohmann::json setup_schema();
+// What the API and the console show: {settings, plugins, profiles, roles, controllers, sources}.
+// The built-in tables alone with no sources and no main.conf; `base_main_conf` is the image's
+// main.conf (its text), read for its keys.
+nlohmann::json setup_schema(const SetupSources& src = {}, const std::string& base_main_conf = "");
 // A settings change checked against the schema: a value in range (ms where the API says ms),
 // or null to go back to BlueZ's default. False with a reason.
-bool setup_setting_ok(const std::string& key, const nlohmann::json& v, std::string* err);
+bool setup_setting_ok(const nlohmann::json& schema, const std::string& key, const nlohmann::json& v, std::string* err);
 // The image's main.conf with `settings` set ("Section.Key" → the API value, turned into BlueZ's
-// units): a key that is there (or commented out) is replaced in place, a missing one added to its
-// section, a missing section added at the end.
-std::string main_conf_merge(const std::string& base, const std::map<std::string, nlohmann::json>& settings);
+// units as the schema says): a key that is there (or commented out) is replaced in place, a
+// missing one added to its section, a missing section added at the end.
+std::string main_conf_merge(const nlohmann::json& schema, const std::string& base,
+                            const std::map<std::string, nlohmann::json>& settings);
 // BLUETOOTHD_NOPLUGIN's value: "--noplugin=a,b --configfile=<path>" (either part may be absent).
 std::string bluetoothd_setup_args(const std::set<std::string>& plugins_off, const std::string& config_file);
 // The WirePlumber fragment: bluez5.roles set to the roles on (in the table's order), and the WirePlumber
@@ -81,8 +105,9 @@ class Setup {
 
  private:
   bool load();
+  nlohmann::json schema() const;
   bool save(std::string* err) const;
-  bool write_files(bool* bt_changed, bool* wp_changed, std::string* err);
+  bool write_files(const nlohmann::json& sc, bool* bt_changed, bool* wp_changed, std::string* err);
   nlohmann::json state_locked() const;
 
   const SetupOptions opt_;

@@ -8,7 +8,9 @@
 #include <sstream>
 
 #include "check.h"
+#include "mgmt.h"
 #include "setup.h"
+#include "util/spa_json.h"
 
 using namespace btb;
 using json = nlohmann::json;
@@ -35,7 +37,7 @@ void test_merge() {
       "MinConnectionInterval = 24\n"
       "[Policy]\n"
       "#AutoEnable=true\n";
-  const std::string out = main_conf_merge(base, {{"General.ControllerMode", "le"},
+  const std::string out = main_conf_merge(setup_schema(), base, {{"General.ControllerMode", "le"},
                                                 {"LE.MinConnectionInterval", 7.5},
                                                 {"LE.ConnectionSupervisionTimeout", 420},
                                                 {"Policy.AutoEnable", false},
@@ -84,26 +86,205 @@ void test_args_and_wireplumber() {
 
 void test_validation() {
   std::string err;
-  CHECK(setup_setting_ok("General.ControllerMode", "bredr", &err));
-  CHECK(!setup_setting_ok("General.ControllerMode", "wifi", &err));
-  CHECK(setup_setting_ok("LE.MinConnectionInterval", 7.5, &err));
-  CHECK(!setup_setting_ok("LE.MinConnectionInterval", 5, &err));
-  CHECK(!setup_setting_ok("LE.MinConnectionInterval", "7.5", &err));
-  CHECK(setup_setting_ok("GATT.Cache", nullptr, &err));  // back to BlueZ's default
-  CHECK(!setup_setting_ok("General.Nonsense", true, &err));
-  CHECK(setup_setting_ok("Monitor.bluez5.codecs", json::array({"sbc", "aac"}), &err));
-  CHECK(!setup_setting_ok("Monitor.bluez5.codecs", json::array({"mp3"}), &err));
-  CHECK(!setup_setting_ok("General.FastConnectable", 1, &err));
-  const json schema = setup_schema();
-  CHECK(schema["profiles"].size() > 10);
-  CHECK(schema["plugins"].size() > 20);
+  const json sc = setup_schema();
+  CHECK(setup_setting_ok(sc, "General.ControllerMode", "bredr", &err));
+  CHECK(!setup_setting_ok(sc, "General.ControllerMode", "wifi", &err));
+  CHECK(setup_setting_ok(sc, "LE.MinConnectionInterval", 7.5, &err));
+  CHECK(!setup_setting_ok(sc, "LE.MinConnectionInterval", 5, &err));
+  CHECK(!setup_setting_ok(sc, "LE.MinConnectionInterval", "7.5", &err));
+  CHECK(setup_setting_ok(sc, "GATT.Cache", nullptr, &err));  // back to BlueZ's default
+  CHECK(!setup_setting_ok(sc, "General.Nonsense", true, &err));
+  CHECK(setup_setting_ok(sc, "Monitor.bluez5.codecs", json::array({"sbc", "aac"}), &err));
+  CHECK(!setup_setting_ok(sc, "Monitor.bluez5.codecs", json::array({"mp3"}), &err));
+  CHECK(!setup_setting_ok(sc, "General.FastConnectable", 1, &err));
+  CHECK(sc["profiles"].size() > 10);
+  CHECK(sc["plugins"].size() > 20);
+}
+
+void test_spa_json() {
+  const json j = spa_json_parse(
+      "# a comment\n"
+      "a.b = { x = 1, y: \"two # not a comment\" z = [ sbc \"ldac\" 3.5 ] }\n"
+      "flag = true\n"
+      "\"quoted key\" = null\n");
+  CHECK(j.is_object());
+  CHECK_EQ(j["a.b"]["x"].get<int>(), 1);
+  CHECK_EQ(j["a.b"]["y"].get<std::string>(), std::string("two # not a comment"));
+  CHECK_EQ(j["a.b"]["z"].dump(), std::string(R"(["sbc","ldac",3.5])"));
+  CHECK_EQ(j["flag"].get<bool>(), true);
+  CHECK(j["quoted key"].is_null());
+  CHECK(spa_json_parse("a = { b = 1").is_discarded());
+  const uint8_t iso[16] = {0x3e, 0xe0, 0xb4, 0xfd, 0xdd, 0xd6, 0x85, 0x98, 0x6a, 0x49, 0xe0, 0x05, 0x88, 0xf1, 0xba, 0x6f};
+  CHECK_EQ(mgmt_uuid_str(iso), std::string("6fbaf188-05e0-496a-9885-d6ddfdb4e03e"));
+  CHECK_EQ(mgmt_settings_names((1u << 7) | (1u << 9) | (1u << 18)).size(), 3u);
+  CHECK_EQ(mgmt_settings_names(1u << 19)[0], std::string("cis-peripheral"));
+}
+
+const char* kIso = "6fbaf188-05e0-496a-9885-d6ddfdb4e03e";
+const char* kSimult = "671b10b5-42c0-4696-9227-eb28d1b049d6";
+const char* kBqr = "330859bc-7506-492d-9370-9a6f0614037f";
+const char* kMesh = "2ce463d7-7a03-4d8d-bf05-5f24e8f36e76";
+
+const std::string kMainConf =
+    "[General]\n"
+    "# Default adapter name\n"
+    "#Name = BlueZ\n"
+    "\n"
+    "# Possible values: dual, bredr, le\n"
+    "#ControllerMode = dual\n"
+    "\n"
+    "#JustWorksRepairing = never\n"
+    "JustWorksRepairing = confirm\n"
+    "\n"
+    "# Enables kernel experimental features, alternatively a list of UUIDs\n"
+    "# Possible UUIDS:\n"
+    "# 671b10b5-42c0-4696-9227-eb28d1b049d6 (BlueZ Experimental Simultaneous Central and Peripheral)\n"
+    "# 330859bc-7506-492d-9370-9a6f0614037f (BlueZ Experimental Bluetooth Quality Report)\n"
+    "# 6fbaf188-05e0-496a-9885-d6ddfdb4e03e (BlueZ Experimental ISO socket)\n"
+    "# Defaults to false.\n"
+    "KernelExperimental = 6fbaf188-05e0-496a-9885-d6ddfdb4e03e\n"
+    "\n"
+    "[BR]\n"
+    "# Shared by the keys below.\n"
+    "#PageScanType=\n"
+    "#PageScanInterval=\n"
+    "\n"
+    "[GATT]\n"
+    "#ExchangeMTU = 517\n"
+    "[AVDTP]\n"
+    "# basic or ertm\n"
+    "#SessionMode = basic\n";
+
+const json* setting(const json& sc, const std::string& key) {
+  for (const json& s : sc["settings"])
+    if (s["key"] == key) return &s;
+  return nullptr;
+}
+const json* option(const json& s, const std::string& v) {
+  for (const json& o : s["options"])
+    if (o["value"] == v) return &o;
+  return nullptr;
+}
+
+// What the installed stack says about itself, from fixtures: main.conf's keys, the kernel's
+// experimental features, bluetoothd's plugins, PipeWire's codec plugins, WirePlumber's schema.
+void test_sources() {
+  const fs::path dir = fs::temp_directory_path() / ("btb-sources-" + std::to_string(getpid()));
+  fs::remove_all(dir);
+  fs::create_directories(dir / "spa" );
+  fs::create_directories(dir / "wp.d");
+  for (const char* lib : {"sbc", "aptx", "lc3", "hfp-cvsd", "hfp-msbc", "warp"})
+    std::ofstream(dir / "spa" / ("libspa-codec-bluez5-" + std::string(lib) + ".so"));
+  std::ofstream(dir / "spa" / "libspa-bluez5.so");
+  std::ofstream(dir / "plugins") << "policy\na2dp\navrcp\nbap\nnewthing\n";
+  std::ofstream(dir / "wireplumber.conf") << R"(
+wireplumber.settings.schema = {
+  bluetooth.autoswitch-to-headset-profile = { name = "Auto-switch" description = "d" type = "bool" default = true }
+  bluetooth.profile-preference = { name = "Bluetooth profile preference" description = "quality or latency" type = "string" default = "quality" }
+  bluetooth.level = { name = "Level" description = "" type = "float" default = 0.5 min = 0.0 max = 1.0 }
+  device.restore-routes = { name = "Restore routes" type = "bool" default = true }
+}
+monitor.bluez.properties = { }
+)";
+  std::ofstream(dir / "wp.d" / "50-image.conf") << R"(
+monitor.bluez.properties = { bluez5.codecs = [ sbc aptx lc3 ] bluez5.default.rate = 48000 }
+wireplumber.settings = { bluetooth.autoswitch-to-headset-profile = false }
+)";
+  std::ofstream(dir / "wp.d" / "60-own.conf") << "wireplumber.settings = { bluetooth.autoswitch-to-headset-profile = true }\n";
+  SetupSources src;
+  src.bluez_plugin_list = (dir / "plugins").string();
+  src.spa_bluez5_dir = (dir / "spa").string();
+  src.wireplumber_conf = (dir / "wireplumber.conf").string();
+  src.wireplumber_fragment_dirs = {(dir / "wp.d").string()};
+  src.wireplumber_own = (dir / "wp.d" / "60-own.conf").string();
+  src.controllers = [](json* out, std::string*) {
+    *out = json{{"controllers", json::array({
+                    json{{"index", 0}, {"address", "44:A3:BB:36:5E:2E"}, {"supported", {"br/edr", "le", "cis-central", "cis-peripheral"}},
+                         {"experimental", json::array({json{{"uuid", kSimult}, {"flags", 0}}, json{{"uuid", kIso}, {"flags", 1}},
+                                                       json{{"uuid", kMesh}, {"flags", 0}}})}},
+                    json{{"index", 1}, {"address", "10:2C:6B:A2:0A:0F"}, {"supported", {"br/edr", "le"}},
+                         {"experimental", json::array({json{{"uuid", kIso}, {"flags", 1}}})}}})},
+                {"experimental", json::array({json{{"uuid", kIso}, {"flags", 1}}})}};
+    return true;
+  };
+  const json sc = setup_schema(src, kMainConf);
+  std::string err;
+
+  // main.conf: the curated keys get BlueZ's default and the image's value; the others are text.
+  const json* jw = setting(sc, "General.JustWorksRepairing");
+  CHECK_EQ((*jw)["default"].get<std::string>(), std::string("never"));
+  CHECK_EQ((*jw)["image"].get<std::string>(), std::string("confirm"));
+  CHECK_EQ((*setting(sc, "General.ControllerMode"))["default"].get<std::string>(), std::string("dual"));
+  CHECK_EQ((*setting(sc, "GATT.ExchangeMTU"))["default"].get<double>(), 517.0);
+  const json* name = setting(sc, "General.Name");
+  CHECK(name && (*name)["type"] == "text" && (*name)["more"] == true);
+  CHECK_EQ((*name)["help"].get<std::string>(), std::string("Default adapter name"));
+  CHECK_EQ((*setting(sc, "BR.PageScanInterval"))["help"].get<std::string>(), std::string("Shared by the keys below."));
+  CHECK(setting(sc, "AVDTP.SessionMode"));
+  CHECK(setup_setting_ok(sc, "AVDTP.SessionMode", "ertm", &err));
+  CHECK(!setup_setting_ok(sc, "AVDTP.SessionMode", "a\nb", &err));
+
+  // Kernel experimental features: what bluetoothd takes (main.conf), where the kernel offers them.
+  const json* ke = setting(sc, "General.KernelExperimental");
+  CHECK_EQ((*ke)["type"].get<std::string>(), std::string("list"));
+  CHECK_EQ((*option(*ke, kIso))["label"].get<std::string>(), std::string("ISO socket"));
+  CHECK(has((*option(*ke, kIso))["note"].get<std::string>(), "global, hci0, hci1"));
+  CHECK(has((*option(*ke, kBqr))["note"].get<std::string>(), "not offered"));
+  CHECK_EQ((*option(*ke, kMesh))["disabled"].get<bool>(), true);  // the kernel's, not bluetoothd's
+  CHECK_EQ((*ke)["image"].dump(), json::array({kIso}).dump());
+  CHECK(setup_setting_ok(sc, "General.KernelExperimental", json::array({kIso, kSimult}), &err));
+  CHECK(!setup_setting_ok(sc, "General.KernelExperimental", json::array({kMesh}), &err));
+  const std::string conf = main_conf_merge(sc, kMainConf, {{"General.KernelExperimental", json::array({kSimult, kIso})}});
+  CHECK(has(conf, std::string("KernelExperimental = ") + kSimult + "," + kIso + "\n"));
+  CHECK(has(main_conf_merge(sc, kMainConf, {{"General.KernelExperimental", json::array()}}), "KernelExperimental = false\n"));
+
+  // Plugins: the build's list; a table plugin the build lacks is gone, one the table lacks added.
+  std::set<std::string> plugins;
+  for (const json& p : sc["plugins"]) plugins.insert(p["name"].get<std::string>());
+  CHECK(plugins.count("policy") && plugins.count("newthing") && !plugins.count("hog"));
+  for (const json& p : sc["profiles"]) {
+    if (p["id"] == "hog_host") CHECK_EQ(p["available"].get<bool>(), false);
+    if (p["id"] == "avrcp") CHECK(!p.contains("available"));
+    // LE Audio: hci0 has CIS, nobody has broadcast.
+    if (p["id"] == "bap_source") CHECK(!p.contains("note"));
+    if (p["id"] == "bap_bcast_sink") CHECK(has(p["note"].get<std::string>(), "sync-receiver"));
+  }
+
+  // Codecs: those without their plugin are missing, a plugin the table does not know is told.
+  const json* codecs = setting(sc, "Monitor.bluez5.codecs");
+  CHECK(!option(*codecs, "aptx_hd")->contains("missing"));
+  CHECK_EQ((*option(*codecs, "ldac"))["missing"].get<bool>(), true);
+  CHECK(has((*codecs)["note"].get<std::string>(), "libspa-codec-bluez5-warp.so"));
+  CHECK_EQ((*setting(sc, "Device.bluez5.a2dp.ldac.quality"))["available"].get<bool>(), false);
+  CHECK(!setting(sc, "Monitor.bluez5.enable-msbc")->contains("available"));
+  CHECK(setup_setting_ok(sc, "Monitor.bluez5.codecs", json::array({"ldac"}), &err));  // kept if set before
+  // The image's fragments (not btbenchd's own): its codecs and settings.
+  CHECK_EQ((*codecs)["image"].dump(), std::string(R"(["sbc","aptx","lc3"])"));
+  CHECK_EQ((*setting(sc, "Monitor.bluez5.default.rate"))["image"].get<std::string>(), std::string("48000"));
+
+  // WirePlumber's schema: the Bluetooth ones, curated or new, with their defaults.
+  const json* as = setting(sc, "Settings.bluetooth.autoswitch-to-headset-profile");
+  CHECK_EQ((*as)["default"].get<bool>(), true);
+  CHECK_EQ((*as)["image"].get<bool>(), false);
+  const json* pref = setting(sc, "Settings.bluetooth.profile-preference");
+  CHECK(pref && (*pref)["type"] == "text" && (*pref)["default"] == "quality");
+  CHECK_EQ((*setting(sc, "Settings.bluetooth.level"))["max"].get<double>(), 1.0);
+  CHECK(!setting(sc, "Settings.device.restore-routes"));
+  CHECK(setup_setting_ok(sc, "Settings.bluetooth.profile-preference", "latency", &err));
+  CHECK(has(wireplumber_roles_conf({}, {{"Settings.bluetooth.profile-preference", "latency"}}), "bluetooth.profile-preference = \"latency\""));
+
+  // Without the sources: the tables as built.
+  const json bare = setup_schema();
+  CHECK(bare["controllers"].is_null());
+  CHECK((*setting(bare, "General.KernelExperimental"))["options"].empty());
+  fs::remove_all(dir);
 }
 
 void test_setup() {
   const fs::path dir = fs::temp_directory_path() / ("btb-setup-" + std::to_string(getpid()));
   fs::remove_all(dir);
   fs::create_directories(dir);
-  std::ofstream(dir / "main.conf.base") << "[General]\n#ControllerMode = dual\n";
+  std::ofstream(dir / "main.conf.base") << kMainConf;
   std::ofstream(dir / "bluetoothd.env") << "BLUETOOTHD_ARGS=\"-d\"\n";
   SetupOptions o;
   o.data_dir = dir.string();
@@ -153,6 +334,10 @@ void test_setup() {
   for (const json& p : again.state()["profiles"])
     if (p["id"] == "a2dp_source") CHECK_EQ(p["on"].get<bool>(), false);
   CHECK_EQ(again.obex_noplugin(), std::string("ftp,pcsuite"));
+  // A file from before KernelExperimental was a list: on is every feature bluetoothd takes.
+  std::ofstream(dir / "setup.json") << R"({"settings": {"General.KernelExperimental": true}})";
+  for (const json& st : Setup(o, nullptr, nullptr, nullptr).state()["settings"])
+    if (st["key"] == "General.KernelExperimental") CHECK_EQ(st["value"].size(), 3u);
   // A file from before roles_on: its roles off become the roles on, the new roles stay off.
   std::ofstream(dir / "setup.json") << R"({"plugins_off": ["hfp"], "roles_off": ["hfp_ag"], "obex_off": [], "settings": {}})";
   Setup old(o, nullptr, nullptr, nullptr);
@@ -169,6 +354,8 @@ int main() {
   test_merge();
   test_args_and_wireplumber();
   test_validation();
+  test_spa_json();
+  test_sources();
   test_setup();
   return report("test_setup");
 }

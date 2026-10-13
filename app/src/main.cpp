@@ -231,6 +231,9 @@ int main(int argc, char** argv) {
   // On the board /etc/wireplumber/wireplumber.conf.d/60-btbench-profiles.conf is a link to this
   // (btbench-base): the root filesystem is read-only, the fragment is a setting.
   sopt.wireplumber_conf = data_dir + "/wireplumber-profiles.conf";
+  // What there is to set follows the installed stack: main.conf's keys, the kernel's experimental
+  // features, bluetoothd's plugins, PipeWire's codecs, WirePlumber's schema.
+  sopt.sources = btb::setup_sources_here();
   btb::Setup setup(sopt, [&hid_remote] { return hid_remote.state().value("enabled", false); },
                    [&hid_remote](bool on, std::string* err) {
                      // Already so: nothing to do (registering again would only be refused).

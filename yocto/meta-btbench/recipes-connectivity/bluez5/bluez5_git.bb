@@ -164,6 +164,14 @@ do_install:append() {
         chmod 0644 ${D}${systemd_system_unitdir}/bluetooth.service.d/10-btbench.conf
     fi
 
+    # bluetoothd's built-in plugins, by the names --noplugin takes: btbenchd's Setup lists these
+    # (and only these) to switch, so a plugin added or dropped upstream shows up on its own. The
+    # binary is stripped; the build's generated builtin.h is where the list is.
+    install -d ${D}${datadir}/${BPN}
+    grep -o '__bluetooth_builtin_[a-z0-9_]*' ${B}/src/builtin.h | sed 's/^__bluetooth_builtin_//' | sort -u \
+        > ${D}${datadir}/${BPN}/builtin-plugins
+    [ -s ${D}${datadir}/${BPN}/builtin-plugins ] || bbfatal "no built-in plugins found in ${B}/src/builtin.h"
+
     # Warn when the build has a noinst program the lists above do not package (a new tester after
     # a bump, say): it would be built and then silently left out of the image.
     printf 'include Makefile\nbtbench-print-noinst:\n\t@echo $(noinst_PROGRAMS)\n' > ${B}/btbench-noinst.mk

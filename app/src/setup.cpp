@@ -4,14 +4,21 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <optional>
+#include <regex>
 #include <sstream>
 
+#include "mgmt.h"
 #include "system.h"
 #include "util/exec.h"
 #include "util/log.h"
+#include "util/spa_json.h"
 #include "util/strings.h"
 
 using json = nlohmann::json;
@@ -75,7 +82,7 @@ const std::vector<Setting>& settings_table() {
       {"General.AlwaysPairable", "Always pairable", "Pairable without a timeout, even with no agent asked.", "bool", {}},
       {"General.NameResolving", "Resolve names", "Ask discovered classic devices for their names.", "bool", {}},
       {"General.Experimental", "Experimental D-Bus interfaces", "BlueZ's experimental interfaces (some LE Audio, Bearer).", "bool", {}},
-      {"General.KernelExperimental", "Kernel experimental features", "The kernel's experimental Bluetooth features (ISO sockets, LL privacy, …).", "bool", {}},
+      {"General.KernelExperimental", "Kernel experimental features", "The kernel's experimental Bluetooth features bluetoothd switches on. The image sets ISO sockets: LE Audio needs them. Listed: those this BlueZ can set, and those the kernel offers on each adapter.", "list", {}},
       {"BR.PageTimeout", "Page timeout", "How long a classic connection attempt pages before it gives up.", "number", {}, 1, 40959, "ms", 0.625},
       {"BR.LinkSupervisionTimeout", "Link supervision timeout", "Classic: how long a silent link lives before it is dropped.", "number", {}, 1, 40959, "ms", 0.625},
       {"LE.MinConnectionInterval", "Connection interval, min", "The shortest LE connection interval the board asks for as central.", "number", {}, 7.5, 4000, "ms", 1.25},
@@ -225,39 +232,449 @@ std::string spa_value(const json& v) {
   return "\"" + t + "\"";
 }
 
-const Setting* find_setting(const std::string& key) {
-  for (const Setting& s : settings_table())
-    if (key == s.key) return &s;
+const json* find_setting(const json& schema, const std::string& key) {
+  for (const json& s : schema["settings"])
+    if (s["key"] == key) return &s;
   return nullptr;
 }
 
-bool known_plugin(const std::string& n) {
-  return std::any_of(plugins_table().begin(), plugins_table().end(), [&](const Plugin& p) { return n == p.name; });
+const json* find_option(const json& s, const std::string& v) {
+  if (!s.contains("options")) return nullptr;
+  for (const json& o : s["options"])
+    if (o["value"] == v) return &o;
+  return nullptr;
 }
 
 // An API value as BlueZ writes it.
-std::string conf_value(const Setting& s, const json& v) {
-  if (std::string(s.type) == "bool") return v.get<bool>() ? "true" : "false";
-  if (std::string(s.type) == "enum") return v.get<std::string>();
-  const double raw = std::round(v.get<double>() / s.scale);
+std::string conf_value(const json& s, const json& v) {
+  const std::string type = s["type"];
+  if (type == "bool") return v.get<bool>() ? "true" : "false";
+  if (type == "enum" || type == "text") return v.get<std::string>();
+  if (type == "list") {
+    // KernelExperimental: a list of UUIDs, and none is "false" (an empty value is not).
+    std::string out;
+    for (const json& x : v) out += (out.empty() ? "" : ",") + x.get<std::string>();
+    return out.empty() ? "false" : out;
+  }
+  const double raw = std::round(v.get<double>() / s["step"].get<double>());
   return std::to_string(static_cast<long>(raw));
 }
 
-}  // namespace
+// ---- the installed stack -----------------------------------------------------------------------------
 
-json setup_schema() {
+// The PipeWire codec plugin each codec name comes from: libspa-codec-bluez5-<lib>.so.
+const std::map<std::string, std::string>& codec_libs() {
+  static const std::map<std::string, std::string> t = {
+      {"sbc", "sbc"}, {"sbc_xq", "sbc"}, {"aac", "aac"}, {"aac_eld", "aac"}, {"aptx", "aptx"}, {"aptx_hd", "aptx"},
+      {"aptx_ll", "aptx"}, {"aptx_ll_duplex", "aptx"}, {"ldac", "ldac"}, {"faststream", "faststream"},
+      {"faststream_duplex", "faststream"}, {"lc3plus_hr", "lc3plus"}, {"opus_05", "opus"}, {"opus_05_51", "opus"},
+      {"opus_05_71", "opus"}, {"opus_05_duplex", "opus"}, {"opus_05_pro", "opus"}, {"opus_g", "opus-g"},
+      {"lc3", "lc3"}, {"cvsd", "hfp-cvsd"}, {"msbc", "hfp-msbc"}, {"lc3_swb", "hfp-lc3-swb"},
+      {"lc3_a127", "hfp-lc3-a127"}, {"g722", "g722"}};
+  return t;
+}
+
+// Settings that mean something only with one codec plugin.
+const std::map<std::string, std::string>& setting_codec_lib() {
+  static const std::map<std::string, std::string> t = {
+      {"Monitor.bluez5.enable-sbc-xq", "sbc"}, {"Monitor.bluez5.enable-msbc", "hfp-msbc"},
+      {"Device.bluez5.a2dp.ldac.quality", "ldac"}, {"Device.bluez5.a2dp.aac.bitratemode", "aac"}};
+  return t;
+}
+
+// What a profile needs from an adapter (mgmt's supported settings): told when no adapter has it.
+const std::map<std::string, std::string>& profile_needs() {
+  static const std::map<std::string, std::string> t = {
+      {"bap_sink", "cis-peripheral"}, {"bap_source", "cis-central"},
+      {"bap_bcast_sink", "sync-receiver"}, {"bap_bcast_source", "iso-broadcaster"}};
+  return t;
+}
+
+// Names for kernel experimental features bluetoothd's main.conf does not list (net/bluetooth/mgmt.c).
+const std::map<std::string, std::string>& kernel_exp_names() {
+  static const std::map<std::string, std::string> t = {
+      {"d4992530-b9ec-469f-ab01-6c481c47da1c", "Debug"},
+      {"671b10b5-42c0-4696-9227-eb28d1b049d6", "Simultaneous Central and Peripheral"},
+      {"15c0a148-c273-11ea-b3de-0242ac130004", "LL privacy"},
+      {"330859bc-7506-492d-9370-9a6f0614037f", "Bluetooth Quality Report"},
+      {"a6695ace-ee7f-4fb9-881a-5fac66c629af", "Offload Codecs"},
+      {"6fbaf188-05e0-496a-9885-d6ddfdb4e03e", "ISO socket"},
+      {"2ce463d7-7a03-4d8d-bf05-5f24e8f36e76", "Mesh (for bluetooth-meshd)"}};
+  return t;
+}
+
+// A key of main.conf: its doc comment, the commented-out example (BlueZ's default) and a live
+// value (what the image sets).
+struct ConfKey {
+  std::string section, key, help;
+  std::optional<std::string> def, image;
+};
+
+std::vector<ConfKey> parse_main_conf(const std::string& text) {
+  std::vector<ConfKey> out;
+  std::string sec, block, last_help;
+  bool after_key = false;
+  std::istringstream in(text);
+  for (std::string l; std::getline(in, l);) {
+    const std::string t = trim(l);
+    if (t.empty()) {
+      block.clear();
+      after_key = false;
+      continue;
+    }
+    if (t.front() == '[' && t.back() == ']') {
+      sec = t.substr(1, t.size() - 2);
+      block.clear();
+      after_key = false;
+      continue;
+    }
+    // "#Key = default" (no blank after the #: a doc comment has one) or "Key = value".
+    const bool commented = t[0] == '#';
+    const std::string body = commented ? t.substr(1) : t;
+    const size_t eq = body.find('=');
+    std::string key = eq == std::string::npos ? "" : trim(body.substr(0, eq));
+    const bool is_key = !sec.empty() && !key.empty() && std::isupper(static_cast<unsigned char>(body[0])) &&
+                        std::all_of(key.begin(), key.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)); });
+    if (!is_key) {
+      if (commented) block += (block.empty() ? "" : "\n") + trim(body);
+      after_key = false;
+      continue;
+    }
+    // Keys in a run share the comment above the first.
+    const std::string help = after_key && block.empty() ? last_help : block;
+    auto it = std::find_if(out.begin(), out.end(), [&](const ConfKey& k) { return k.section == sec && k.key == key; });
+    if (it == out.end()) {
+      out.push_back(ConfKey{sec, key, help, {}, {}});
+      it = out.end() - 1;
+    }
+    if (it->help.empty()) it->help = help;
+    const std::string val = trim(body.substr(eq + 1));
+    if (commented && !it->def) it->def = val;
+    if (!commented) it->image = val;
+    last_help = help;
+    block.clear();
+    after_key = true;
+  }
+  return out;
+}
+
+// "6fbaf188-... (BlueZ Experimental ISO socket)" lines of a doc comment: the UUIDs bluetoothd takes.
+std::vector<std::pair<std::string, std::string>> listed_uuids(const std::string& help) {
+  std::vector<std::pair<std::string, std::string>> out;
+  static const std::regex re(R"(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*\(([^)]*)\))");
+  for (std::sregex_iterator it(help.begin(), help.end(), re), end; it != end; ++it) {
+    std::string name = (*it)[2];
+    if (starts_with(name, "BlueZ Experimental ")) name = name.substr(19);
+    out.emplace_back(lower((*it)[1]), name);
+  }
+  return out;
+}
+
+// BlueZ's (or WirePlumber's) text for a setting → the API's value; null when it does not read.
+json api_value(const json& s, const std::string& raw) {
+  const std::string type = s["type"];
+  const std::string v = lower(trim(raw));
+  if (v.empty()) return nullptr;
+  if (type == "bool") {
+    if (v == "true" || v == "yes" || v == "on" || v == "1") return true;
+    if (v == "false" || v == "no" || v == "off" || v == "0") return false;
+    return nullptr;
+  }
+  if (type == "enum") return find_option(s, v) ? json(v) : json(nullptr);
+  if (type == "text") return trim(raw);
+  if (type == "list") {
+    json out = json::array();
+    if (v == "false" || v == "off") return out;
+    for (const json& o : s.value("options", json::array()))
+      if (!o.value("disabled", false) && (v == "true" || v == "on" || v == "*" || v.find(o["value"].get<std::string>()) != std::string::npos))
+        out.push_back(o["value"]);
+    return out;
+  }
+  char* end = nullptr;
+  const double d = std::strtod(v.c_str(), &end);
+  if (end == v.c_str() || *end) return nullptr;
+  return d * s.value("step", 1.0);
+}
+
+// WirePlumber's config fragments merged as WirePlumber merges them: objects key by key, arrays
+// appended, "override.<key>" replacing.
+void wp_merge(json* into, const json& from) {
+  for (const auto& [k, v] : from.items()) {
+    const bool over = starts_with(k, "override.");
+    const std::string key = over ? k.substr(9) : k;
+    json& cur = (*into)[key];
+    if (!over && cur.is_object() && v.is_object()) wp_merge(&cur, v);
+    else if (!over && cur.is_array() && v.is_array()) cur.insert(cur.end(), v.begin(), v.end());
+    else cur = v;
+  }
+}
+
+std::vector<std::string> files_in(const std::string& dir, const std::string& suffix) {
+  std::vector<std::string> out;
+  std::error_code ec;
+  for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+    const std::string n = e.path().filename().string();
+    if (ends_with(n, suffix)) out.push_back(e.path().string());
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+json builtin_settings() {
   json settings = json::array();
   for (const Setting& s : settings_table()) {
     json j{{"key", s.key}, {"label", s.label}, {"help", s.help}, {"type", s.type},
            {"file", for_wireplumber(s.key) ? "wireplumber" : "main.conf"}};
-    if (!s.options.empty()) {
-      json o = json::array();
-      for (const auto& [v, l] : s.options) o.push_back(json{{"value", v}, {"label", l}});
-      j["options"] = o;
-    }
+    json o = json::array();
+    for (const auto& [v, l] : s.options) o.push_back(json{{"value", v}, {"label", l}});
+    if (!s.options.empty() || std::string(s.type) == "list") j["options"] = o;
     if (std::string(s.type) == "number") j.update(json{{"min", s.min}, {"max", s.max}, {"unit", s.unit}, {"step", s.scale}});
     settings.push_back(std::move(j));
   }
+  return settings;
+}
+
+// main.conf: every key the image's file has, curated or not; BlueZ's default and the image's value.
+void add_main_conf(json* schema, const std::string& base) {
+  json& settings = (*schema)["settings"];
+  for (const ConfKey& k : parse_main_conf(base)) {
+    const std::string full = k.section + "." + k.key;
+    json* s = nullptr;
+    for (json& x : settings)
+      if (x["key"] == full) s = &x;
+    if (!s) {
+      settings.push_back(json{{"key", full}, {"label", k.key}, {"help", k.help}, {"type", "text"}, {"file", "main.conf"}, {"more", true}});
+      s = &settings.back();
+    }
+    if (full == "General.KernelExperimental")
+      for (const auto& [uuid, name] : listed_uuids(k.help)) (*s)["options"].push_back(json{{"value", uuid}, {"label", name}});
+    if (k.def) {
+      const json d = api_value(*s, *k.def);
+      if (!d.is_null()) (*s)["default"] = d;
+    }
+    if (k.image) {
+      const json d = api_value(*s, *k.image);
+      if (!d.is_null()) (*s)["image"] = d;
+    }
+  }
+}
+
+// The kernel's experimental features: each option says where the kernel offers it and whether it
+// is on; one the kernel offers that bluetoothd cannot set is listed, not selectable.
+void add_kernel_experimental(json* schema) {
+  json* s = nullptr;
+  for (json& x : (*schema)["settings"])
+    if (x["key"] == "General.KernelExperimental") s = &x;
+  const json& ctl = (*schema)["controllers"];
+  if (!s || !ctl.is_array()) return;
+  std::map<std::string, std::pair<std::vector<std::string>, std::vector<std::string>>> where;  // uuid → (offered, on)
+  auto take = [&](const json& features, const std::string& who) {
+    for (const json& f : features) {
+      auto& w = where[f["uuid"].get<std::string>()];
+      w.first.push_back(who);
+      if (f["flags"].get<uint32_t>() & 1) w.second.push_back(who);
+    }
+  };
+  take((*schema)["kernel_experimental"], "global");
+  for (const json& c : ctl) take(c["experimental"], "hci" + std::to_string(c["index"].get<int>()));
+  auto join = [](const std::vector<std::string>& v) {
+    std::string o;
+    for (const std::string& x : v) o += (o.empty() ? "" : ", ") + x;
+    return o;
+  };
+  json& options = (*s)["options"];
+  for (json& o : options) {
+    const auto w = where.find(o["value"].get<std::string>());
+    if (w == where.end()) {
+      o["note"] = "not offered by this kernel and its adapters";
+      continue;
+    }
+    o["offered"] = w->second.first;
+    o["note"] = "offered: " + join(w->second.first) + (w->second.second.empty() ? "" : " · on: " + join(w->second.second));
+  }
+  for (const auto& [uuid, w] : where) {
+    if (find_option(*s, uuid)) continue;
+    const auto n = kernel_exp_names().find(uuid);
+    options.push_back(json{{"value", uuid}, {"label", n == kernel_exp_names().end() ? uuid : n->second}, {"disabled", true},
+                           {"offered", w.first},
+                           {"note", "offered: " + join(w.first) + (w.second.empty() ? "" : " · on: " + join(w.second)) +
+                                        " · bluetoothd cannot set it"}});
+  }
+}
+
+// WirePlumber: its schema's Bluetooth settings (bluetooth.*), and what the image's fragments set.
+void add_wireplumber(json* schema, const SetupSources& src, const std::string& own_conf) {
+  json& settings = (*schema)["settings"];
+  json wp = json::object();
+  const json doc = src.wireplumber_conf.empty() || access(src.wireplumber_conf.c_str(), R_OK) != 0
+                       ? json()
+                       : spa_json_parse(slurp(src.wireplumber_conf));
+  if (doc.is_object()) {
+    wp_merge(&wp, doc);
+    (*schema)["sources"]["wireplumber_schema"] = src.wireplumber_conf;
+    // Named: items() of a temporary in a range-for would iterate a destroyed object.
+    const json wp_schema = doc.value("wireplumber.settings.schema", json::object());
+    for (const auto& [k, d] : wp_schema.items()) {
+      if (!starts_with(k, "bluetooth.") || !d.is_object()) continue;
+      const std::string full = "Settings." + k, type = d.value("type", "");
+      json* s = nullptr;
+      for (json& x : settings)
+        if (x["key"] == full) s = &x;
+      if (!s) {
+        json n{{"key", full}, {"label", d.value("name", k)}, {"help", d.value("description", "")}, {"file", "wireplumber"}};
+        if (type == "bool") n["type"] = "bool";
+        else if (type == "int" || type == "float")
+          n.update(json{{"type", "number"}, {"min", d.value("min", -1e9)}, {"max", d.value("max", 1e9)}, {"unit", ""},
+                        {"step", type == "int" ? 1.0 : 0.001}});
+        else if (type == "string") n["type"] = "text";
+        else continue;
+        settings.push_back(std::move(n));
+        s = &settings.back();
+      }
+      if (d.contains("default")) (*s)["default"] = d["default"];
+    }
+  }
+  // The image's fragments, but for btbenchd's own (a link to it on the board).
+  std::error_code ec;
+  const auto own = std::filesystem::weakly_canonical(own_conf, ec);
+  for (const std::string& dir : src.wireplumber_fragment_dirs)
+    for (const std::string& f : files_in(dir, ".conf")) {
+      if (std::filesystem::weakly_canonical(f, ec) == own) continue;
+      const json frag = spa_json_parse(slurp(f));
+      if (frag.is_object()) wp_merge(&wp, frag);
+    }
+  const json props = wp.value("monitor.bluez.properties", json::object());
+  const json wps = wp.value("wireplumber.settings", json::object());
+  for (json& s : settings) {
+    const std::string key = s["key"];
+    json v;
+    if (starts_with(key, "Monitor.") && props.contains(key.substr(8))) v = props[key.substr(8)];
+    else if (starts_with(key, "Settings.") && wps.contains(key.substr(9))) v = wps[key.substr(9)];
+    else continue;
+    if (v.is_array()) {
+      json in = json::array();
+      for (const json& x : v)
+        if (x.is_string() && find_option(s, x.get<std::string>()) && std::find(in.begin(), in.end(), x) == in.end()) in.push_back(x);
+      v = in;
+    } else if (!v.is_string()) {
+      v = api_value(s, v.dump());
+    } else if (s["type"] != "text") {
+      v = api_value(s, v.get<std::string>());
+    }
+    if (!v.is_null()) s["image"] = v;
+  }
+}
+
+// PipeWire's codec plugins: a codec whose plugin is not installed is marked missing, a setting
+// for one unavailable.
+void add_codecs(json* schema, const std::string& dir) {
+  const std::string prefix = "libspa-codec-bluez5-";
+  std::set<std::string> libs;
+  for (const std::string& f : files_in(dir, ".so")) {
+    const std::string n = std::filesystem::path(f).filename().string();
+    if (starts_with(n, prefix)) libs.insert(n.substr(prefix.size(), n.size() - prefix.size() - 3));
+  }
+  if (libs.empty()) return;
+  (*schema)["sources"]["codecs"] = dir;
+  // HFP's codecs were part of libspa-bluez5 itself until PipeWire split them out (1.4).
+  const bool hfp_split = std::any_of(libs.begin(), libs.end(), [](const std::string& l) { return starts_with(l, "hfp-"); });
+  auto have = [&](const std::string& lib) { return libs.count(lib) || (starts_with(lib, "hfp-") && !hfp_split); };
+  std::set<std::string> known;
+  for (const auto& [c, lib] : codec_libs()) known.insert(lib);
+  for (json& s : (*schema)["settings"]) {
+    const std::string key = s["key"];
+    if (key == "Monitor.bluez5.codecs") {
+      for (json& o : s["options"]) {
+        const auto lib = codec_libs().find(o["value"].get<std::string>());
+        if (lib != codec_libs().end() && !have(lib->second)) o["missing"] = true;
+      }
+      std::string unknown;
+      for (const std::string& l : libs)
+        if (!known.count(l)) unknown += (unknown.empty() ? "" : ", ") + prefix + l + ".so";
+      if (!unknown.empty()) s["note"] = "PipeWire also has " + unknown + ": codecs this list does not name yet.";
+    }
+    const auto need = setting_codec_lib().find(key);
+    if (need != setting_codec_lib().end() && !have(need->second)) {
+      s["available"] = false;
+      s["note"] = "PipeWire here has no " + prefix + need->second + ".so.";
+    }
+  }
+}
+
+// bluetoothd's plugins: the build's list of built-in ones and the external ones. A plugin of the
+// table this bluetoothd does not have is dropped, one the table does not know is added.
+void add_plugins(json* schema, const SetupSources& src) {
+  std::set<std::string> have;
+  bool read = false;
+  if (!src.bluez_plugin_list.empty() && access(src.bluez_plugin_list.c_str(), R_OK) == 0) {
+    read = true;
+    std::istringstream in(slurp(src.bluez_plugin_list));
+    for (std::string l; std::getline(in, l);)
+      if (!trim(l).empty() && trim(l)[0] != '#') have.insert(trim(l));
+    (*schema)["sources"]["bluez_plugins"] = src.bluez_plugin_list;
+  }
+  if (!src.bluez_plugin_dir.empty())
+    for (const std::string& f : files_in(src.bluez_plugin_dir, ".so")) {
+      read = true;
+      have.insert(std::filesystem::path(f).stem().string());
+    }
+  if (!read) return;
+  json plugins = json::array();
+  for (const json& p : (*schema)["plugins"])
+    if (have.erase(p["name"].get<std::string>())) plugins.push_back(p);
+  for (const std::string& n : have) plugins.push_back(json{{"name", n}, {"label", n}, {"help", ""}});
+  (*schema)["plugins"] = plugins;
+  for (json& p : (*schema)["profiles"])
+    for (const json& x : p["plugins"])
+      if (std::none_of(plugins.begin(), plugins.end(), [&](const json& y) { return y["name"] == x; })) {
+        p["available"] = false;
+        p["note"] = "bluetoothd here has no " + x.get<std::string>() + " plugin.";
+      }
+}
+
+// What a profile needs that no adapter reports.
+void add_adapter_needs(json* schema) {
+  const json& ctl = (*schema)["controllers"];
+  if (!ctl.is_array() || ctl.empty()) return;
+  for (json& p : (*schema)["profiles"]) {
+    const auto need = profile_needs().find(p["id"].get<std::string>());
+    if (need == profile_needs().end()) continue;
+    p["needs"] = need->second;
+    const bool any = std::any_of(ctl.begin(), ctl.end(), [&](const json& c) {
+      const json sup = c.value("supported", json::array());
+      return std::find(sup.begin(), sup.end(), need->second) != sup.end();
+    });
+    if (!any && !p.contains("note")) p["note"] = "No adapter here reports " + need->second + ".";
+  }
+}
+
+}  // namespace
+
+SetupSources setup_sources_here() {
+  SetupSources s;
+  s.bluez_plugin_list = "/usr/share/bluez5/builtin-plugins";
+  s.bluez_plugin_dir = "/usr/lib/bluetooth/plugins";
+  s.wireplumber_conf = "/usr/share/wireplumber/wireplumber.conf";
+  s.wireplumber_fragment_dirs = {"/usr/share/wireplumber/wireplumber.conf.d", "/etc/wireplumber/wireplumber.conf.d"};
+  // PipeWire's plugin directory: SPA_PLUGIN_DIR, the board's, or a PC's multiarch one.
+  std::vector<std::string> dirs;
+  if (const char* e = std::getenv("SPA_PLUGIN_DIR")) dirs.push_back(std::string(e) + "/bluez5");
+  dirs.push_back("/usr/lib/spa-0.2/bluez5");
+  for (const char* lib : {"/usr/lib", "/usr/lib64"}) {
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(lib, ec))
+      if (e.is_directory(ec) && std::filesystem::exists(e.path() / "spa-0.2/bluez5", ec)) dirs.push_back((e.path() / "spa-0.2/bluez5").string());
+  }
+  for (const std::string& d : dirs)
+    if (access(d.c_str(), R_OK) == 0) {
+      s.spa_bluez5_dir = d;
+      break;
+    }
+  s.controllers = [](json* out, std::string* err) { return mgmt_read_controllers(out, err); };
+  return s;
+}
+
+json setup_schema(const SetupSources& src, const std::string& base_main_conf) {
   json plugins = json::array();
   for (const Plugin& p : plugins_table()) plugins.push_back(json{{"name", p.name}, {"label", p.label}, {"help", p.help}});
   json profiles = json::array();
@@ -270,26 +687,48 @@ json setup_schema() {
     profiles.push_back(json{{"id", p.id}, {"label", p.label}, {"group", p.group}, {"help", p.help}, {"layers", layers},
                             {"plugins", p.plugins}, {"roles", p.roles}, {"obex", p.obex}});
   }
-  return json{{"settings", settings}, {"plugins", plugins}, {"profiles", profiles}, {"roles", roles_table()}};
+  json schema{{"settings", builtin_settings()}, {"plugins", plugins}, {"profiles", profiles}, {"roles", roles_table()},
+              {"controllers", nullptr}, {"sources", json::object()}};
+  if (src.controllers) {
+    json c;
+    std::string err;
+    if (src.controllers(&c, &err)) {
+      schema["controllers"] = c["controllers"];
+      schema["kernel_experimental"] = c["experimental"];
+      schema["sources"]["controllers"] = "mgmt";
+    } else {
+      schema["sources"]["controllers_error"] = err;
+    }
+  }
+  if (!base_main_conf.empty()) add_main_conf(&schema, base_main_conf);
+  add_kernel_experimental(&schema);
+  add_wireplumber(&schema, src, src.wireplumber_own);
+  if (!src.spa_bluez5_dir.empty()) add_codecs(&schema, src.spa_bluez5_dir);
+  add_plugins(&schema, src);
+  add_adapter_needs(&schema);
+  return schema;
 }
 
-bool setup_setting_ok(const std::string& key, const json& v, std::string* err) {
-  const Setting* s = find_setting(key);
-  if (!s) {
+bool setup_setting_ok(const json& schema, const std::string& key, const json& v, std::string* err) {
+  const json* sp = find_setting(schema, key);
+  if (!sp) {
     *err = "no setting " + key;
     return false;
   }
+  const json& s = *sp;
   if (v.is_null()) return true;
-  const std::string type = s->type;
+  const std::string type = s["type"];
+  auto option_ok = [&](const json& x) {
+    const json* o = x.is_string() ? find_option(s, x.get<std::string>()) : nullptr;
+    return o && !o->value("disabled", false);
+  };
   if (type == "bool" && !v.is_boolean()) {
     *err = key + " is true or false";
     return false;
   }
-  if (type == "enum") {
-    if (!v.is_string() || std::none_of(s->options.begin(), s->options.end(), [&](const auto& o) { return v.get<std::string>() == o.first; })) {
-      *err = key + " is one of its options";
-      return false;
-    }
+  if (type == "enum" && !option_ok(v)) {
+    *err = key + " is one of its options";
+    return false;
   }
   if (type == "list") {
     if (!v.is_array()) {
@@ -297,21 +736,26 @@ bool setup_setting_ok(const std::string& key, const json& v, std::string* err) {
       return false;
     }
     for (const json& x : v)
-      if (!x.is_string() || std::none_of(s->options.begin(), s->options.end(), [&](const auto& o) { return x.get<std::string>() == o.first; })) {
+      if (!option_ok(x)) {
         *err = key + ": not one of its options";
         return false;
       }
   }
+  if (type == "text" && (!v.is_string() || v.get<std::string>().find_first_of("\r\n") != std::string::npos ||
+                         trim(v.get<std::string>()).empty())) {
+    *err = key + " is one line of text";
+    return false;
+  }
   if (type == "number") {
-    if (!v.is_number() || v.get<double>() < s->min || v.get<double>() > s->max) {
-      *err = key + " is " + format_number(s->min) + ".." + format_number(s->max) + " " + s->unit;
+    if (!v.is_number() || v.get<double>() < s["min"].get<double>() || v.get<double>() > s["max"].get<double>()) {
+      *err = key + " is " + format_number(s["min"]) + ".." + format_number(s["max"]) + " " + s["unit"].get<std::string>();
       return false;
     }
   }
   return true;
 }
 
-std::string main_conf_merge(const std::string& base, const std::map<std::string, json>& settings) {
+std::string main_conf_merge(const json& schema, const std::string& base, const std::map<std::string, json>& settings) {
   std::vector<std::string> lines;
   {
     std::istringstream in(base);
@@ -331,7 +775,7 @@ std::string main_conf_merge(const std::string& base, const std::map<std::string,
   };
   for (const auto& [full, v] : settings) {
     if (v.is_null() || for_wireplumber(full)) continue;
-    const Setting* s = find_setting(full);
+    const json* s = find_setting(schema, full);
     if (!s) continue;
     const std::string sec = full.substr(0, full.find('.'));
     const std::string key = full.substr(full.find('.') + 1);
@@ -442,12 +886,26 @@ bool Setup::load() {
       if (!off.count(r)) st_.roles_on.insert(r);
   }
   set_of("obex_off", &st_.obex_off);
-  if (j.contains("settings") && j["settings"].is_object())
-    for (const auto& [k, v] : j["settings"].items()) {
+  if (j.contains("settings") && j["settings"].is_object()) {
+    const json sc = schema();
+    for (const auto& [k, saved] : j["settings"].items()) {
+      json v = saved;
+      // KernelExperimental was on or off before it was a list.
+      if (k == "General.KernelExperimental" && v.is_boolean()) {
+        const json* s = find_setting(sc, k);
+        v = s ? api_value(*s, v.get<bool>() ? "true" : "false") : json(nullptr);
+      }
       std::string e;
-      if (setup_setting_ok(k, v, &e) && !v.is_null()) st_.settings[k] = v;
+      if (setup_setting_ok(sc, k, v, &e) && !v.is_null()) st_.settings[k] = v;
     }
+  }
   return true;
+}
+
+json Setup::schema() const {
+  SetupSources src = opt_.sources;
+  src.wireplumber_own = opt_.wireplumber_conf;
+  return setup_schema(src, slurp(opt_.base_main_conf));
 }
 
 bool Setup::save(std::string* err) const {
@@ -463,13 +921,13 @@ std::string Setup::obex_noplugin() const {
   return obexd_noplugin(st_.obex_off);
 }
 
-bool Setup::write_files(bool* bt_changed, bool* wp_changed, std::string* err) {
+bool Setup::write_files(const json& sc, bool* bt_changed, bool* wp_changed, std::string* err) {
   // main.conf only when something is set: with nothing, bluetoothd reads the image's own.
   const std::string conf_path = opt_.data_dir + "/main.conf";
   std::string conf_arg;
   const bool any_main = std::any_of(st_.settings.begin(), st_.settings.end(), [](const auto& kv) { return !for_wireplumber(kv.first); });
   if (any_main) {
-    const std::string text = main_conf_merge(slurp(opt_.base_main_conf), st_.settings);
+    const std::string text = main_conf_merge(sc, slurp(opt_.base_main_conf), st_.settings);
     if (slurp(conf_path) != text) {
       if (!put_file(conf_path, text, err)) return false;
       *bt_changed = true;
@@ -491,7 +949,7 @@ bool Setup::write_files(bool* bt_changed, bool* wp_changed, std::string* err) {
 }
 
 json Setup::state_locked() const {
-  json schema = setup_schema();
+  json schema = this->schema();
   const bool remote = remote_on_ ? remote_on_() : false;
   for (json& p : schema["profiles"]) {
     bool on = true;
@@ -532,6 +990,7 @@ bool Setup::change(const json& body, json* out, std::string* err, int* status) {
   const json profiles = body.value("profiles", json::object());
   const json plugins = body.value("plugins", json::object());
   const json settings = body.value("settings", json::object());
+  const json sc = schema();
   try {
     if (!profiles.is_object() || !plugins.is_object() || !settings.is_object())
       throw std::invalid_argument("profiles, plugins and settings are objects");
@@ -555,13 +1014,15 @@ bool Setup::change(const json& body, json* out, std::string* err, int* status) {
       if (p->remote) remote_want = on;
     }
     for (const auto& [name, v] : plugins.items()) {
-      if (!known_plugin(name)) throw std::invalid_argument("no plugin " + name);
+      const json& pl = sc["plugins"];
+      if (std::none_of(pl.begin(), pl.end(), [&](const json& p) { return p["name"] == name; }))
+        throw std::invalid_argument("no plugin " + name);
       if (v.get<bool>()) next.plugins_off.erase(name);
       else next.plugins_off.insert(name);
     }
     for (const auto& [key, v] : settings.items()) {
       std::string e;
-      if (!setup_setting_ok(key, v, &e)) throw std::invalid_argument(e);
+      if (!setup_setting_ok(sc, key, v, &e)) throw std::invalid_argument(e);
       if (v.is_null()) next.settings.erase(key);
       else next.settings[key] = v;
     }
@@ -578,7 +1039,7 @@ bool Setup::change(const json& body, json* out, std::string* err, int* status) {
   st_ = std::move(next);
   bool bt = false, wp = false;
   *status = 500;
-  if (!save(err) || !write_files(&bt, &wp, err)) return false;
+  if (!save(err) || !write_files(sc, &bt, &wp, err)) return false;
   json restarted = json::array();
   const std::string obex = obexd_noplugin(st_.obex_off);
   lk.unlock();
