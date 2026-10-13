@@ -100,20 +100,27 @@ std::string fmt_hz(double f) {
   return b;
 }
 
-// Which decoder a URL goes to with decoder "auto": mpg123 for what is (most likely) MP3 — most
-// internet radio, and mpg123 is light and reports ICY titles — ffmpeg for anything else it can
-// tell, or when there is no mpg123.
-std::string pick_decoder(const SourceSpec& s, const std::string& url, const Tools& t) {
-  if (s.decoder != "auto") return s.decoder;
+// What a URL's extension says it is: "mp3", "other" or "" (none, or one that says nothing).
+std::string url_audio_kind(const std::string& url) {
   std::string path = lower(url);
   const size_t q = path.find_first_of("?#");
   if (q != std::string::npos) path.resize(q);
+  if (ends_with(path, ".mp3")) return "mp3";
   static const char* const kNotMp3[] = {".aac", ".m4a", ".mp4", ".ogg", ".oga", ".opus",
                                         ".flac", ".wav", ".m3u8", ".wma", ".aiff"};
-  bool not_mp3 = false;
   for (const char* e : kNotMp3)
-    if (ends_with(path, e)) not_mp3 = true;
-  if (!t.mpg123.empty() && !(not_mp3 && !t.ffmpeg.empty())) return "mpg123";
+    if (ends_with(path, e)) return "other";
+  return {};
+}
+
+// Which decoder a URL goes to with decoder "auto": mpg123 for what is (most likely) MP3 — most
+// internet radio, and mpg123 is light and reports ICY titles — ffmpeg for anything else it can
+// tell (AAC, which the Bluetooth side plays as well, Ogg, FLAC), or when there is no mpg123.
+// `kind` is what the stream itself turned out to be (sniff_audio), when it was looked at.
+std::string pick_decoder(const SourceSpec& s, const std::string& url, const Tools& t, const std::string& kind) {
+  if (s.decoder != "auto") return s.decoder;
+  const std::string k = !kind.empty() ? kind : url_audio_kind(url);
+  if (!t.mpg123.empty() && !(k == "other" && !t.ffmpeg.empty())) return "mpg123";
   if (!t.ffmpeg.empty()) return "ffmpeg";
   return "mpg123";
 }
@@ -381,8 +388,8 @@ std::string default_label(const StreamSpec& s) {
 }
 
 bool decoder_argv(const SourceSpec& s, const std::string& url, int rate, int channels,
-                  const Tools& t, std::vector<std::string>* argv, std::string* err) {
-  const std::string dec = pick_decoder(s, url, t);
+                  const Tools& t, std::vector<std::string>* argv, std::string* err, const std::string& kind) {
+  const std::string dec = pick_decoder(s, url, t, kind);
   if (dec == "mpg123") {
     if (t.mpg123.empty()) {
       *err = "playing a URL needs mpg123 (MP3) or ffmpeg on the board; neither is installed";
@@ -398,6 +405,15 @@ bool decoder_argv(const SourceSpec& s, const std::string& url, int rate, int cha
   if (t.ffmpeg.empty()) {
     *err = "this URL needs ffmpeg, which is not installed (mpg123 plays only MP3)";
     return false;
+  }
+  const std::string out = " -vn -f s16le -ac " + std::to_string(channels) + " -ar " + std::to_string(rate) + " pipe:1";
+  // https through curl, as mpg123 does it: the image's ffmpeg is built without TLS. One process
+  // group, so stopping the stream stops both; the URL goes in as an argument, never into the
+  // script.
+  if (starts_with(lower(url), "https://") && !t.curl.empty()) {
+    *argv = {"/bin/sh", "-c", "\"$1\" -sSL -A btbenchd/1.0 \"$2\" | exec \"$3\" -nostdin -hide_banner -loglevel info -i pipe:0" + out,
+             "sh", t.curl, url, t.ffmpeg};
+    return true;
   }
   *argv = {t.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "info", "-reconnect", "1",
            "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-i", url, "-vn", "-f", "s16le",
@@ -626,6 +642,41 @@ bool fetch_icy(const std::string& curl, const std::string& url, const std::atomi
   return got;
 }
 
+// What a stream is (sniff_audio: "mp3", "other", ""), from its headers and first few KB, read on a
+// connection of its own and hung up. Only asked when the choice matters: decoder "auto", both
+// decoders there, and an extension that does not say (a station's "/aac/96", "/live").
+std::string probe_audio_kind(const SourceSpec& s, const std::string& url, const Tools& t, const std::atomic<bool>& stop) {
+  if (s.decoder != "auto" || t.curl.empty() || t.mpg123.empty() || t.ffmpeg.empty() || !url_audio_kind(url).empty())
+    return {};
+  Spawned p;
+  std::string err;
+  if (!spawn({t.curl, "-sSL", "-A", "btbenchd/1.0", "--max-time", "5", "-D", "/dev/stderr", url}, &p, &err)) return {};
+  std::string headers, body;
+  const int64_t until = mono_ms() + 5000;
+  bool out_open = true, err_open = true;
+  char buf[8192];
+  while ((out_open || err_open) && body.size() < 4096 && !stop.load() && mono_ms() < until) {
+    pollfd pf[2] = {{out_open ? p.out_fd : -1, POLLIN, 0}, {err_open ? p.err_fd : -1, POLLIN, 0}};
+    if (poll(pf, 2, kPollMs) <= 0) continue;
+    for (int i = 0; i < 2; ++i) {
+      if (!(pf[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+      const ssize_t n = read(pf[i].fd, buf, sizeof(buf));
+      if (n <= 0) {
+        (i == 0 ? out_open : err_open) = false;
+        continue;
+      }
+      (i == 0 ? body : headers).append(buf, static_cast<size_t>(n));
+    }
+  }
+  close(p.out_fd);
+  close(p.err_fd);
+  kill_group(p.pid, 200);
+  waitpid(p.pid, nullptr, 0);
+  const std::string kind = sniff_audio(http_header(headers, "content-type"), body);
+  LOG_DEBUG("audio: {} sniffed as {}", url, kind.empty() ? "unknown" : kind);
+  return kind;
+}
+
 // The stream a .pls/.m3u playlist URL names first; any other URL as it is.
 std::string playlist_stream(const std::string& curl, const std::string& url) {
   if (!looks_like_playlist(url) || curl.empty()) return url;
@@ -846,7 +897,7 @@ void AudioEngine::Stream::run() {
         resolved_url = url;
         if (sp.source.playlist.size() > 1) meta_title = sp.source.playlist.front().title;
       }
-      ok = decoder_argv(sp.source, url, rate, ch, *tools, &argv, &err);
+      ok = decoder_argv(sp.source, url, rate, ch, *tools, &argv, &err, probe_audio_kind(sp.source, url, *tools, stop));
       // ffmpeg does not report title changes, and mpg123 may not (its https helper): ask the
       // server every 15 s, unless the decoder has reported a title within the last 30 s. The first
       // time regardless: the station's description is in the headers only. A playlist's tracks
@@ -884,6 +935,9 @@ void AudioEngine::Stream::run() {
             if (meta.find("StreamUrl='") != std::string::npos) art_src = icy_field(meta, "StreamUrl");
             const std::string d = http_header(headers, "icy-description");
             if (!d.empty() && lower(d) != "unspecified description") meta_description = d;
+            // A stream ffmpeg reads through curl (https) has its station's name only from here.
+            const std::string n = http_header(headers, "icy-name");
+            if (meta_name.empty() && !n.empty() && lower(n) != "unspecified name") meta_name = n;
           }
         });
       }
@@ -949,7 +1003,7 @@ void AudioEngine::Stream::run() {
     const std::string url = resolve_playlist(it.url);
     std::vector<std::string> argv;
     std::string e;
-    if (!decoder_argv(sp.source, url, rate, ch, *tools, &argv, &e) ||
+    if (!decoder_argv(sp.source, url, rate, ch, *tools, &argv, &e, probe_audio_kind(sp.source, url, *tools, stop)) ||
         !src.start(argv, false, [this](const std::string& l) { on_source_line(l); }, &e)) {
       *failed = "track " + std::to_string(to + 1) + ": " + e;
       return true;

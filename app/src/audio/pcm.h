@@ -167,6 +167,13 @@ bool icy_meta_from(const std::string& headers, const std::string& body, std::str
 // A header of the last response in `headers` (as curl dumps a redirect chain), "" when absent.
 std::string http_header(const std::string& headers, const std::string& name);
 
+// What a stream is, from its Content-Type and its first bytes (a few KB, the audio as it starts):
+// "mp3", "other" (AAC, Ogg, FLAC, MP4, WAV: ffmpeg's) or "" when neither tells. The bytes win over
+// the header: a Shoutcast server sends its AAC streams as audio/mpeg. MPEG audio frames and AAC's
+// ADTS frames share a 12-bit sync and differ in the layer bits; compressed data is full of such
+// syncs, so a frame counts only when another one starts where its length says.
+std::string sniff_audio(const std::string& content_type, const std::string& head);
+
 // The cover a station's StreamUrl leads to. Most send the image itself (SomaFM its logo, Radio
 // Paradise the album's cover): a URL whose path ends in an image's extension. Others send a URL
 // of their now-playing JSON (Bauer's eventdata): the image is the first http(s) value of a key

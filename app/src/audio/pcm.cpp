@@ -362,6 +362,65 @@ bool icy_meta_from(const std::string& headers, const std::string& body, std::str
   return meta->find("StreamTitle='") != std::string::npos;
 }
 
+namespace {
+
+// The length of the MPEG audio frame whose header starts at h[0..3], 0 when it is none: layer
+// I/II/III of MPEG-1, -2 or -2.5, a bitrate and sample rate from the tables (not "free" or bad).
+size_t mpeg_frame_len(const unsigned char* h) {
+  if (h[0] != 0xff || (h[1] & 0xe0) != 0xe0) return 0;
+  const int ver = (h[1] >> 3) & 3, layer = (h[1] >> 1) & 3;  // ver 3: MPEG-1, 2: MPEG-2, 0: 2.5
+  const int bri = h[2] >> 4, sri = (h[2] >> 2) & 3, pad = (h[2] >> 1) & 1;
+  if (ver == 1 || layer == 0 || bri == 0 || bri == 15 || sri == 3) return 0;
+  static const int kBr[2][3][15] = {
+      {{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448},   // MPEG-1 layer I
+       {0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384},      // II
+       {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}},      // III
+      {{0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256},      // MPEG-2/2.5 layer I
+       {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160},           // II
+       {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}}};         // III
+  static const int kSr[3] = {44100, 48000, 32000};
+  const int sr = kSr[sri] >> (ver == 3 ? 0 : ver == 2 ? 1 : 2);
+  const int br = kBr[ver == 3 ? 0 : 1][3 - layer][bri] * 1000;
+  if (layer == 3) return static_cast<size_t>((12 * br / sr + pad) * 4);                 // layer I
+  if (layer == 1 && ver != 3) return static_cast<size_t>(72 * br / sr + pad);           // III, MPEG-2/2.5
+  return static_cast<size_t>(144 * br / sr + pad);
+}
+
+// The length of the ADTS (AAC) frame whose header starts at h[0..6], 0 when it is none.
+size_t adts_frame_len(const unsigned char* h) {
+  if (h[0] != 0xff || (h[1] & 0xf6) != 0xf0 || ((h[2] >> 2) & 15) > 12) return 0;
+  const size_t len = (static_cast<size_t>(h[3] & 3) << 11) | (static_cast<size_t>(h[4]) << 3) | (h[5] >> 5);
+  return len >= 7 ? len : 0;
+}
+
+// How many frames of a kind in `head` are followed by another of that kind where their length
+// says: a pair of real frames, not a sync word that compressed data happens to contain.
+int chained(const std::string& head, size_t (*frame_len)(const unsigned char*)) {
+  const auto* b = reinterpret_cast<const unsigned char*>(head.data());
+  int n = 0;
+  for (size_t i = 0; i + 7 <= head.size(); ++i) {
+    const size_t len = frame_len(b + i);
+    if (len && i + len + 7 <= head.size() && frame_len(b + i + len)) ++n;
+  }
+  return n;
+}
+
+}  // namespace
+
+std::string sniff_audio(const std::string& content_type, const std::string& head) {
+  if (head.compare(0, 4, "OggS") == 0 || head.compare(0, 4, "fLaC") == 0 || head.compare(0, 4, "RIFF") == 0 ||
+      (head.size() >= 8 && head.compare(4, 4, "ftyp") == 0))
+    return "other";
+  if (head.compare(0, 3, "ID3") == 0) return "mp3";
+  const int mp3 = chained(head, mpeg_frame_len), adts = chained(head, adts_frame_len);
+  if (adts >= 2 && adts > mp3) return "other";
+  if (mp3 >= 2 && mp3 > adts) return "mp3";
+  std::string ct = lower(trim(content_type.substr(0, content_type.find(';'))));
+  if (ct == "audio/mpeg" || ct == "audio/mp3" || ct == "audio/mpeg3" || ct == "audio/x-mpeg") return "mp3";
+  if (starts_with(ct, "audio/") || ct == "application/ogg" || ct.find("mpegurl") != std::string::npos) return "other";
+  return {};
+}
+
 bool url_is_image(const std::string& url) {
   const std::string l = lower(url);
   if (!starts_with(l, "http://") && !starts_with(l, "https://")) return false;

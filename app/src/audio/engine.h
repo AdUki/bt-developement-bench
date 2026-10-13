@@ -126,8 +126,10 @@ std::string default_label(const StreamSpec& s);
 
 // The command lines (pure, tested). `node_name` names the PipeWire stream ("btbench-stream-3"), so
 // it can be told apart in wpctl / pw-top.
+// `kind` is what the stream turned out to be ("mp3" or "other", pcm.h sniff_audio), "" for unknown:
+// the URL's extension decides then.
 bool decoder_argv(const SourceSpec& s, const std::string& url, int rate, int channels,
-                  const Tools& t, std::vector<std::string>* argv, std::string* err);
+                  const Tools& t, std::vector<std::string>* argv, std::string* err, const std::string& kind = "");
 bool capture_argv(const SourceSpec& s, int rate, int channels, int latency_ms,
                   const std::string& node_name, const Tools& t, std::vector<std::string>* argv,
                   std::string* err);

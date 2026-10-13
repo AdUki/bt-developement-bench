@@ -166,6 +166,25 @@ void test_playlists() {
   CHECK(!icy_meta_from("HTTP/1.1 200 OK\r\n\r\n", body, &meta, &need));  // no ICY metadata
   CHECK_EQ(need, size_t(0));
 
+  // Frames that chain: MP3 (MPEG-1 layer III, 128 kb/s, 44.1 kHz: 417 bytes) and ADTS (200 bytes),
+  // each payload full of sync-like bytes of the other kind.
+  auto frames = [](const std::string& hdr, size_t len, const std::string& noise) {
+    std::string f = hdr;
+    while (f.size() < len) f += noise;
+    f.resize(len);
+    return f + f + f + f + f;
+  };
+  const std::string mp3 = frames(std::string("\xff\xfb\x90\x64", 4), 417, std::string("\xff\xf1\x50\x80\x00", 5));
+  const std::string aac = frames(std::string("\xff\xf1\x50\x80\x19\x1f\xfc", 7), 200, std::string("\xff\xfb\x90\x00\x11", 5));
+  CHECK_EQ(sniff_audio("audio/mpeg", aac), std::string("other"));  // Shoutcast's AAC
+  CHECK_EQ(sniff_audio("audio/aac", mp3), std::string("mp3"));
+  CHECK_EQ(sniff_audio("audio/aac", aac.substr(3)), std::string("other"));  // starting mid-frame
+  CHECK_EQ(sniff_audio("", "OggS\0\x02"), std::string("other"));
+  CHECK_EQ(sniff_audio("", "ID3\x04"), std::string("mp3"));
+  CHECK_EQ(sniff_audio("audio/aacp; charset=x", "??"), std::string("other"));
+  CHECK_EQ(sniff_audio("audio/mpeg", ""), std::string("mp3"));
+  CHECK_EQ(sniff_audio("text/html", "<html>"), std::string());
+
   CHECK(url_is_image("http://img.radioparadise.com/covers/l/7152.jpg"));
   CHECK(url_is_image("https://somafm.com/logos/512/groovesalad512.JPG?v=2"));
   CHECK(!url_is_image("https://listenapi.planetradio.co.uk/api9.2/eventdata/420431971"));
@@ -274,6 +293,20 @@ void test_argv() {
   // An AAC stream goes to ffmpeg when there is one.
   CHECK(decoder_argv(s, "http://r/live.aac", 44100, 2, t, &a, &err));
   CHECK_EQ(a[0], std::string("/usr/bin/ffmpeg"));
+  // A URL that does not say, sniffed: AAC to ffmpeg, MP3 to mpg123; unknown, mpg123 as before.
+  CHECK(decoder_argv(s, "http://r/aac/96", 44100, 2, t, &a, &err, "other"));
+  CHECK_EQ(a[0], std::string("/usr/bin/ffmpeg"));
+  // https: ffmpeg reads it from curl (an image's ffmpeg has no TLS); the URL is an argument.
+  t.curl = "/usr/bin/curl";
+  CHECK(decoder_argv(s, "https://r/aac/96?a=$(x)", 44100, 2, t, &a, &err, "other"));
+  CHECK_EQ(a[0], std::string("/bin/sh"));
+  CHECK_EQ(a[a.size() - 2], std::string("https://r/aac/96?a=$(x)"));
+  CHECK(a[2].find("$(x)") == std::string::npos);
+  t.curl.clear();
+  CHECK(decoder_argv(s, "https://r/live", 44100, 2, t, &a, &err, "mp3"));
+  CHECK_EQ(a[0], std::string("/usr/bin/mpg123"));
+  CHECK(decoder_argv(s, "https://r/live", 44100, 2, t, &a, &err));
+  CHECK_EQ(a[0], std::string("/usr/bin/mpg123"));
   Tools none;
   CHECK(!decoder_argv(s, s.url, 44100, 2, none, &a, &err));
   CHECK(err.find("mpg123") != std::string::npos);

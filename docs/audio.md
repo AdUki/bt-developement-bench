@@ -184,6 +184,10 @@ as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
   `BTBENCH_FFMPEG = "0"` in `btbench-device.conf` leaves it out, and then only MP3 plays (the
   Listen page says so for anything else). A board flashed without them gets them without a
   reflash: `make pkg ARGS=mpg123`, `make pkg ARGS=ffmpeg`.
+  Which one a URL gets: its extension when it has one that says (`.mp3`, `.aac`, `.ogg`, ...);
+  else (a station's `/aac/96`, `/live`) btbenchd reads the stream's first few KB and its
+  Content-Type first: MPEG audio frames go to mpg123, AAC (ADTS), Ogg, FLAC or MP4 to ffmpeg. The
+  bytes win over the header, as Shoutcast servers send AAC as `audio/mpeg`.
 - **CPU.** The Zero W has one core: a decoder plus pw-cat into an SBC sink is the heaviest kind
   of stream, a generator into a sink the lightest. Watch the console's CPU readout (or Traffic →
   Graphs) while one runs. At most four streams run at once, and one that plays nowhere ends after
