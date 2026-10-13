@@ -766,6 +766,7 @@ bool BtManager::open_bus() {
 void BtManager::close_bus() {
   clear_request(false);
   started_here_.clear();
+  after_pair_.clear();
   if (!ready_adapter_.empty()) {
     ready_adapter_.clear();
     for (BusUser* u : users_) u->bluez_gone();
@@ -1233,11 +1234,40 @@ void BtManager::on_reply(const std::string& path, const std::string& method, con
   if (method == "Pair") {
     started_here_.erase(path);
     if (pending_ && pending_->dev_path == path) clear_request(false);
+    // Paired, the link is up with only SDP having run on it, and the kernel drops an ACL without
+    // channels seconds later. A phone connects the profiles at this point: so does the bench.
+    if (!e) {
+      LOG_INFO("bluetooth: Pair {} done: connecting its profiles", addr);
+      after_pair_.insert(path);
+      connect_profiles(path);
+      dirty_ = true;
+      return;
+    }
+  }
+  // A device with nothing to connect (no profile the bench has, or already connected) is fine
+  // right after its pairing: the Connect was the bench's idea, not a request that failed.
+  if (method == "Connect" && after_pair_.erase(path) && e &&
+      (is_error(e, "org.bluez.Error.AlreadyConnected") || is_error(e, "org.bluez.Error.NotAvailable") ||
+       is_error(e, "org.bluez.Error.ProfileUnavailable"))) {
+    LOG_INFO("bluetooth: {} paired, no profile to connect ({})", addr, friendly(e));
+    e = nullptr;
   }
   if (e) LOG_WARN("bluetooth: {} {} failed: {} ({})", method, addr, friendly(e), e->name);
   else LOG_INFO("bluetooth: {} {} done", method, addr);
   set_device_state(path, "", e ? method + ": " + friendly(e) : "");
   dirty_ = true;
+}
+
+// Bus thread. A device's profiles: over BR/EDR's bearer only while that link is down: with it up
+// (after a pairing), Device1's Connect is what connects the profiles (on_reply).
+void BtManager::connect_profiles(const std::string& path) {
+  bool bredr;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    bredr = objs_->contains(path) && bt_connect_over_bredr((*objs_)[path]) &&
+            !bool_of((*objs_)[path][kBearerBredrIface], "Connected");
+  }
+  call_device(path, "Connect", "", "connecting", kConnectTimeoutS, bredr ? kBearerBredrIface : nullptr);
 }
 
 // ---- The agent -----------------------------------------------------------------------------------
@@ -1817,19 +1847,10 @@ bool BtManager::device_action(const std::string& address, Action action, const s
       case Action::CancelPairing:
         call_device(path, "CancelPairing", "", "", 5);
         break;
-      case Action::Connect: {
-        bool bredr = false;
-        if (uuid.empty()) {
-          std::lock_guard<std::mutex> lk(m_);
-          // Over BR/EDR's bearer only while that link is down: with it up (after a pairing),
-          // Device1's Connect is what connects the profiles (on_reply).
-          bredr = objs_->contains(path) && bt_connect_over_bredr((*objs_)[path]) &&
-                  !bool_of((*objs_)[path][kBearerBredrIface], "Connected");
-        }
-        call_device(path, uuid.empty() ? "Connect" : "ConnectProfile", uuid, "connecting", kConnectTimeoutS,
-                    bredr ? kBearerBredrIface : nullptr, uuid);
+      case Action::Connect:
+        if (uuid.empty()) connect_profiles(path);
+        else call_device(path, "ConnectProfile", uuid, "connecting", kConnectTimeoutS, nullptr, uuid);
         break;
-      }
       case Action::Disconnect:
         call_device(path, uuid.empty() ? "Disconnect" : "DisconnectProfile", uuid, "disconnecting",
                     kConnectTimeoutS, nullptr, uuid);

@@ -281,6 +281,7 @@ class BtManager {
                    const char* busy, unsigned timeout_s, const char* iface = nullptr,
                    const std::string& busy_on = {});
   void on_reply(const std::string& path, const std::string& method, const std::string& iface, sd_bus_message* reply);
+  void connect_profiles(const std::string& path);
   void set_device_state(const std::string& path, std::string busy, std::string error,
                         std::string busy_on = {});
 
@@ -374,6 +375,7 @@ class BtManager {
   uint64_t reconnect_at_ns_ = 0;  // the next try at reconnect_ (0: none due)
   int reconnect_tries_ = 0;
   std::map<std::string, std::string> started_here_;  // device path -> the PIN to offer
+  std::set<std::string> after_pair_;  // devices whose Connect follows the pairing done here
   Pending* pending_ = nullptr;
   uint64_t next_request_id_ = 1;
   bool change_pending_ = false;
