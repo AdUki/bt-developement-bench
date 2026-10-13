@@ -90,10 +90,13 @@ do_configure:prepend() {
 do_configure:append() {
 	# merge_config.sh -m does not say when a fragment value does not survive olddefconfig (a
 	# symbol renamed or gone, or a dependency missing), and the bench would then quietly lack
-	# what it was asked for. Name them in the build log.
-	for f in ${BTBENCH_KERNEL_FRAGMENTS}; do
-		btbench_config_check ${WORKDIR}/$f ${B}/.config $f
-	done
+	# what it was asked for. Name them in the build log. The fragments are checked together, a
+	# later one's value winning, as `make linux` checks them: a board's fragment may turn off
+	# what btbench.cfg switches on for other boards.
+	frags=
+	for f in ${BTBENCH_KERNEL_FRAGMENTS}; do frags="$frags ${WORKDIR}/$f"; done
+	cat $frags > ${B}/.btbench-fragments
+	btbench_config_check ${B}/.btbench-fragments ${B}/.config fragments
 }
 
 btbench_config_check() {
