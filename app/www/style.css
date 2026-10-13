@@ -739,6 +739,8 @@ td.acts > * { margin-right: 0.25rem; }
 .icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .icon-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .empty-line { padding: 1rem 0.4rem; color: var(--muted); }
+.radio-add { padding: 0.8rem 0.4rem 0.2rem; }
+.radio-add input[name=name] { flex: 0 1 12rem; min-width: 0; }
 .segs { display: inline-flex; background: var(--well); border-radius: 8px; padding: 2px; }
 .seg { border: 0; background: transparent; padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.82rem; color: var(--muted); }
 .seg.on { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
@@ -923,7 +925,7 @@ details.more-fields > .set-row:first-of-type { border-top: 0; }
 .lib-head-t { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .lib-head-t b { font-size: 1.15rem; overflow-wrap: anywhere; }
 .lib-head .row { gap: 0.4rem; }
-.lib-head .small-btn svg { width: 13px; height: 13px; vertical-align: -2px; fill: currentColor; stroke: currentColor; stroke-width: 1; }
+.lib-head .small-btn svg, .radio-add .small-btn svg { width: 13px; height: 13px; vertical-align: -2px; fill: currentColor; stroke: currentColor; stroke-width: 1; }
 .lib-cover { flex: none; width: 7.5rem; height: 7.5rem; border-radius: 8px; background: var(--well); position: relative; overflow: hidden;
   display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
 .lib-cover svg, .lib-tile-art svg { width: 32px; height: 32px; fill: none; stroke: currentColor; stroke-width: 1.4; }

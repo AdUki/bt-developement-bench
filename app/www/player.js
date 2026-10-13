@@ -42,6 +42,7 @@ const PL_SVG = {
   phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
   folder: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2z',
   plus: 'M12 5v14M5 12h14',
+  remove: 'M6 6l12 12M18 6L6 18',
 };
 // A cover image's outcome, by URL: the art box stops showing it is loading, and a failed image
 // leaves the placeholder.
@@ -450,16 +451,43 @@ function openLib(kind, chosen) {
   renderLibTabs();
   if (kind === 'radio') {
     setHTML($('np-crumbs'), '');
-    api('/audio/radio').then(r => {
-      pl.libItems = r.stations.map(s => ({kind: 'station', title: s.name, url: s.url}));
-      renderLib();
-    }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
+    api('/audio/radio').then(renderStations)
+      .catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
   } else if (kind === 'upnp') {
     pl.upnpServer = null;
     upnpServers(false);
   } else if (phone) {
     phoneFolder(phone, phone.path + '/Filesystem', 'Files');
   }
+}
+
+// The stations, each with a remove, and under them a station to add by its URL. The board keeps the
+// whole list (PUT /audio/radio), the one Audio's "Edit stations" edits too.
+function renderStations(r) {
+  pl.libItems = r.stations.map(s => ({kind: 'station', title: s.name, url: s.url}));
+  renderLib('<div class="empty-line">No stations yet.</div>');
+  $('np-lib').insertAdjacentHTML('beforeend', `<form class="radio-add row wrap" id="np-radio-add">
+    <input type="url" name="url" class="grow" placeholder="Stream URL (MP3, AAC, .pls, .m3u)" required>
+    <input type="text" name="name" placeholder="Name (optional)" maxlength="120">
+    <button class="small-btn">${svg(PL_SVG.plus)} Add station</button></form>`);
+}
+
+// The list as the board has it now, changed by `edit`, saved, and shown.
+function stationsSave(edit) {
+  return api('/audio/radio').then(r => put('/audio/radio', {stations: edit(r.stations)}))
+    .then(r => { if (pl.lib === 'radio') renderStations(r); return r; });
+}
+
+function stationAdd(f) {
+  const url = f.url.value.trim(), name = f.name.value.trim();
+  if (!url) return;
+  stationsSave(list => list.concat([{name: name || url, url}])).then(() => toast(`Added ${name || url}`)).catch(fail);
+}
+
+function stationRemove(i) {
+  const it = pl.libItems[i];
+  if (!it || it.kind !== 'station' || !confirm(`Remove ${it.title}?`)) return;
+  stationsSave(list => list.filter(s => !(s.url === it.url && s.name === it.title))).catch(fail);
 }
 
 // ---- Back in the library: each folder opened is a layer (app.js backOpen), and Back shows the
@@ -705,6 +733,7 @@ function libRowsHTML(items, from, inAlbum) {
       ${it.format ? `<span class="tr-fmt">${esc(it.format)}</span>` : ''}
       ${it.duration_s ? `<span class="tr-d">${fmtMs(it.duration_s * 1000)}</span>` : ''}
       ${add ? `<button class="icon-btn" data-lib-add="${i}" title="Add to the queue" aria-label="Add to the queue">${svg(PL_SVG.plus)}</button>` : ''}
+      ${it.kind === 'station' ? `<button class="icon-btn" data-lib-del="${i}" title="Remove the station" aria-label="Remove the station">${svg(PL_SVG.remove)}</button>` : ''}
       ${open ? '<span class="chev"></span>' : ''}</div>`;
   }).join('');
 }
@@ -926,8 +955,14 @@ function setupPlayer() {
     if (all) return libAll(all.dataset.libAll === 'add');
     const add = e.target.closest('[data-lib-add]');
     if (add) return libClick(parseInt(add.dataset.libAdd, 10), true);
+    const rm = e.target.closest('[data-lib-del]');
+    if (rm) return stationRemove(parseInt(rm.dataset.libDel, 10));
     const r = e.target.closest('[data-lib-i]');
     if (r) libClick(parseInt(r.dataset.libI, 10), false);
+  };
+  $('np-lib').onsubmit = e => {
+    e.preventDefault();
+    if (e.target.id === 'np-radio-add') stationAdd(e.target);
   };
   $('np-search').onkeydown = e => {
     if (e.key !== 'Enter') return;
