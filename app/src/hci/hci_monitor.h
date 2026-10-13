@@ -13,6 +13,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 namespace httplib {
 class Server;
@@ -58,6 +59,10 @@ class Monitor {
   // lands in btmon, the btsnoop ring and live pcap; and adds it to the events ring. *logged says
   // whether the kernel took it (in replay mode it never does).
   nlohmann::json mark(const std::string& text);
+
+  // The controllers sent something that have answered nothing for `for_ms` (Decoder::silent).
+  // Empty while replaying a file.
+  std::vector<uint16_t> silent(int64_t for_ms) const;
 
   // Replay only: blocks until the whole file was consumed (true) or the timeout expired.
   bool wait_replay_done(int timeout_ms) const;

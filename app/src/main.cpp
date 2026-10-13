@@ -32,6 +32,7 @@
 
 #ifdef BTB_HAVE_HCI
 #include "hci/hci_monitor.h"
+#include "hci/watchdog.h"
 #endif
 
 namespace {
@@ -267,6 +268,10 @@ int main(int argc, char** argv) {
   // It says itself, once, when its source cannot be opened (no CAP_NET_RAW on a PC).
   std::unique_ptr<btb::hci::Monitor> mon = btb::hci::start(hopt, publish);
   btb::hci::register_routes(server.server(), *mon);
+  // A controller that stops answering is reset (hci/watchdog.h): it watches what the monitor sees.
+  btb::hci::ControllerWatchdog watchdog([&mon](int64_t ms) { return mon->silent(ms); },
+                                        [&mon](const std::string& text) { mon->mark(text); });
+  if (mon->available() && hci_replay.empty() && !no_bluetooth) watchdog.start();
 #else
   if (!hci_replay.empty()) LOG_WARN("--hci-replay: this build has no HCI monitor (app/src/hci)");
   (void)capture_dir;
@@ -299,6 +304,7 @@ int main(int argc, char** argv) {
   audio.stop_all();
   obex.stop();
 #ifdef BTB_HAVE_HCI
+  watchdog.stop();
   mon->stop();
 #endif
   bt.stop();

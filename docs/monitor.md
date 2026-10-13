@@ -258,6 +258,22 @@ does in replay mode, but the mark still goes into the events ring.
 Marks found in a replayed capture show up as `mark` events too. bluetoothd's own log lines on that
 channel are ignored.
 
+## A controller that stops answering
+
+The monitor also notices a controller that was sent something (a command, data) and has sent
+nothing back for 5 s. btbenchd then asks it Read Local Version over a raw HCI socket — a peer out
+of range leaves data unanswered too, but its controller still answers that — and one that gives no
+answer within 5 s is reset: its driver is unbound and bound again in sysfs (`hci/watchdog.cpp`),
+with a mark saying so in the capture. BlueZ then shows the adapter afresh, the bench restores its
+settings and calls its devices back. At most once a minute per controller, five times per run.
+
+Seen on the Zero W's BCM43430 (UART, Raspberry Pi OS's BCM43430A1.hcd) after some minutes of
+aptX HD to a sink: its radio keeps the link up, but from one moment it sends the host nothing —
+the UART's receive counter and interrupts stop, CTS stays asserted and the host's bytes still go
+out — so every command times out (adapter settings fail as "Authentication Failed", connects as
+no answer) and the kernel only notices minutes later, or never. Without the reset only a reboot
+brought it back.
+
 ## Live capture in Wireshark
 
 ```sh

@@ -21,6 +21,7 @@ add_library(btb_hci STATIC
   packet_view.cpp
   pcap.cpp
   routes.cpp
+  watchdog.cpp
 )
 set_target_properties(btb_hci PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_include_directories(btb_hci PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

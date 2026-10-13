@@ -289,6 +289,9 @@ struct Decoder::Adapter {
   int pending_sco_flow = -1;
   uint32_t outstanding[4] = {};
   uint32_t outstanding_max[4] = {};
+  // When the host sent the controller something with nothing from the controller since: 0
+  // while it is answering (Decoder::silent).
+  int64_t waiting_since = 0;
   std::vector<std::pair<uint16_t, uint16_t>> cis_links;  // (cis handle, acl handle)
   std::vector<std::unique_ptr<Conn>> conns;
 
@@ -526,6 +529,13 @@ void Decoder::packet(int64_t ts, uint16_t index, uint16_t opcode, const uint8_t*
 
   Adapter* a = adapter(index, true);
   if (!a) return;
+
+  // Whether the controller still talks: anything from it, or something to it waiting.
+  if (opcode == kMonEvent || opcode == kMonAclRx || opcode == kMonScoRx || opcode == kMonIsoRx)
+    a->waiting_since = 0;
+  else if ((opcode == kMonCommand || opcode == kMonAclTx || opcode == kMonScoTx || opcode == kMonIsoTx) &&
+           !a->waiting_since)
+    a->waiting_since = ts;
 
   switch (opcode) {
     case kMonCommand:
@@ -1749,6 +1759,14 @@ bool Decoder::latency(int index, int handle, json* out) const {
     }
   }
   return false;
+}
+
+std::vector<uint16_t> Decoder::silent(int64_t now_us, int64_t for_us) const {
+  std::vector<uint16_t> out;
+  for (const auto& a : adapters_)
+    if (a->up && a->index != kHciDevNone && a->waiting_since && now_us - a->waiting_since >= for_us)
+      out.push_back(a->index);
+  return out;
 }
 
 std::vector<LinkSeed> Decoder::links() const {

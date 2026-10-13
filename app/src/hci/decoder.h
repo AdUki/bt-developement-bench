@@ -84,6 +84,9 @@ class Decoder {
   // The connected links and their open dynamic channels, to start the live packet view's
   // channel tracking mid-stream.
   std::vector<LinkSeed> links() const;
+  // The controllers that are up and have been sent something (a command, data) and have sent
+  // nothing back at all for `for_us` up to now_us: a controller whose host interface has hung.
+  std::vector<uint16_t> silent(int64_t now_us, int64_t for_us) const;
 
   struct Adapter;
   struct Conn;

@@ -627,8 +627,34 @@ void test_sco_iso() {
 
 }  // namespace
 
+// A controller sent something that answers nothing (hci/watchdog.h): silent once it has said
+// nothing for the time asked, and not any more once it says anything.
+void test_silent() {
+  Decoder d;
+  const Bytes ni = new_index("hci0");
+  d.packet(kT0, 0, kMonNewIndex, ni.data(), ni.size());
+  d.packet(kT0, 0, kMonOpenIndex, nullptr, 0);
+  CHECK(d.silent(kT0 + 60000000, 5000000).empty());  // nothing sent: nothing awaited
+  const Bytes cmd{0x01, 0x10, 0x00};
+  d.packet(kT0 + 1000000, 0, kMonCommand, cmd.data(), cmd.size());
+  CHECK(d.silent(kT0 + 5000000, 5000000).empty());
+  CHECK_EQ(d.silent(kT0 + 6000000, 5000000).size(), 1u);
+  // More sent meanwhile does not move the start of the wait.
+  const Bytes data = acl(0x0100, 0x02, l2cap(0x0040, Bytes(20, 0)));
+  d.packet(kT0 + 5500000, 0, kMonAclTx, data.data(), data.size());
+  CHECK_EQ(d.silent(kT0 + 6000000, 5000000).size(), 1u);
+  const Bytes cc = cmd_complete(0x1001, Bytes(9, 0));
+  d.packet(kT0 + 6100000, 0, kMonEvent, cc.data(), cc.size());
+  CHECK(d.silent(kT0 + 20000000, 5000000).empty());
+  // A controller that is down is not asked about.
+  d.packet(kT0 + 21000000, 0, kMonCommand, cmd.data(), cmd.size());
+  d.packet(kT0 + 21000001, 0, kMonCloseIndex, nullptr, 0);
+  CHECK(d.silent(kT0 + 40000000, 5000000).empty());
+}
+
 int main() {
   test_histogram();
+  test_silent();
   test_codecs();
   test_a2dp_session();
   test_le_att();

@@ -545,6 +545,14 @@ json Monitor::events(uint64_t since) const {
 
 json Monitor::mark(const std::string& text) { return impl_->do_mark(text); }
 
+std::vector<uint16_t> Monitor::silent(int64_t for_ms) const {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  if (impl_->replay) return {};
+  const int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::system_clock::now().time_since_epoch()).count();
+  return impl_->dec.silent(now_us, for_ms * 1000);
+}
+
 bool Monitor::wait_replay_done(int timeout_ms) const {
   std::unique_lock<std::mutex> lk(impl_->mu);
   return impl_->done_cv.wait_for(lk, std::chrono::milliseconds(timeout_ms),
