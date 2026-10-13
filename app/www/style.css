@@ -515,7 +515,9 @@ body.wifi-page main { max-width: 560px; margin: 0 auto; padding: 0.5rem 16px 2re
   .card { padding: 0.75rem 0.8rem; }
   .grid { grid-template-columns: 1fr; }
   .tbl th, .tbl td { padding: 0.3rem 0.4rem; }
-  details.more > .pop { position: static; width: auto; margin-top: 0.5rem; box-shadow: none; }
+  details.more > .pop, .tb-main > details.more:last-child > .pop, details.more.right > .pop {
+    position: static; width: auto; margin-top: 0.5rem; box-shadow: none;
+  }
   .tb-main > details.more { flex-basis: 100%; }
   /* Filter and Scan share a line; the scan options and state go under them. */
   .list-head .scan { display: contents; }
