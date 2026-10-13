@@ -64,8 +64,12 @@ how the music is started from the console. *Listen in this browser* (a phone's a
 within a second while the phone plays into the board; one that does not is asked once to play,
 never paused. A bar at the bottom of the library keeps the
 track playing, play/pause and next in reach. The board plays to
-the output chosen in *Play to* — this browser, or a speaker the board has — and keeps playing its
-queue with the page closed. The volume slider sets what a person means: the Bluetooth speaker's
+the output chosen in *Play to* — none, its default output, the loopback card or a Bluetooth
+speaker, each a button — and, apart from that, *Listen in this browser*; it keeps playing its queue
+with the page closed. Both change what plays at once: an output picked moves the stream there (the
+station and the queue carry on), and the line under the buttons says what the board is doing —
+asking, opening the output, waiting for the Bluetooth link to stream, *Playing on … · codec* — or
+why it could not (a speaker not connected, one that went away, one that takes no audio). The volume slider sets what a person means: the Bluetooth speaker's
 own volume when the link has one, else the stream's level, or this browser's.
 
 

@@ -543,8 +543,13 @@ first), is the spec as normalised plus:
 
 `state`: `starting`, `running`, `ended` (a file or sweep finished; a stream that plays nowhere and
 was not listened to for 30 s ends too, saying so in `error`), `failed` (`error` has the tool's
-last words: a refused URL, a sink that went away), `stopped`. `level` is the last 250 ms after the
-gain. `meta` carries an ICY stream's station name and current title (from the decoder, or —
+last words: a refused URL, the sink it started with gone and nobody listening), `stopped`. `level`
+is the last 250 ms after the gain. `sink_status` is the sink as the pump has it: `{state, target,
+error, since_ms, seq}`, `state` one of `none`, `starting` (open, not yet taking audio), `playing`
+(has taken half a second), `stalled` (has taken nothing for 2 s: a Bluetooth link that stopped
+streaming), `failed` (it would not open, or stopped: `error`, of `target`; a stream switched to it,
+or with listeners, goes on without a sink). A named PipeWire sink is that one only
+(`node.dont-fallback`, `node.dont-reconnect`): never the default output instead. `meta` carries an ICY stream's station name and current title (from the decoder, or —
 when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to.
 `meta.art` is the cover the station sends with its title (ICY `StreamUrl`: an image, or a
 now-playing JSON such as Bauer's eventdata, whose image is looked up), often its logo, `""` for
@@ -558,7 +563,7 @@ first (shuffled: by a new order) and previous on the first goes to the last.
 | route | what |
 |---|---|
 | `GET /api/audio/streams/{id}` | one stream |
-| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; shuffled, at random places after the current track), `{"repeat": "all"}`, `{"shuffle": true}` (a new order from the current track), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits) |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; shuffled, at random places after the current track), `{"repeat": "all"}`, `{"shuffle": true}` (a new order from the current track), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sink": {...} \| null}` moves it to another sink, or to its listeners only, without stopping the source; the answer's `sink_req` numbers the request, and `sink_status.seq` says which one the sink's state answers |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
 

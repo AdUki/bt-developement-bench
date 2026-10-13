@@ -45,7 +45,12 @@
         <div class="np-foot">
           <label class="np-vol" id="np-vol-row"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7"/></svg>
             <input type="range" id="np-vol" min="0" max="100" aria-label="Volume"></label>
-          <label class="np-out" id="np-out-row"><span class="muted">Play to</span> <select id="np-out" aria-label="Output"></select></label>
+          <div class="np-out" id="np-out-row">
+            <div class="np-out-head"><span class="np-out-label">Play to</span>
+              <label class="np-listen"><input type="checkbox" id="np-listen"> Listen in this browser</label></div>
+            <div class="np-outs" id="np-outs" role="radiogroup" aria-label="The board's output"></div>
+            <div class="np-out-status" id="np-out-status" role="status" aria-live="polite"></div>
+          </div>
           <button class="small-btn" id="np-hear" hidden title="Hear what the phone sends the board, in this browser">Listen in this browser</button>
         </div>
       </div>

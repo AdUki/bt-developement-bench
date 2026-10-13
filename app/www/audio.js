@@ -701,8 +701,10 @@ function listenToDevice(address, onStream) {
     return Promise.resolve(null);
   }
   const deadline = Date.now() + 10000;
-  let asked = false;
-  const look = () => api('/audio/endpoints?fresh=1').then(ep => {
+  let asked = false, looks = 0;
+  // The first look takes the board's answer of the last two seconds: the page has usually just
+  // asked (a pw-dump costs a busy Zero W seconds, and a fresh one would wait behind it).
+  const look = () => api(looks++ ? '/audio/endpoints?fresh=1' : '/audio/endpoints').then(ep => {
     renderEndpoints(ep);
     const src = ep.sources.find(e => same(e.address));
     if (src) {

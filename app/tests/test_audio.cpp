@@ -273,6 +273,11 @@ void test_argv() {
   for (const std::string& x : a)
     if (x.find("tone 1 kHz") != std::string::npos && x.find("\\") == std::string::npos) quoted = true;
   CHECK(quoted);
+  // A sink named is that one only: no falling back to the default output when it is gone.
+  CHECK(std::any_of(a.begin(), a.end(), [](const std::string& x) { return x.find("node.dont-fallback = true") != std::string::npos; }));
+  k.target = "";
+  CHECK(sink_argv(k, 48000, 2, 60, "n", "d", t, &a, &err));
+  CHECK(std::none_of(a.begin(), a.end(), [](const std::string& x) { return x.find("dont-fallback") != std::string::npos; }));
   k.type = "alsa";
   k.target = "hw:Loopback,0,0";
   CHECK(sink_argv(k, 44100, 1, 100, "n", "d", t, &a, &err));

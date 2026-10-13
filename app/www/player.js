@@ -38,6 +38,9 @@ const PL_SVG = {
   note: 'M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z',
   radio: 'M4 10h16v10H4zM7 10l10-5M8 15h.01M12 15h5',
   bt: 'M7 7l10 10-5 5V2l5 5L7 17',
+  speaker: 'M6 3h12v18H6zM12 17.5a3 3 0 100-6 3 3 0 000 6zM12 7h.01',
+  loop: 'M17 2l4 4-4 4M3 11V9a3 3 0 013-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 01-3 3H3',
+  off: 'M4 4l16 16M9 9v6h4l5 4V14M13 5L11 7',
   server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
   phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
   folder: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2z',
@@ -187,6 +190,7 @@ function renderNowPlaying() {
   $('np-hear').disabled = !!pl.hearBusy;
   // The output only means something for what the board plays.
   $('np-out-row').hidden = c.kind === 'phone';
+  if (c.kind !== 'phone') renderOuts();
   $('np-hear').hidden = c.kind !== 'phone';
   renderQueue(c);
 }
@@ -206,8 +210,9 @@ function npFrom(c) {
     const s = c.s, list = s.source.playlist || [];
     const item = list[s.track] || {};
     const what = list.length > 1 || item.duration_ms || item.duration_s ? 'Media server' : 'Internet radio';
+    const to = [s.sink ? outName(streamOut(s)) : '', pl.hearId === s.id ? 'this browser' : ''].filter(Boolean).join(' and ');
     return tag(what === 'Media server' ? PL_SVG.server : PL_SVG.radio, 'local', `On this board · ${what}`) +
-      `<span class="np-state">→ ${s.sink ? esc(outLabel(s.sink.target)) : 'this browser'}</span>`;
+      `<span class="np-state">→ ${esc(to || 'no output')}</span>`;
   }
   return '';
 }
@@ -334,6 +339,8 @@ function hearCheck() {
   if (stuck && Date.now() - pl.heardAt > 4000) hearConnect();
 }
 ['error', 'ended', 'stalled'].forEach(ev => npAudio.addEventListener(ev, () => setTimeout(hearCheck, 1000)));
+// "This browser is connecting…" turns into playing.
+['playing', 'waiting'].forEach(ev => npAudio.addEventListener(ev, () => { if (currentTab === 'player') renderNowPlaying(); }));
 // Back from the background — shown again, thawed after the browser froze the page (Page
 // Lifecycle "resume"), restored from the back/forward cache, or focused: look at once.
 const hearBack = () => { pl.heardAt = 0; hearCheck(); };
@@ -815,9 +822,10 @@ const playlistItem = it => ({url: it.url, title: it.title, artist: it.artist || 
 // output chosen. The art a UPnP server gave is kept here by URL (the daemon does not keep it).
 function playOnBoard(items) {
   items.forEach(it => { pl.art[it.url] = it; });
-  const out = $('np-out').value;
-  const listen = out === 'browser';
-  const sink = listen ? null : out === 'default' ? {type: 'pipewire', target: ''} : {type: out.split(':')[0], target: out.slice(out.indexOf(':') + 1)};
+  const sink = outSink(pl.out);
+  const listen = pl.listen;
+  if (!sink && !listen) { toast('Choose an output in "Play to", or tick "Listen in this browser".'); return; }
+  pl.sw = null;
   const old = boardStream();
   const go = () => {
     return post('/audio/streams', {source: {type: 'url', url: items[0].url, title: items[0].title, playlist: items.map(playlistItem)},
@@ -853,19 +861,193 @@ function decorate(s) {
 
 // ---------------------------------------------------------------- outputs
 
-const outLabel = id => {
-  const e = pl.endpoints && pl.endpoints.sinks.find(x => x.id === id);
-  return e ? (e.address ? devName(e.address) : e.label) : id ? id : 'the default output';
-};
+// Where the board plays what it plays: its output ("none", "default" for PipeWire's default sink,
+// or "<backend>:<endpoint id>": the loopback card, a Bluetooth speaker), and, apart from it, this
+// browser listening or not. Both are what the next thing played gets; picked while the board
+// plays, they change it at once: the output through PUT {"sink"} (the decoder and the queue carry
+// on), this browser by listening or not. The line under the buttons follows a switch until the
+// output takes the audio (and a Bluetooth link streams it), or says why it did not.
+pl.out = lsGet('btbench.pl.out') || 'none';
+pl.listen = lsGet('btbench.pl.listen') !== '0';
+if (pl.out === 'browser') { pl.out = 'none'; pl.listen = true; }  // the choice before there were two
+pl.sw = null;  // a switch: {value, seq, phase: asking|starting|linking|done|failed, at, error}
+
+const outSink = v => v === 'none' ? null : v === 'default' ? {type: 'pipewire', target: ''}
+  : {type: v.split(':')[0], target: v.slice(v.indexOf(':') + 1)};
+const streamOut = s => !s.sink ? 'none' : s.sink.target ? `${s.sink.type}:${s.sink.target}` : 'default';
+const outEndpoint = v => pl.endpoints && pl.endpoints.sinks.find(e => v.endsWith(':' + e.id));
+function outName(v) {
+  if (v === 'none') return 'No board output';
+  if (v === 'default') return 'The board’s default output';
+  const e = outEndpoint(v);
+  return e ? (e.address ? devName(e.address) : e.label) : v.slice(v.indexOf(':') + 1);
+}
+// The board's transport that carries a Bluetooth output's audio: its "Audio Source" side (a device
+// can have one each way, see volumeTarget).
+function outTransport(v) {
+  const e = outEndpoint(v);
+  if (!e || !e.address || !pl.media) return null;
+  const same = x => x.address && x.address.toUpperCase() === e.address.toUpperCase();
+  return pl.media.transports.find(x => same(x) && /source/i.test(x.profile || '')) || null;
+}
 
 function renderOutputs(ep) {
   pl.endpoints = ep;
-  const opts = [{value: 'browser', label: 'This browser'}];
-  if (ep.backend === 'pipewire') opts.push({value: 'default', label: 'The board’s default output'});
-  const kind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
-  ep.sinks.forEach(e => opts.push({value: `${kind}:${e.id}`, label: e.address ? `${devName(e.address)} (Bluetooth)` : e.label}));
-  fillSelect($('np-out'), opts, idle($('np-out')) ? (lsGet('btbench.pl.out') || 'browser') : null);
   renderNowPlaying();  // "Playing on …" names the output now that its label is known
+}
+
+// The buttons: no output, PipeWire's default, then every sink (Bluetooth first, as the endpoint
+// list has them). One chosen that is not there any more (a speaker gone) stays, greyed.
+function outOptions() {
+  const ep = pl.endpoints;
+  const o = [{value: 'none', name: 'No board output', sub: 'browsers only', icon: PL_SVG.off}];
+  if (!ep || ep.backend === 'pipewire') o.push({value: 'default', name: 'Default output', icon: PL_SVG.speaker});
+  const kind = ep && ep.backend === 'alsa' ? 'alsa' : 'pipewire';
+  (ep ? ep.sinks : []).forEach(e => {
+    const v = `${kind}:${e.id}`;
+    const t = e.address ? outTransport(v) : null;
+    o.push({value: v, name: e.address ? devName(e.address) : e.label,
+      sub: e.address ? (t && t.codec ? t.codec.name : 'Bluetooth') : e.kind === 'loopback' ? 'loopback' : '',
+      icon: e.address ? PL_SVG.bt : e.kind === 'loopback' ? PL_SVG.loop : PL_SVG.speaker});
+  });
+  return o;
+}
+
+function renderOuts() {
+  const b = boardStream();
+  const cur = b ? streamOut(b) : pl.out;
+  swAdvance(b);
+  const sw = pl.sw && pl.sw.phase !== 'done' ? pl.sw : null;
+  const opts = outOptions();
+  if (!opts.some(o => o.value === cur)) opts.push({value: cur, name: outName(cur), sub: 'not connected', icon: PL_SVG.bt, gone: true});
+  setHTML($('np-outs'), opts.map(o => {
+    const busy = sw && sw.phase !== 'failed' && sw.value === o.value;
+    const bad = sw && sw.phase === 'failed' && sw.value === o.value;
+    const on = !busy && !bad && o.value === cur;
+    const cls = 'np-o' + (on ? ' on' : '') + (busy ? ' busy' : '') + (bad ? ' bad' : '') + (o.gone ? ' gone' : '');
+    return `<button class="${cls}" data-out="${esc(o.value)}" role="radio" aria-checked="${on}">` +
+      (busy ? '<span class="spin"></span>' : svg(o.icon)) + `<b>${esc(o.name)}</b>${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</button>`;
+  }).join(''));
+  const box = $('np-listen');
+  if (idle(box)) box.checked = b ? pl.hearId === b.id : pl.listen;
+  const st = outStatus(b);
+  setClass($('np-out-status'), 'np-out-status ' + st.cls);
+  setHTML($('np-out-status'), (st.cls === 'busy' ? '<span class="spin"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
+}
+
+// What the board is doing about the output, in words.
+function outStatus(b) {
+  const sw = pl.sw;
+  const name = v => `<b>${esc(outName(v))}</b>`;
+  const here = b && pl.hearId === b.id;
+  const browser = here ? (npAudio.paused || npAudio.readyState < 3 ? ' This browser is connecting…' : ' Also in this browser.') : '';
+  if (sw && sw.phase === 'failed') {
+    return {cls: 'bad', html: `Could not play on ${name(sw.value)}: ${esc(outReason(sw.error))}.` +
+      (here ? ' Still playing in this browser.' : b && !b.sink ? ' Pick another output, or listen in this browser: with neither, the board stops in 30 s.' : '')};
+  }
+  if (sw && sw.phase !== 'done') {
+    const what = {asking: `Asking the board to play on ${name(sw.value)}…`,
+      starting: `Opening ${name(sw.value)}…`,
+      linking: `${name(sw.value)} takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase];
+    return {cls: 'busy', html: what};
+  }
+  if (!b) {
+    const to = [pl.out !== 'none' ? name(pl.out) : '', pl.listen ? 'this browser' : ''].filter(Boolean).join(' and ');
+    return {cls: '', html: to ? `What you play next goes to ${to}.` : 'Choose where what you play next goes.'};
+  }
+  const ss = b.sink_status || {};
+  if (b.sink) {
+    if (ss.state === 'starting') return {cls: 'busy', html: `Opening ${name(streamOut(b))}…`};
+    const t = outTransport(streamOut(b));
+    if (ss.state === 'stalled') {
+      return {cls: 'bad', html: `${name(streamOut(b))} takes no audio` + (t ? ` (its Bluetooth link is ${esc(t.state)})` : '') +
+        ': the board waits for it, and the music has stopped. Pick another output.'};
+    }
+    if (t && t.state !== 'active') {
+      return {cls: 'warn', html: `${name(streamOut(b))} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.` + browser};
+    }
+    const codec = t && t.codec ? ` · ${esc(t.codec.name)}${t.codec.rate ? ' ' + t.codec.rate / 1000 + ' kHz' : ''}` : '';
+    return {cls: 'good', html: `Playing on ${name(streamOut(b))}${codec}.` + browser};
+  }
+  if (ss.state === 'failed') {
+    return {cls: 'bad', html: `Lost ${esc(outName('x:' + ss.target))}: ${esc(outReason(ss.error))}.` +
+      (here ? ' Still playing in this browser.' : ' Pick another output, or listen in this browser: with neither, the board stops in 30 s.')};
+  }
+  if (here) return {cls: browser.includes('connecting') ? 'busy' : 'good', html: browser.includes('connecting') ? 'Connecting this browser…' : 'Playing in this browser.'};
+  const others = b.listeners;
+  return {cls: 'warn', html: others ? `Playing to ${others} other browser${others > 1 ? 's' : ''} only.`
+    : 'Playing to no output: pick one, or listen in this browser. With neither, the board stops in 30 s.'};
+}
+
+// PipeWire's words for an output that is not there.
+const outReason = e => /target not found/.test(e || '') ? 'it is not connected (no such output in PipeWire)' : (e || 'no reason given');
+
+// The switch under way, moved on by what the stream says: its sink_status answers our request
+// (seq) once the pump has opened the new output or failed to; a Bluetooth one is done when its
+// link streams.
+function swAdvance(b) {
+  const sw = pl.sw;
+  if (!sw || sw.phase === 'done' || sw.phase === 'failed') return;
+  const late = Date.now() - sw.at;
+  if (!b) { sw.phase = 'failed'; sw.error = 'the board stopped playing'; return; }
+  if (sw.phase === 'asking' || sw.seq == null) { if (late > 10000) { sw.phase = 'failed'; sw.error = 'the board did not answer'; } return; }
+  const ss = b.sink_status || {};
+  if (ss.seq < sw.seq) { if (late > 10000) { sw.phase = 'failed'; sw.error = 'the board did not switch within 10 s'; } return; }
+  if (sw.value === 'none') { sw.phase = 'done'; return; }
+  if (ss.state === 'failed' || ss.state === 'stalled') { sw.phase = 'failed'; sw.error = ss.error; return; }
+  if (ss.state === 'starting') { sw.phase = 'starting'; if (late > 10000) { sw.phase = 'failed'; sw.error = 'it took no audio within 10 s'; } return; }
+  if (ss.state === 'playing') {
+    const t = outTransport(sw.value);
+    // A Bluetooth link takes a moment to start streaming; past 8 s the steady line says how it is.
+    sw.phase = t && t.state !== 'active' && late < 8000 ? 'linking' : 'done';
+  }
+}
+
+// An output picked: remembered for what is played next, and what plays now moves there.
+function pickOut(v) {
+  pl.out = v;
+  lsSet('btbench.pl.out', v);
+  const b = boardStream();
+  if (!b || streamOut(b) === v) { pl.sw = null; renderOuts(); return; }
+  const sw = {value: v, phase: 'asking', at: Date.now(), seq: null};
+  pl.sw = sw;
+  renderOuts();
+  put(`/audio/streams/${b.id}`, {sink: outSink(v)}).then(s => {
+    if (pl.sw !== sw) return;
+    sw.seq = s.sink_req;
+    sw.phase = 'starting';
+    const i = pl.streams.findIndex(x => x.id === s.id);
+    if (i >= 0) pl.streams[i] = decorate(s);
+    renderNowPlaying();
+  }).catch(e => {
+    if (pl.sw !== sw) return;
+    sw.phase = 'failed';
+    sw.error = e.message;
+    renderOuts();
+  });
+  // The switch's result comes with the streams topic; this view asks too, in case it is slow.
+  [400, 1200, 2500, 5000, 9000].forEach(t => setTimeout(() => { if (pl.sw === sw && sw.phase !== 'done') refreshPlayerStreams(); }, t));
+}
+
+// "Listen in this browser" ticked or not: what the board plays now is heard here, or not.
+function pickListen(on) {
+  pl.listen = on;
+  lsSet('btbench.pl.listen', on ? '1' : '0');
+  const b = boardStream();
+  if (b && on && pl.hearId !== b.id) hear(b.id);
+  if (b && !on && pl.hearId === b.id) hearStop();
+  renderNowPlaying();
+}
+
+// The outputs come and go with Bluetooth: asked again whenever the board's audio links change,
+// and once more a moment later (PipeWire makes a speaker's sink a little after BlueZ's transport).
+function outLinksChanged(m) {
+  const key = (m.transports || []).map(t => t.path).sort().join(',');
+  if (key === pl.linksKey) return;
+  pl.linksKey = key;
+  const ask = () => api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
+  ask();
+  setTimeout(ask, 2000);
 }
 
 function refreshPlayerStreams() {
@@ -911,7 +1093,11 @@ function setupPlayer() {
     // A slider sends many values a second: at most one request each 150 ms.
     pl.volT = setTimeout(() => setVolume(parseInt(e.target.value, 10)), 150);
   };
-  $('np-out').onchange = e => lsSet('btbench.pl.out', e.target.value);
+  $('np-outs').onclick = e => {
+    const b = e.target.closest('[data-out]');
+    if (b) pickOut(b.dataset.out);
+  };
+  $('np-listen').onchange = e => pickListen(e.target.checked);
   $('np-hear').onclick = () => {
     const c = current();
     if (c.kind !== 'phone' || pl.hearBusy) return;
@@ -990,7 +1176,7 @@ registerTab('player', {
     // left, with its Back entries; a phone's only while the phone is still there.
     const kept = () => pl.libPath.length && pl.libItems.length && (pl.libPath[0].parent || {}).lib === pl.lib &&
       (pl.lib !== 'phone' || phones().some(x => x.browsable));
-    api('/media').then(m => { pl.media = m; notePlayers(m.players); renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); })
+    api('/media').then(m => { pl.media = m; pl.linksKey = (m.transports || []).map(t => t.path).sort().join(','); notePlayers(m.players); renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); })
       .catch(() => { renderLibTabs(); if (!kept()) openLib(pl.lib); });
     api('/bluetooth').then(b => { btState = b; renderNowPlaying(); }).catch(() => {});
     api('/audio/endpoints').then(renderOutputs).catch(() => {});
@@ -1010,6 +1196,7 @@ registerTab('player', {
       const hadLib = phones().some(p => p.browsable);
       pl.media = data;
       notePlayers(data.players);
+      outLinksChanged(data);
       if (hadLib !== phones().some(p => p.browsable)) renderLibTabs();
       if (!(document.activeElement && document.activeElement.id === 'np-vol')) renderNowPlaying();
     } else if (topic === 'audio.streams') {

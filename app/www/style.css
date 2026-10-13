@@ -710,8 +710,35 @@ td.acts > * { margin-right: 0.25rem; }
 .np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 200px; max-width: 320px; }
 .np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .np-vol input { flex: 1; }
-.np-out { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; min-width: 0; }
-.np-out select { max-width: 260px; }
+/* Where the board plays (player.js renderOuts): its outputs as buttons, this browser as a
+   checkbox, and a line saying what the board is doing about it. */
+.np-out { flex: 1 1 100%; min-width: 0; font-size: 0.85rem; text-align: left; }
+.np-out-head { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.np-out-label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; }
+.np-listen { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.np-outs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.np-o {
+  display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.7rem; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 0.82rem; text-align: left; min-width: 0; max-width: 100%;
+}
+.np-o svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.np-o b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-o small { color: var(--muted); white-space: nowrap; }
+.np-o:hover { border-color: var(--accent); }
+.np-o.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.np-o.busy { border-color: var(--accent); border-style: dashed; }
+.np-o.bad { border-color: var(--bad); color: var(--bad); }
+.np-o.gone { opacity: 0.6; }
+.np-o .spin { width: 13px; height: 13px; }
+.np-out-status { display: flex; align-items: flex-start; gap: 0.45rem; margin-top: 0.5rem; min-height: 1.3em; color: var(--muted); }
+.np-out-status .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 0.4em; background: var(--muted); }
+.np-out-status.good { color: var(--good); }
+.np-out-status.good .dot { background: var(--good); }
+.np-out-status.warn { color: var(--warn); }
+.np-out-status.warn .dot { background: var(--warn); }
+.np-out-status.bad { color: var(--bad); }
+.np-out-status.bad .dot { background: var(--bad); }
+.np-out-status .spin { width: 13px; height: 13px; margin-top: 0.15em; }
 /* The library's page: its list grows with the page instead of scrolling in a box, and the bar
    with what plays stays at the bottom of the screen. */
 .np-libcard #np-lib { max-height: none; }
