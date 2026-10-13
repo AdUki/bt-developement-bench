@@ -130,38 +130,6 @@ void test_kept_adapter_settings() {
   CHECK(bt_restore_adapter_props(json{{"powered", "yes"}, {"discoverable_timeout_s", -1}}).empty());
 }
 
-void test_bredr_connected() {
-  // read_json's shape: interface → property → value.
-  const json objs = {
-      {"/org/bluez/hci0", {{"org.bluez.Adapter1", {{"Powered", true}}}}},
-      // A speaker on BR/EDR (with the bearer object): reconnected.
-      {"/org/bluez/hci0/dev_50_1E_2D_95_16_34",
-       {{"org.bluez.Device1", {{"Address", "50:1e:2d:95:16:34"}, {"Paired", true}, {"Connected", true}, {"Class", 0x240414}}},
-        {"org.bluez.Bearer.BREDR1", {{"Connected", true}}},
-        {"org.bluez.Bearer.LE1", {{"Connected", true}}}}},
-      // Dual mode, connected over LE only: BlueZ's auto-connect has it.
-      {"/org/bluez/hci0/dev_66_E5_17_5C_19_5D",
-       {{"org.bluez.Device1", {{"Address", "66:E5:17:5C:19:5D"}, {"Paired", true}, {"Connected", true}, {"Class", 1}}},
-        {"org.bluez.Bearer.BREDR1", {{"Connected", false}}}}},
-      // No bearer objects (an older BlueZ): connected with a class of device counts, LE-only does not.
-      {"/org/bluez/hci0/dev_AA_00_00_00_00_01",
-       {{"org.bluez.Device1", {{"Address", "AA:00:00:00:00:01"}, {"Paired", true}, {"Connected", true}, {"Class", 0x5a020c}}}}},
-      {"/org/bluez/hci0/dev_AA_00_00_00_00_02",
-       {{"org.bluez.Device1", {{"Address", "AA:00:00:00:00:02"}, {"Paired", true}, {"Connected", true}}}}},
-      // Not paired, or on another adapter: never.
-      {"/org/bluez/hci0/dev_AA_00_00_00_00_03",
-       {{"org.bluez.Device1", {{"Address", "AA:00:00:00:00:03"}, {"Paired", false}, {"Connected", true}, {"Class", 1}}}}},
-      {"/org/bluez/hci1/dev_AA_00_00_00_00_04",
-       {{"org.bluez.Device1", {{"Address", "AA:00:00:00:00:04"}, {"Paired", true}, {"Connected", true}, {"Class", 1}}}}},
-  };
-  std::vector<std::string> got = bt_bredr_connected(objs, "/org/bluez/hci0");
-  std::string all;
-  for (const std::string& a : got) all += a + " ";
-  CHECK_EQ(all, std::string("50:1E:2D:95:16:34 AA:00:00:00:00:01 "));
-  CHECK(bt_bredr_connected(objs, "").empty());
-  CHECK(bt_bredr_connected(json::object(), "/org/bluez/hci0").empty());
-}
-
 void test_connect_over_bredr() {
   const json speaker = {{"org.bluez.Device1", {{"UUIDs", {"0000110b-0000-1000-8000-00805f9b34fb", "00001844-0000-1000-8000-00805f9b34fb"}}}},
                         {"org.bluez.Bearer.BREDR1", {{"Connected", false}}},
@@ -185,7 +153,6 @@ int main() {
   test_scan_filter();
   test_request_json();
   test_kept_adapter_settings();
-  test_bredr_connected();
   test_connect_over_bredr();
   return report("test_bluetooth");
 }

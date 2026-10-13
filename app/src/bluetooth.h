@@ -49,14 +49,6 @@ bool bt_agent_capability_ok(const std::string& cap);
 // force after it. A discoverable that times out is a moment ("visible for three minutes"), not a
 // setting, and is kept as off.
 nlohmann::json bt_keep_adapter_settings(nlohmann::json kept, const nlohmann::json& set, uint32_t timeout_s);
-// The devices to reconnect when the bench starts: the paired ones on `adapter_path` connected over
-// BR/EDR (their Bearer.BREDR1, or with a BlueZ without it a connected device with a class of
-// device: LE-only devices have none). A phone reconnects its speaker when it boots; the bench, a
-// source, must too, since a peer that saw a clean disconnect (the board shutting down: "remote
-// user terminated") does not retry, and BlueZ reconnects only after a link loss. LE devices are
-// left to BlueZ's own auto-connect. Addresses upper case.
-std::vector<std::string> bt_bredr_connected(const nlohmann::json& objs, const std::string& adapter_path);
-
 // Whether a plain Connect (no profile) of this device (its object: interface → properties) should go
 // over BR/EDR: a dual-mode device with a classic audio, HID or PAN profile and a BR/EDR bearer.
 // Device1.Connect follows BlueZ's PreferredBearer, "last-used" by default, so a speaker last used
@@ -187,7 +179,7 @@ class BtManager {
   // GET /api/bluetooth: {available, error, adapter (the primary), adapters (each with primary, usb,
   // discovery and the discovery filters it takes), devices (every adapter's, each with its
   // adapter), request, agent:{policy, capability, registered}, discovery (the primary's):{on, ours,
-  // filter, filters, until_s}, reconnect}.
+  // filter, filters, until_s}}.
   nlohmann::json state() const;
   // One device in full, with busy/error; null when unknown. `adapter` (hciN or address) picks its
   // object on that adapter; "" the primary's, else the first adapter that has it.
@@ -207,9 +199,6 @@ class BtManager {
   bool set_primary(const std::string& want, std::string* err);
   // Agent settings: "auto"|"ask", and the IO capability (re-registers the agent).
   bool set_agent(const std::string& policy, const std::string& capability, std::string* err);
-  // Whether the devices connected over BR/EDR when the bench went down are connected again when it
-  // comes up (bt_bredr_connected; kept in bluetooth.json, on by default).
-  void set_reconnect(bool on);
   // Discovery on `adapter` ("" the primary) with a filter for `seconds` (0: until stopped). Each
   // adapter scans on its own; stopping with `adapter` "" stops every scan started here.
   bool scan(bool on, const std::string& adapter, const BtScanFilter& f, unsigned seconds, std::string* err);
@@ -268,9 +257,6 @@ class BtManager {
   void set_error(std::string e);
   void changed(bool request);
   void restore_adapters(const nlohmann::json& objs, const std::vector<BtAdapterId>& ids);
-  void note_connected(const nlohmann::json& objs, const std::vector<BtAdapterId>& ids);
-  void reconnect_tick(uint64_t now);
-  void forget_reconnect(const std::string& adapter_path, const std::string& address);
   std::vector<BtAdapterId> adapter_ids(const nlohmann::json& objs) const;
   std::string default_alias(const BtAdapterId& a) const;
   std::string find_adapter_locked(const std::string& want) const;
@@ -315,18 +301,6 @@ class BtManager {
   std::string state_file_;  // set before start()
   std::string primary_;     // the adapter address set_primary() chose; "" the default
   std::vector<BtAdapterId> ids_;  // every adapter at the last read, with `usb` filled in
-  bool reconnect_on_ = true;
-  // bt_bredr_connected of every adapter as last seen, less what was disconnected here. `adapter`
-  // is the adapter's address; "" (a list kept before there were several) is the primary.
-  struct Reconnect {
-    std::string adapter;
-    std::string device;
-    bool operator==(const Reconnect& o) const { return adapter == o.adapter && device == o.device; }
-  };
-  std::vector<Reconnect> reconnect_;
-  // Disconnected here and not yet seen down: not re-added meanwhile (a re-read can come before the
-  // link is gone), and added again by the next connection after. By device object path.
-  std::set<std::string> forgotten_;
   bool agent_registered_shared_ = false;
   std::map<std::string, std::vector<std::string>> discovery_filters_;  // by adapter path: GetDiscoveryFilters
   // The scans started here, by adapter path.
@@ -361,19 +335,9 @@ class BtManager {
   uint64_t last_refresh_ns_ = 0;
   uint64_t refresh_took_ns_ = 0;     // how long the last read took
   bool refresh_in_flight_ = false;  // a GetManagedObjects is out: a slow BlueZ is not asked again
-  // Each adapter's UUIDs as last read, when they last changed and when the adapter came up: the
-  // reconnect at start waits for the audio stack's endpoints (reconnect_tick). By adapter path.
-  struct AdapterSeen {
-    std::string uuids;
-    uint64_t uuids_at_ns = 0;
-    uint64_t up_ns = 0;
-  };
-  std::map<std::string, AdapterSeen> seen_;
   bool stale_ = false;              // (m_) the last read went unanswered: the tree shown is older
   std::string ready_adapter_;  // the adapter BusUsers were last told is ready
   std::set<std::string> restored_;  // adapter paths given their kept settings since BlueZ showed them
-  uint64_t reconnect_at_ns_ = 0;  // the next try at reconnect_ (0: none due)
-  int reconnect_tries_ = 0;
   std::map<std::string, std::string> started_here_;  // device path -> the PIN to offer
   std::set<std::string> after_pair_;  // devices whose Connect follows the pairing done here
   Pending* pending_ = nullptr;

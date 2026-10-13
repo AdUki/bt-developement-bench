@@ -59,7 +59,6 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
  "devices": [ ...see below... ],
  "request": null,
  "agent": {"policy": "auto", "capability": "KeyboardDisplay", "registered": true},
- "reconnect": {"on": true, "devices": [{"adapter": "hci0", "address": "50:1E:2D:95:16:34"}]},
  "discovery": {"on": false, "ours": false,
                "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": false,
                           "uuids": [], "pattern": null, "discoverable": false, "auto_connect": false},
@@ -159,22 +158,13 @@ Any of: `powered`, `alias`, `discoverable`, `discoverable_timeout_s`, `pairable`
 e.g. `"hci1"` or its address; default the primary), `primary` (an adapter, hciN or its address, to
 make the primary; `""` back to the board's own; 409 with `--bt-adapter`), `agent` (`"auto"` or
 `"ask"`), `agent_capability` (`DisplayOnly`, `DisplayYesNo`, `KeyboardOnly`, `NoInputNoOutput`,
-`KeyboardDisplay`), `reconnect` (bool). Answers with
+`KeyboardDisplay`). Answers with
 the new state. What is set is kept in `/data/btbench/bluetooth.json` and put back on the adapter
 whenever BlueZ shows it (a reboot, a bluetoothd restart), since BlueZ powers adapters on at start
 and forgets Pairable; a discoverable with a timeout is kept as off. On a board, an adapter whose
 alias was never set here is given the board's hostname (`btbench-257bfc`), so boards in range of
 each other show up under names of their own; `"alias": ""` goes back to that (BlueZ's `Name`, which
 stays `btbench`, is not changed).
-
-`reconnect` (on by default): when BlueZ appears with an adapter (a boot, a bluetoothd restart),
-btbenchd connects again, over BR/EDR and on the adapter they were connected to, the paired devices
-that were connected over BR/EDR when it went: up to three tries, 35 s apart, after 5 s — and not before the board's own A2DP endpoints are
-registered and have settled (up to 30 s): a device connected while PipeWire is still registering
-them discovers only part of them (without SBC, say) and keeps that list for the connection. A peer that saw the board shut down cleanly does
-not call back by itself, and BlueZ reconnects only after a link loss. `reconnect.devices` is that
-list; a device leaves it when it is disconnected or removed through the API, or unpaired. LE
-devices are BlueZ's auto-connect's.
 
 The agent is BlueZ's default agent. With `auto` it accepts every pairing and every service
 authorization by itself, the way a device with no screen would, and only a passkey to type goes to
