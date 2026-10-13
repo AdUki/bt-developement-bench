@@ -38,5 +38,10 @@ function setupKernel() {
   };
 }
 
-registerTab('kernel', {show: refreshKernel});
+registerTab('kernel', {
+  show() {
+    refreshKernel();
+    refreshBtDebug();
+  },
+});
 setupKernel();

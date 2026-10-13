@@ -88,7 +88,7 @@ function setupSystem() {
     if (!a) return;
     e.preventDefault();
     logsOpen('f:' + a.dataset.lf, false);
-    $('lg').scrollIntoView({block: 'start', behavior: 'smooth'});
+    go('system/logs');
   };
   $('job-start').onclick = () => post('/jobs', {cmd: $('job-cmd').value, args: $('job-args').value})
     .then(j => { refreshJobs(); showJob(j.id); }).catch(fail);
@@ -121,7 +121,7 @@ function renderLogFiles(r) {
   setText($('lf-dir'), r.dir);
   setHTML($('lf-list'), r.files.length ? r.files.map(f => f.link
     ? `<div class="file-row"><span class="mono">${esc(f.name)}</span><span class="small muted">→ ${esc(f.link)}</span></div>`
-    : `<div class="file-row"><span><a href="#" data-lf="${esc(f.name)}" class="mono" title="Open in the viewer below">${esc(f.name)}</a>
+    : `<div class="file-row"><span><a href="#" data-lf="${esc(f.name)}" class="mono" title="Open in Logs">${esc(f.name)}</a>
         <span class="small muted">${fmtBytes(f.size)} · ${fmtTime(f.mtime_ms)}</span></span>
       <a class="small-btn btn-link" href="/api/system/logs/${encodeURIComponent(f.name)}?download=1">Download</a></div>`).join('')
     : '<div class="muted small">No log files yet: btbench-logs.service writes them on the board.</div>');
@@ -163,7 +163,7 @@ function setupBtDebug() {
   $('kd-off').onclick = () => put('/system/btdebug', {off: ['all']}).then(renderBtDebug).catch(fail);
   $('kd-show').onclick = () => {
     logsOpen('j:kernel', true);
-    $('lg').scrollIntoView({block: 'start', behavior: 'smooth'});
+    go('system/logs');
   };
 }
 
@@ -174,9 +174,6 @@ registerTab('system', {
     logsShow();
     refreshSystem();
     refreshJobs();
-    // Its status is an awk over the kernel's whole dynamic debug table, most of a second of the one
-    // core: after the log, which is what is looked at first.
-    setTimeout(refreshBtDebug, 1200);
     refreshLogFiles();
   },
   onMessage(topic, d) {

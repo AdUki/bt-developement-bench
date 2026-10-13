@@ -236,16 +236,16 @@ reading what is appended (and scrolls with it while the table is at the bottom).
 *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
 kernel, the stack's services with restart buttons, bluetoothd's command line under a
 disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
-bluetooth), reboot, and under a disclosure a factory reset (every setting back to the image's,
-optionally the paired devices and the Wi-Fi networks too; it reboots, and clears the console's own
-preferences in this browser). *Logs*: one viewer for the journal of a unit or of the kernel and
-the files in `/tmp/logs` (each program's own, `bluez-dbus.log` among them), live with *follow*;
-a debug build's source paths are shown from the source tree on (`src/adapter.c`). *Tools*: the log
-files to download (`clog` reads them on the board), the kernel's Bluetooth debug messages by area
-(HCI core, management, L2CAP, SMP, ISO, SCO, RFCOMM, BNEP, HIDP, the controller drivers; each says
-how many of its messages print, *keep from boot*, *all off*, *show in the journal*) and the jobs
-runner (l2ping, l2test, iperf3, btmgmt, wpctl and the other allowlisted tools, with live output and
-kill).
+bluetooth), the log files to download (`clog` reads them on the board), reboot, and under a
+disclosure a factory reset (every setting back to the image's, optionally the paired devices and
+the Wi-Fi networks too; it reboots, and clears the console's own preferences in this browser).
+*Logs*: one viewer for the journal of a unit or of the kernel and the files in `/tmp/logs` (each
+program's own, `bluez-dbus.log` among them), live with *follow*; a debug build's source paths are
+shown from the source tree on (`src/adapter.c`). *Tools*: the jobs runner (l2ping, l2test, iperf3,
+btmgmt, wpctl and the other allowlisted tools, with live output and kill). *Kernel* also has the
+kernel's Bluetooth debug messages by area (HCI core, management, L2CAP, SMP, ISO, SCO, RFCOMM,
+BNEP, HIDP, the controller drivers; each says how many of its messages print, *keep from boot*,
+*all off*, *show in the journal*).
 
 How the stack is configured (these four views were an area of their own, *Setup*, and their
 old addresses still work). *Profiles*: every profile the board offers, on and off

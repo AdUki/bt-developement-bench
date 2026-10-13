@@ -684,6 +684,11 @@
           <div id="sys-btargs-msg" class="small muted"></div>
         </details>
       </div>
+      <div class="card">
+        <div class="card-head"><h3>Log files</h3><span id="lf-dir" class="small muted mono"></span></div>
+        <p class="hint">Each program's log in its own format (btbench-logd), for clog: <span class="mono">clog -t /tmp/logs/bluez.log</span> on the board, or download one here.</p>
+        <div id="lf-list" class="lf-list"></div>
+      </div>
       <div class="card danger-zone">
         <div class="card-head"><div><h3>Power</h3><p class="hint">The console reconnects by itself when the board is back.</p></div>
           <button id="sys-reboot" class="danger">Reboot the board</button></div>
@@ -728,24 +733,6 @@
 
     <div class="pane" data-pane="tools">
       <div class="card">
-        <div class="card-head"><h3>Log files</h3><span id="lf-dir" class="small muted mono"></span></div>
-        <p class="hint">Each program's log in its own format (btbench-logd), for clog: <span class="mono">clog -t /tmp/logs/bluez.log</span> on the board, or download one here.</p>
-        <div id="lf-list" class="lf-list"></div>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <h3>Kernel Bluetooth logs</h3>
-          <div class="acts">
-            <button class="small-btn" id="kd-off">All off</button>
-            <button class="small-btn" id="kd-show">Show in the journal</button>
-          </div>
-        </div>
-        <p class="hint">The kernel's own debug messages (BT_DBG) by area, through dynamic debug. They are chatty: a streaming link logs thousands of lines a second and the logging changes the timing, so switch on only what you are looking at.</p>
-        <div id="kd-areas" class="kd-areas"></div>
-        <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
-        <div id="kd-msg" class="small muted"></div>
-      </div>
-      <div class="card">
         <div class="card-head"><h3>Run a tool</h3></div>
         <div class="row wrap">
           <select id="job-cmd" aria-label="Tool"></select>
@@ -787,6 +774,19 @@
         <button id="k-rollback" class="danger">Roll back</button>
       </div>
       <div id="k-msg" class="small muted"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>Kernel Bluetooth logs</h3>
+        <div class="acts">
+          <button class="small-btn" id="kd-off">All off</button>
+          <button class="small-btn" id="kd-show">Show in the journal</button>
+        </div>
+      </div>
+      <p class="hint">The kernel's own debug messages (BT_DBG) by area, through dynamic debug. They are chatty: a streaming link logs thousands of lines a second and the logging changes the timing, so switch on only what you are looking at.</p>
+      <div id="kd-areas" class="kd-areas"></div>
+      <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
+      <div id="kd-msg" class="small muted"></div>
     </div>
   </section>
 </main>

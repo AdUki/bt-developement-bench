@@ -226,7 +226,7 @@ btbench-btdebug status              # on the board: per area, call sites and how
 
 Areas: `hci` (core, events, connections, hci_sync, sockets), `mgmt`, `l2cap`, `smp`, `iso`, `sco`,
 `rfcomm`, `bnep`, `hidp`, `driver` (hci_uart, btbcm, btusb, btrtl, btintel), `all`. The console has
-the same switches in System → Logs and tools, and its journal shows "Kernel log". *Keep from boot*
+the same switches in System → Kernel, and its journal shows "Kernel log". *Keep from boot*
 writes `dyndbg` options to `/etc/modprobe.d/btbench-btdebug.conf`, applied as the modules load.
 
 They are chatty: an A2DP stream with `l2cap` on logs thousands of lines a second, enough to load
