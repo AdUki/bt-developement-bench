@@ -51,23 +51,19 @@
             <div class="np-outs" id="np-outs" role="radiogroup" aria-label="The board's output"></div>
             <div class="np-out-status" id="np-out-status" role="status" aria-live="polite"></div>
           </div>
-          <button class="small-btn" id="np-hear" hidden title="Hear what the phone sends the board, in this browser">Listen in this browser</button>
         </div>
       </div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h3>Up next</h3><span id="np-q-note" class="small muted"></span></div>
-      <div id="np-queue" class="tracklist"></div>
     </div>
     </div>
     <!-- The library on a page of its own: long folders get the screen, and the bar at the bottom
          keeps what plays in reach while browsing. -->
     <div class="pane" data-pane="library">
       <div class="card np-libcard" data-full>
-        <div class="card-head"><div class="segs" id="np-lib-tabs"></div></div>
+        <div class="card-head"><div class="segs" id="np-lib-tabs"></div><span id="np-q-note" class="small muted" hidden></span></div>
         <div class="row" id="np-search-row" hidden><input type="search" id="np-search" class="grow" placeholder="Search the phone"></div>
         <div id="np-crumbs" class="small crumbs"></div>
         <div id="np-lib" class="tracklist"></div>
+        <div id="np-queue" class="tracklist" hidden></div>
       </div>
       <div class="np-mini card" id="np-mini" hidden>
         <a href="#player/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
@@ -284,7 +280,7 @@
     <div class="pane" data-pane="streams">
       <div class="card" id="st-out">
         <div class="card-head">
-          <h3>Output</h3>
+          <h3>Output for new streams</h3>
           <button id="st-refresh" class="small-btn" title="Read PipeWire's nodes again">Refresh</button>
         </div>
         <div class="grid">
@@ -295,7 +291,7 @@
           <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
           <span id="st-backend" class="small muted"></span>
         </div>
-        <p class="hint">Every stream started on this page plays here. A speaker or car shows what plays on its display, and its buttons pause and skip it. Music from media servers is in Listen → Library.</p>
+        <p class="hint">Every stream started on this page starts here; each running stream has its own output ("to"), so two streams can play to two devices. A speaker or car shows what plays on its display, and its buttons pause and skip it. Music from media servers is in Listen → Library.</p>
       </div>
 
       <h2>Running</h2>

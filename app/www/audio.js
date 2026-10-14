@@ -42,16 +42,7 @@ function renderEndpoints(ep) {
   // Without PipeWire the only endpoints are the loopback card's, played to with aplay.
   setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'PipeWire is not running'}` +
     `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
-  // Bluetooth sinks first, by the device's name and codec: with nothing chosen before, the first
-  // connected speaker or car is where things play. Listening only is last, not the default.
-  const sinkKind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
-  const sinks = [];
-  const name = e => `${e.label}${e.codec ? ' · ' + e.codec.toUpperCase().replace('_', '-') : ''}`;
-  ep.sinks.filter(e => e.kind === 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
-  const def = ep.sinks.find(e => e.default);
-  if (ep.backend === 'pipewire') sinks.push({value: 'pipewire:', label: `Default output${def ? ' (' + def.label + ')' : ''}`});
-  ep.sinks.filter(e => e.kind !== 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
-  sinks.push({value: '', label: 'Nowhere: listen in this browser only'});
+  const sinks = sinkOptions(ep, 'Nowhere: listen in this browser only');
   // A first fill keeps the saved choice or takes the first option: the empty select's value is ""
   // too, which would pick listening only.
   const sel = $('st-sink'), saved = idle(sel) ? lsGet('btbench.au.sink') : null;
@@ -61,7 +52,26 @@ function renderEndpoints(ep) {
   if (ep.backend === 'pipewire') caps.unshift({value: 'pipewire:', label: 'the default source'});
   fillSelect($('st-capture'), caps);
   fillSelect($('st-monitor'), ep.backend === 'pipewire' ? ep.sinks.map(e => ({value: e.id, label: epLabel(e)})) : []);
+  au.streams.forEach(upsertStream);  // each running stream's own output picker
 }
+
+// Where a stream can play, as select options ("<type>:<target>", "" for nowhere): Bluetooth sinks
+// first, by the device's name and codec — with nothing chosen before, the first connected speaker
+// or car is where things play — then PipeWire's default, the other sinks, and nowhere last.
+function sinkOptions(ep, nowhere) {
+  const sinkKind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
+  const sinks = [];
+  const name = e => `${e.label}${e.codec ? ' · ' + e.codec.toUpperCase().replace('_', '-') : ''}`;
+  ep.sinks.filter(e => e.kind === 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
+  const def = ep.sinks.find(e => e.default);
+  if (ep.backend === 'pipewire') sinks.push({value: 'pipewire:', label: `Default output${def ? ' (' + def.label + ')' : ''}`});
+  ep.sinks.filter(e => e.kind !== 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
+  sinks.push({value: '', label: nowhere});
+  return sinks;
+}
+
+// A select's value as a stream's sink: null (listeners only), or {type, target}.
+const sinkOf = v => (v ? {type: v.slice(0, v.indexOf(':')), target: v.slice(v.indexOf(':') + 1)} : null);
 
 function refreshEndpoints(fresh) {
   return api('/audio/endpoints' + (fresh ? '?fresh=1' : '')).then(renderEndpoints)
@@ -82,12 +92,7 @@ function renderOutCodec() {
 }
 
 // The sink chosen in the form, as a stream's sink: null (listen only), or {type, target}.
-function chosenSink() {
-  const v = $('st-sink').value;
-  if (!v) return null;
-  const i = v.indexOf(':');
-  return {type: v.slice(0, i), target: v.slice(i + 1)};
-}
+const chosenSink = () => sinkOf($('st-sink').value);
 
 // ---------------------------------------------------------------- streams
 
@@ -160,6 +165,7 @@ function streamCard(s) {
     <div class="small st-meta"></div>
     <div class="st-meters"></div>
     <div class="row wrap small">
+      <label class="row">to <select class="st-out" aria-label="Where this stream plays"></select></label>
       <label class="row">gain <input type="range" class="st-gain grow" min="-60" max="20" step="0.5"> <span class="mono st-gain-v"></span></label>
       ${s.source.type === 'tone' ? `<label class="row">Hz <input type="number" class="st-freq narrow" min="1"></label>` : ''}
       ${s.source.type === 'tone' || s.source.type === 'noise' ? `<label class="row">level <input type="number" class="st-level narrow" min="-96" max="0"> dB</label>` : ''}
@@ -191,6 +197,8 @@ function upsertStream(s) {
   if (s.meta.name) meta.push(s.meta.name);
   meta.push(`${s.rate} Hz · ${s.channels === 1 ? 'mono' : 'stereo'} · ${fmtMs(s.seconds * 1000)}`);
   if (s.listeners) meta.push(`${s.listeners} listening`);
+  const ss = s.sink_status || {};
+  if (s.sink && ss.state && ss.state !== 'playing') meta.push(`output ${ss.state}`);
   setText(q('.st-meta'), meta.join(' · '));
   setHTML(q('.st-meters'), s.state === 'running' ? meterHTML(s.level, s.channels) : '');
   setText(q('.st-err'), s.error || '');
@@ -202,6 +210,16 @@ function upsertStream(s) {
   const lv = q('.st-level');
   if (lv && idle(lv)) lv.value = s.source.level_db;
   const live = s.state === 'running' || s.state === 'starting';
+  // Its own output: moved there at once (the source carries on). One not there any more (a
+  // speaker gone) stays in the list, named, until another is picked.
+  const o = q('.st-out');
+  if (idle(o)) {
+    const cur = s.sink ? `${s.sink.type}:${s.sink.target}` : '';
+    const opts = au.endpoints ? sinkOptions(au.endpoints, 'Nowhere (listeners only)') : [];
+    if (!opts.some(x => x.value === cur)) opts.push({value: cur, label: s.sink ? `${s.sink.target || 'Default output'} (not there)` : 'Nowhere (listeners only)'});
+    fillSelect(o, opts, cur);
+  }
+  o.disabled = !live;
   q('.st-listen').hidden = !live;
   if (q('.st-pause')) {
     const n = (s.source.playlist || []).length;
@@ -694,7 +712,9 @@ function playerAction(path, action) {
 // paused, which would interrupt what someone is listening to — and the node is waited for.
 // `onStream`: the caller plays the stream itself (the Listen view's media element) instead of Web
 // Audio here. Resolves with the stream, or null when there was nothing to hear (said in a toast).
-function listenToDevice(address, onStream) {
+// A capture of what the device at `address` sends the board: heard in this browser (Web Audio) or,
+// with `onStream`, handed to it instead; `sink` plays it on an output as well (a tunnel).
+function listenToDevice(address, onStream, sink) {
   const same = a => !!a && a.toUpperCase() === address.toUpperCase();
   // The AudioContext comes from the click itself, before any wait.
   const ctx = onStream ? null : newAudioContext();
@@ -714,7 +734,7 @@ function listenToDevice(address, onStream) {
     renderEndpoints(ep);
     const src = ep.sources.find(e => same(e.address));
     if (src) {
-      return startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, null, !onStream,
+      return startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, sink || null, !onStream,
         {rate: src.rate || 48000, channels: 2, gain_db: 0}, ctx);
     }
     if (!asked && player && player.status !== 'playing') {
@@ -1049,6 +1069,7 @@ function setupAudio() {
     if (e.target.classList.contains('st-gain')) body = {gain_db: parseFloat(e.target.value)};
     else if (e.target.classList.contains('st-freq')) body = {source: {freq: parseFloat(e.target.value)}};
     else if (e.target.classList.contains('st-level')) body = {source: {level_db: parseFloat(e.target.value)}};
+    else if (e.target.classList.contains('st-out')) body = {sink: sinkOf(e.target.value)};
     if (body) put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
   };
 
