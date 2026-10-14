@@ -10,7 +10,7 @@
 // element (which buffers seconds and cannot say how much), and the AudioContext is made in the
 // click that asked for it, so autoplay rules let it play.
 
-const au = {adOpen: {}, browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {},
+const au = {adOpen: {}, browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {}, sw: {},
   tick: null, radio: []};
 
 function renderAudio(s) {
@@ -68,6 +68,29 @@ function sinkOptions(ep, nowhere) {
   ep.sinks.filter(e => e.kind !== 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
   sinks.push({value: '', label: nowhere});
   return sinks;
+}
+
+// A stream's output picked in its card: moved there at once, the switch followed as Listen follows
+// its own (au.sw by stream, player.js swAdvance) until the output takes the audio or fails.
+function pickStreamOut(id, v) {
+  const s = sinkOf(v);
+  const sw = {value: s ? streamOut({sink: s}) : 'none', phase: 'asking', at: Date.now(), seq: null};
+  au.sw[id] = sw;
+  const redraw = () => { const x = au.streams.find(y => y.id === id); if (x) upsertStream(x); };
+  redraw();
+  put(`/audio/streams/${id}`, {sink: s}).then(r => {
+    if (au.sw[id] !== sw) return;
+    sw.seq = r.sink_req;
+    sw.phase = 'starting';
+    upsertStream(r);
+  }).catch(e => {
+    if (au.sw[id] !== sw) return;
+    sw.phase = 'failed';
+    sw.error = e.message;
+    redraw();
+  });
+  // The result comes with the streams topic; asked too, in case it is slow.
+  [400, 1200, 2500, 5000, 9000].forEach(t => setTimeout(() => { if (au.sw[id] === sw && sw.phase !== 'done') refreshStreams(); }, t));
 }
 
 // A select's value as a stream's sink: null (listeners only), or {type, target}.
@@ -170,6 +193,7 @@ function streamCard(s) {
       ${s.source.type === 'tone' ? `<label class="row">Hz <input type="number" class="st-freq narrow" min="1"></label>` : ''}
       ${s.source.type === 'tone' || s.source.type === 'noise' ? `<label class="row">level <input type="number" class="st-level narrow" min="-96" max="0"> dB</label>` : ''}
     </div>
+    <div class="np-out-status st-out-status small" role="status" aria-live="polite"></div>
     <div class="st-listening small" hidden>
       <div class="row wrap"><span class="st-buf mono"></span>
         <label class="row">volume <input type="range" class="st-vol" min="0" max="1" step="0.01" value="1"></label></div>
@@ -220,6 +244,15 @@ function upsertStream(s) {
     fillSelect(o, opts, cur);
   }
   o.disabled = !live;
+  // What the board does about its output, in Listen's words (player.js outLine): a switch picked
+  // above followed until the output takes the audio (and a Bluetooth link streams), or why not.
+  const sw = au.sw[s.id];
+  swAdvance(sw, s, au);
+  const line = outLine(s, sw && sw.phase !== 'done' ? sw : null, au) || {cls: s.listeners ? 'good' : 'warn',
+    html: s.listeners ? `No board output: ${s.listeners} browser${s.listeners > 1 ? 's' : ''} listening.`
+      : 'No board output and nobody listening: the board stops it in 30 s.'};
+  q('.st-out-status').hidden = !live;
+  if (live) outStatusHTML(q('.st-out-status'), line);
   q('.st-listen').hidden = !live;
   if (q('.st-pause')) {
     const n = (s.source.playlist || []).length;
@@ -242,6 +275,7 @@ function renderStreams(list) {
     if (!ids.has(id)) {
       au.cards[id].remove();
       delete au.cards[id];
+      delete au.sw[id];
       stopListening(id);
     }
   }
@@ -1069,7 +1103,7 @@ function setupAudio() {
     if (e.target.classList.contains('st-gain')) body = {gain_db: parseFloat(e.target.value)};
     else if (e.target.classList.contains('st-freq')) body = {source: {freq: parseFloat(e.target.value)}};
     else if (e.target.classList.contains('st-level')) body = {source: {level_db: parseFloat(e.target.value)}};
-    else if (e.target.classList.contains('st-out')) body = {sink: sinkOf(e.target.value)};
+    else if (e.target.classList.contains('st-out')) return pickStreamOut(parseInt(id, 10), e.target.value);
     if (body) put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
   };
 

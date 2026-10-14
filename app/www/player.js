@@ -1001,20 +1001,23 @@ pl.sw = null;  // a switch: {value, seq, phase: asking|starting|linking|done|fai
 const outSink = v => v === 'none' ? null : v === 'default' ? {type: 'pipewire', target: ''}
   : {type: v.split(':')[0], target: v.slice(v.indexOf(':') + 1)};
 const streamOut = s => !s.sink ? 'none' : s.sink.target ? `${s.sink.type}:${s.sink.target}` : 'default';
-const outEndpoint = v => pl.endpoints && pl.endpoints.sinks.find(e => v.endsWith(':' + e.id));
-function outName(v) {
+// These take the view whose outputs and links they look at, `o` = {endpoints, media}: Listen's
+// (pl, the default) or Audio's (au) — Audio → Streams follows a stream's output switch with the
+// same words (outLine).
+const outEndpoint = (v, o = pl) => o.endpoints && o.endpoints.sinks.find(e => v.endsWith(':' + e.id));
+function outName(v, o = pl) {
   if (v === 'none') return 'No board output';
   if (v === 'default') return 'The board’s default output';
-  const e = outEndpoint(v);
+  const e = outEndpoint(v, o);
   return e ? (e.address ? devName(e.address) : e.label) : v.slice(v.indexOf(':') + 1);
 }
 // The board's transport that carries a Bluetooth output's audio: its "Audio Source" side (a device
 // can have one each way, see volumeTarget).
-function outTransport(v) {
-  const e = outEndpoint(v);
-  if (!e || !e.address || !pl.media) return null;
+function outTransport(v, o = pl) {
+  const e = outEndpoint(v, o);
+  if (!e || !e.address || !o.media) return null;
   const same = x => x.address && x.address.toUpperCase() === e.address.toUpperCase();
-  return pl.media.transports.find(x => same(x) && /source/i.test(x.profile || '')) || null;
+  return o.media.transports.find(x => same(x) && /source/i.test(x.profile || '')) || null;
 }
 
 function renderOutputs(ep) {
@@ -1051,7 +1054,7 @@ function renderOuts() {
   const c = current();
   const b = outStream(c), phone = c.kind === 'phone';
   const cur = curOut(c, b);
-  swAdvance(b);
+  swAdvance(pl.sw, b);
   const sw = pl.sw && pl.sw.phase !== 'done' ? pl.sw : null;
   const opts = outOptions(phone);
   if (!opts.some(o => o.value === cur)) opts.push({value: cur, name: outName(cur), sub: 'not connected', icon: PL_SVG.bt, gone: true});
@@ -1067,52 +1070,67 @@ function renderOuts() {
   const box = $('np-listen');
   box.checked = b ? pl.hearId === b.id : phone ? !!pl.hearBusy : pl.listen;
   box.disabled = !!pl.hearBusy;
-  const st = outStatus(b, phone ? c.p : null);
-  setClass($('np-out-status'), 'np-out-status ' + st.cls);
-  setHTML($('np-out-status'), (st.cls === 'busy' ? '<span class="spin"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
+  outStatusHTML($('np-out-status'), outStatus(b, phone ? c.p : null));
 }
 
-// What the board is doing about the output, in words.
+// A status line ({cls, html}) into its element: a dot in the state's colour, or a spinner.
+function outStatusHTML(el, st) {
+  setClass(el, el.className.replace(/\s*\b(good|warn|bad|busy)\b/g, '') + (st.cls ? ' ' + st.cls : ''));
+  setHTML(el, (st.cls === 'busy' ? '<span class="spin"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
+}
+
+// What the board is doing about a stream's output, in words: the switch `sw` under way (or how it
+// failed), else what its sink_status says — null when it has no sink and lost none. Listen adds
+// what this browser does; Audio → Streams shows it as it is.
+function outLine(b, sw, o = pl) {
+  const name = v => `<b>${esc(outName(v, o))}</b>`;
+  if (sw && sw.phase === 'failed') return {cls: 'bad', html: `Could not play on ${name(sw.value)}: ${esc(outReason(sw.error))}.`};
+  if (sw && sw.phase !== 'done') {
+    return {cls: 'busy', html: {asking: `Asking the board to play on ${name(sw.value)}…`,
+      starting: `Opening ${name(sw.value)}…`,
+      linking: `${name(sw.value)} takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase]};
+  }
+  if (!b) return null;
+  const ss = b.sink_status || {};
+  if (b.sink) {
+    if (ss.state === 'starting') return {cls: 'busy', html: `Opening ${name(streamOut(b))}…`};
+    if (ss.state === 'reconnecting') return {cls: 'busy', html: `${name(streamOut(b))} went away (a codec change?): opening it again…`};
+    const t = outTransport(streamOut(b), o);
+    if (ss.state === 'stalled') {
+      return {cls: 'bad', html: `${name(streamOut(b))} takes no audio` + (t ? ` (its Bluetooth link is ${esc(t.state)})` : '') +
+        ': the board waits for it, and the music has stopped. Pick another output.'};
+    }
+    if (t && t.state !== 'active') return {cls: 'warn', html: `${name(streamOut(b))} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.`};
+    const codec = t && t.codec ? ` · ${esc(t.codec.name)}${t.codec.rate ? ' ' + t.codec.rate / 1000 + ' kHz' : ''}` : '';
+    return {cls: 'good', html: `Playing on ${name(streamOut(b))}${codec}.`};
+  }
+  if (ss.state === 'failed') return {cls: 'bad', html: `Lost ${esc(outName('x:' + ss.target, o))}: ${esc(outReason(ss.error))}.`};
+  return null;
+}
+
+// What the board is doing about the output shown in Listen, in words: outLine, and this browser.
 function outStatus(b, phone) {
   const sw = pl.sw;
-  const name = v => `<b>${esc(outName(v))}</b>`;
   const here = b && pl.hearId === b.id;
   const browser = here ? (npAudio.paused || npAudio.readyState < 3 ? ' This browser is connecting…' : ' Also in this browser.') : '';
   if (sw && sw.phase === 'failed') {
-    return {cls: 'bad', html: `Could not play on ${name(sw.value)}: ${esc(outReason(sw.error))}.` +
+    return {cls: 'bad', html: outLine(b, sw).html +
       (here ? ' Still playing in this browser.' : b && !b.sink ? ' Pick another output, or listen in this browser: with neither, the board stops in 30 s.' : '')};
   }
-  if (sw && sw.phase !== 'done') {
-    const what = {asking: `Asking the board to play on ${name(sw.value)}…`,
-      starting: `Opening ${name(sw.value)}…`,
-      linking: `${name(sw.value)} takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase];
-    return {cls: 'busy', html: what};
-  }
+  if (sw && sw.phase !== 'done') return outLine(b, sw);
   if (!b && phone) {
     return {cls: '', html: pl.hearBusy ? 'Connecting this browser…'
       : 'The board plays it on its <b>default output</b>. Pick a speaker to send it on there, or listen in this browser.'};
   }
   if (!b) {
+    const name = v => `<b>${esc(outName(v))}</b>`;
     const to = [pl.out !== 'none' ? name(pl.out) : '', pl.listen ? 'this browser' : ''].filter(Boolean).join(' and ');
     return {cls: '', html: to ? `What you play next goes to ${to}.` : 'Choose where what you play next goes.'};
   }
-  const ss = b.sink_status || {};
-  if (b.sink) {
-    if (ss.state === 'starting') return {cls: 'busy', html: `Opening ${name(streamOut(b))}…`};
-    if (ss.state === 'reconnecting') return {cls: 'busy', html: `${name(streamOut(b))} went away (a codec change?): opening it again…`};
-    const t = outTransport(streamOut(b));
-    if (ss.state === 'stalled') {
-      return {cls: 'bad', html: `${name(streamOut(b))} takes no audio` + (t ? ` (its Bluetooth link is ${esc(t.state)})` : '') +
-        ': the board waits for it, and the music has stopped. Pick another output.'};
-    }
-    if (t && t.state !== 'active') {
-      return {cls: 'warn', html: `${name(streamOut(b))} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.` + browser};
-    }
-    const codec = t && t.codec ? ` · ${esc(t.codec.name)}${t.codec.rate ? ' ' + t.codec.rate / 1000 + ' kHz' : ''}` : '';
-    return {cls: 'good', html: `Playing on ${name(streamOut(b))}${codec}.` + browser};
-  }
-  if (ss.state === 'failed') {
-    return {cls: 'bad', html: `Lost ${esc(outName('x:' + ss.target))}: ${esc(outReason(ss.error))}.` +
+  const line = outLine(b, null);
+  if (b.sink) return line.cls === 'good' || line.cls === 'warn' ? {cls: line.cls, html: line.html + browser} : line;
+  if (line) {
+    return {cls: 'bad', html: line.html +
       (here ? ' Still playing in this browser.' : ' Pick another output, or listen in this browser: with neither, the board stops in 30 s.')};
   }
   if (here) {
@@ -1127,11 +1145,10 @@ function outStatus(b, phone) {
 // PipeWire's words for an output that is not there.
 const outReason = e => /target not found/.test(e || '') ? 'it is not connected (no such output in PipeWire)' : (e || 'no reason given');
 
-// The switch under way, moved on by what the stream says: its sink_status answers our request
-// (seq) once the pump has opened the new output or failed to; a Bluetooth one is done when its
-// link streams.
-function swAdvance(b) {
-  const sw = pl.sw;
+// The switch `sw` under way on stream `b`, moved on by what the stream says: its sink_status
+// answers our request (seq) once the pump has opened the new output or failed to; a Bluetooth one
+// is done when its link streams (in o.media).
+function swAdvance(sw, b, o = pl) {
   if (!sw || sw.phase === 'done' || sw.phase === 'failed') return;
   const late = Date.now() - sw.at;
   if (!b) {
@@ -1148,7 +1165,7 @@ function swAdvance(b) {
   if (ss.state === 'failed' || ss.state === 'stalled') { sw.phase = 'failed'; sw.error = ss.error; return; }
   if (ss.state === 'starting') { sw.phase = 'starting'; if (late > 10000) { sw.phase = 'failed'; sw.error = 'it took no audio within 10 s'; } return; }
   if (ss.state === 'playing') {
-    const t = outTransport(sw.value);
+    const t = outTransport(sw.value, o);
     // A Bluetooth link takes a moment to start streaming; past 8 s the steady line says how it is.
     sw.phase = t && t.state !== 'active' && late < 8000 ? 'linking' : 'done';
   }

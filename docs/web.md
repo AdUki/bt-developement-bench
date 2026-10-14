@@ -157,7 +157,9 @@ now-playing list. *Streams*: what the board plays itself. *Output for new stream
 stream started there begins — the connected Bluetooth sinks by name and codec first, PipeWire's
 default output, the other sinks, or nowhere — with the codec picker for a Bluetooth one and *also
 listen in this browser*; *Running*, each stream with its own output (*to*: moved there at once,
-the source carrying on, so two streams play to two devices), its level meters (RMS bar, peak mark, per channel), the radio
+the source carrying on, so two streams play to two devices) and under it, in Listen's words, what
+the board does about it — asking, opening it, waiting for the Bluetooth link to stream, *Playing
+on … · codec*, or why not — then its level meters (RMS bar, peak mark, per channel), the radio
 title, Pause (and Previous/Next for a playlist) for a URL stream, a live gain slider and, for a
 tone, its frequency and level, listening adding the buffered time, a volume and a spectrum (the
 console keeps listening when you change views); then *New stream*: a test signal (a tone, its own
