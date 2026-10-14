@@ -295,16 +295,17 @@ function deviceRow(d) {
     body = `<div class="rw-body">
       ${tags ? `<div class="row wrap" style="margin-bottom:.5rem">${tags}</div>` : ''}
       ${bearersHTML(d)}
-      ${d.connected || isUuid(d.busy_on) || isUuid(d.error_on) ? `<h4 class="rw-h">Profiles</h4>${profilesHTML(d)}` : ''}
-      <div class="kv">${kv}</div>
       <div class="acts">
         ${d.trusted ? btn('untrust', 'Untrust') : btn('trust', 'Trust')}
-        <button data-act="remove" data-key="${a}" class="danger">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button>
+        ${d.blocked ? btn('unblock', 'Unblock') : btn('block', 'Block')}
+        <button data-act="cancel-pairing" data-key="${a}">Cancel pairing</button>
         <span class="spacer"></span>
         <button class="small-btn" data-act="goto-gatt" data-key="${a}">GATT explorer</button>
         <button class="small-btn" data-act="goto-obex" data-key="${a}">Send files</button>
         <button class="small-btn" data-act="goto-avdtp" data-key="${a}">AVDTP probe</button>
       </div>
+      ${d.connected || isUuid(d.busy_on) || isUuid(d.error_on) ? `<h4 class="rw-h">Profiles</h4>${profilesHTML(d)}` : ''}
+      <div class="kv">${kv}</div>
       <details class="more-fields">
         <summary>One profile, or a legacy PIN</summary>
         <div class="row wrap" style="margin-top:.5rem">
@@ -321,7 +322,7 @@ function deviceRow(d) {
     <div class="rw-main" data-act="toggle" data-key="${a}">
       <span class="rw-led ${led}"></span>
       <div class="rw-title"><b>${esc(d.alias || d.address)}</b>${ownAdapterTag(d)}<span class="rw-sub">${sub}</span></div>
-      <div class="rw-acts">${main}<span class="chev"></span></div>
+      <div class="rw-acts">${main}<button data-act="remove" data-key="${a}" class="danger dev-rm">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button><span class="chev"></span></div>
     </div>
     ${d.error && (!d.error_on || !open) ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
     ${body}

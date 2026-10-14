@@ -327,6 +327,7 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 .rw-note { padding: 0 1rem 0.5rem 2.6rem; font-size: 0.82rem; }
 /* The row's main action keeps one width whatever it says, the work in progress included. */
 .rw-acts .dev-main { min-width: 9.5rem; text-align: center; white-space: nowrap; }
+.rw-acts .dev-rm { min-width: 8.5rem; text-align: center; white-space: nowrap; }
 .rw-acts .dev-main:disabled:has(.spin) { opacity: 0.8; }
 .rw-acts .dev-main .spin { display: inline-block; width: 0.85em; height: 0.85em; vertical-align: -0.12em; margin-right: 0.4em; }
 .rw-title .tag.own { align-self: center; color: var(--accent); border: 1px dashed var(--accent); background: none; }
@@ -542,6 +543,8 @@ body.wifi-page main { max-width: 560px; margin: 0 auto; padding: 0.5rem 16px 2re
   .list-head #sc-state { order: 4; flex-basis: 100%; }
   .list-head #sc-state:empty { display: none; }
   .rw-main { padding: 0.55rem 0.8rem; gap: 0.3rem 0.6rem; }
+  /* A device's Connect and Remove go on their own line under its name. */
+  .rw-acts:has(.dev-rm) { grid-column: 2 / -1; justify-content: flex-end; }
   .rw-body, .rw-note { padding-left: 0.8rem; padding-right: 0.8rem; }
   .player { grid-template-columns: 76px minmax(0, 1fr); gap: 0 0.75rem; }
   .pl-art { width: 76px; height: 76px; }
