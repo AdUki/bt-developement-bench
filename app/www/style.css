@@ -1058,7 +1058,8 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 /* A graph's current values, left of its full-screen button (graphs.js). */
 .gr-now { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.7rem; font: 600 0.85rem/1.2 ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 .gr-now:empty { display: none; }
-.gr-now i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 0.3rem; vertical-align: middle; }
+.gr-mark { vertical-align: middle; }
+.gr-now .gr-mark { margin-right: 0.3rem; }
 .gr-now .muted { font: 400 0.75rem system-ui, sans-serif; }
 .gr-now + .full-btn { margin-left: 0.5rem !important; }
 /* Graphs: two columns on a desktop, one chart over the window when it is opened full screen. */

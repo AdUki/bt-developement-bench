@@ -226,10 +226,15 @@ function grLegend() {
 }
 
 const GR_DASHES = [null, [5, 3], [1, 3]];
+// A short line in a style: the key in a chart's title, or one series' mark by its value.
+function grLine(dash, color, w) {
+  return `<svg class="gr-mark" width="${w}" height="6"><line x1="0" y1="3" x2="${w}" y2="3" stroke="${color}" stroke-width="1.6"` +
+    `${dash ? ` stroke-dasharray="${dash.join(' ')}"` : ''}/></svg>`;
+}
+const grMark = s => grLine(s.dash, grColor(s.colorIndex), 16);
 function grStyleKey(styles) {
   if (!styles) return '';
-  return styles.map((st, i) => st ? `<svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="currentColor" stroke-width="1.6"` +
-    `${GR_DASHES[i] ? ` stroke-dasharray="${GR_DASHES[i].join(' ')}"` : ''}/></svg> ${esc(st)}` : '').filter(Boolean).join(' &nbsp; ');
+  return styles.map((st, i) => st ? `${grLine(GR_DASHES[i], 'currentColor', 22)} ${esc(st)}` : '').filter(Boolean).join(' &nbsp; ');
 }
 
 function grDraw(force) {
@@ -252,7 +257,7 @@ function grDraw(force) {
     // reading it off the axis. A line silent for more than 5 s has no "now".
     setHTML(el.querySelector('.gr-now'), series.map(s => {
       const p = s.data[s.data.length - 1];
-      return p && now - p[0] < 5000 ? `<span title="${esc(s.label)}"><i style="background:${grColor(s.colorIndex)}"></i>${+fmtVal(p[1])}</span>` : '';
+      return p && now - p[0] < 5000 ? `<span title="${esc(s.label)}">${grMark(s)}${+fmtVal(p[1])}</span>` : '';
     }).filter(Boolean).slice(0, 6).join('') + (series.length ? ` <span class="muted">${esc(c.unit)}</span>` : ''));
     let lo = c.min != null ? c.min : 0, hi = c.max != null ? c.max : 0;
     if (c.max == null) {
@@ -314,7 +319,7 @@ function grDraw(force) {
     if (gr.hover && gr.hover.chart === c.id && hoverT != null) {
       const rows = series.map(s => {
         const p = nearest(s.data, hoverT);
-        return p && Math.abs(p[0] - hoverT) < 2500 ? `<div><i style="display:inline-block;width:10px;height:3px;vertical-align:middle;background:${grColor(s.colorIndex)}"></i> ${esc(s.label)}: <b>${fmtVal(p[1])}</b></div>` : '';
+        return p && Math.abs(p[0] - hoverT) < 2500 ? `<div>${grMark(s)} ${esc(s.label)}: <b>${fmtVal(p[1])}</b></div>` : '';
       }).join('');
       tip.innerHTML = `<div class="muted">${fmtTime(hoverT)}</div>${rows || '<div class="muted">no samples</div>'}`;
       tip.hidden = false;

@@ -220,7 +220,8 @@ it. TX is ours (A2DP source); RX is the peer's.
     the Zero W show up here. On RX it measures how evenly the peer's packets arrive.
   - It is updated only between consecutive sequence numbers. Steps over 1 s are ignored: they
     mean a source restarted its clock, or a vendor snoop log that only keeps some media packets.
-  - It is `null` when the rate is unknown.
+  - It is `null` when the rate is unknown, and in a second with no media packet (a paused or
+    suspended stream): the estimate would only repeat the last one.
 - **`frames_per_packet`**: for SBC, the frame count from the media payload header, averaged over
   the window.
 - aptX, aptX LL and FastStream have no RTP header and get no RTP statistics.

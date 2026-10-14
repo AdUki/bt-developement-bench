@@ -1621,7 +1621,7 @@ void Decoder::close_window(int64_t end_us) {
                   {"rtp_pkts", r.pkts_win},
                   {"rtp_lost", r.lost_win},
                   {"rtp_lost_total", ch->rtp[kTx].lost_total + ch->rtp[kRx].lost_total},
-                  {"rtp_jitter_ms", rate ? json(round2(r.jitter * 1000.0 / rate)) : json(nullptr)},
+                  {"rtp_jitter_ms", rate && r.pkts_win ? json(round2(r.jitter * 1000.0 / rate)) : json(nullptr)},
                   {"frames_per_packet",
                    r.frames_pkts_win ? json(round2(static_cast<double>(r.frames_sum_win) /
                                                    r.frames_pkts_win))

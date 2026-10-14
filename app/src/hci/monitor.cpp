@@ -318,6 +318,9 @@ void Monitor::Impl::run_live() {
   std::vector<uint8_t> buf(kMonHdrSize + 65536);
   alignas(cmsghdr) char ctrl[CMSG_SPACE(sizeof(timeval)) + CMSG_SPACE(sizeof(uint32_t)) + 64];
   std::vector<uint16_t> new_indexes;
+  // A packet past the second closes the window inside dec.packet(), before advance() is asked:
+  // count the windows closed, or that second's stats are never published (a gap in the graphs).
+  uint64_t windows_seen = dec.windows_closed();
 
   for (;;) {
     const int64_t now = realtime_us();
@@ -381,10 +384,14 @@ void Monitor::Impl::run_live() {
         if (feed->active()) feed->push(ts, index, opcode, data, len);
         if (opcode == kMonNewIndex || opcode == kMonOpenIndex) new_indexes.push_back(index);
       }
-      closed = dec.advance(realtime_us()) > 0;
+      dec.advance(realtime_us());
+      closed = dec.windows_closed() != windows_seen;
+      windows_seen = dec.windows_closed();
     } else {
       std::lock_guard<std::mutex> lk(mu);
-      closed = dec.advance(realtime_us()) > 0;
+      dec.advance(realtime_us());
+      closed = dec.windows_closed() != windows_seen;
+      windows_seen = dec.windows_closed();
     }
 
     for (uint16_t idx : new_indexes) query_devinfo(idx);

@@ -216,6 +216,13 @@ void test_a2dp_session() {
         CHECK_EQ((*sig)["avdtp"]["streams"][0]["rseid"], 1);
       }
       CHECK(find_chan(*c, "L2CAP signalling") != nullptr);
+      // Streaming, but no media packet yet: no jitter measured in this second.
+      const json* media = find_chan(*c, "AVDTP media");
+      CHECK(media != nullptr);
+      if (media) {
+        CHECK_EQ((*media)["avdtp"]["rtp_pkts"], 0);
+        CHECK((*media)["avdtp"]["rtp_jitter_ms"].is_null());
+      }
     }
   }
 
