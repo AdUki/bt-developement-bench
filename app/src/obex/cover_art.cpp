@@ -495,9 +495,10 @@ bool CoverArtServer::image(const std::string& handle, bool thumbnail, std::strin
     }
   }
   if (thumbnail && !exists(thumb)) {
-    // 200×200, the image scaled into it whole (a square cover fills it).
+    // 200×200, filled and the overflow cropped, as the board's own Listen shows a cover: padded,
+    // a cover that is not quite square sat between black bars on the controller.
     run_cmd({"ffmpeg", "-y", "-loglevel", "error", "-i", native, "-vf",
-             "scale=200:200:force_original_aspect_ratio=decrease,pad=200:200:(ow-iw)/2:(oh-ih)/2", "-q:v", "4", thumb},
+             "scale=200:200:force_original_aspect_ratio=increase,crop=200:200", "-q:v", "4", thumb},
             15000);
   }
   // Without ffmpeg, the thumbnail is the image itself (a controller scales it).
