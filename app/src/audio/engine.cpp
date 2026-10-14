@@ -34,6 +34,11 @@ constexpr int kPollMs = 200;    // how long the pump waits on a pipe before look
 // A stream that plays nowhere and that nobody has listened to for this long ends by itself: the
 // browser that asked for it went away (a closed tab), and on one core it would be pure waste.
 constexpr int64_t kUnheardMs = 30000;
+// A named PipeWire sink that goes away is looked for again, every 300 ms for this long: a codec
+// change (the console's picker, wpctl set-profile, the device renegotiating) removes a Bluetooth
+// sink's node and makes it again under the same name one to three seconds later.
+constexpr int64_t kSinkReopenMs = 10000;
+constexpr int64_t kSinkRetryMs = 300;
 
 int64_t wall_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -446,6 +451,10 @@ bool capture_argv(const SourceSpec& s, int rate, int channels, int latency_ms,
   std::string props = "{ node.name = \"" + node_name + "\" node.description = \"btbench capture\"";
   // A sink's monitor: the same node name as target, captured from its output side.
   if (s.monitor) props += " stream.capture.sink = true";
+  // A source named is that source or none, as a sink is (sink_argv): when it goes away (a codec
+  // change makes a Bluetooth source's node anew) WirePlumber would link the capture to the default
+  // source (the loopback card) and leave it there. pw-cat ends instead, and the pump opens it again.
+  if (!s.target.empty()) props += " node.dont-fallback = true node.dont-reconnect = true";
   props += " }";
   *argv = {t.pw_cat, "--record", "--rate", std::to_string(rate), "--channels", std::to_string(channels),
            "--format", "s16", "--latency", std::to_string(latency_ms) + "ms", "-P", props};
@@ -507,6 +516,7 @@ class Child {
     return true;
   }
 
+  int pid() const { return p_.pid; }
   int in_fd() const { return p_.in_fd; }
   int out_fd() const { return p_.out_fd; }
   const std::string& name() const { return name_; }
@@ -992,6 +1002,8 @@ void AudioEngine::Stream::run() {
       abandon(err);
       return;
     }
+    // A capture keeps up with the graph; a decoder only has to stay ahead, and stays below audio.
+    if (type == "capture") set_process_fifo(src.pid(), kAudioRtPrio);
   }
 
   // The sink: the one the stream started with, then whichever PUT {"sink"} switched to.
@@ -1009,6 +1021,7 @@ void AudioEngine::Stream::run() {
     if (!sink_argv(sink, rate, ch, sp.latency_ms, node_name, desc, *tools, &argv, e) ||
         !snk.start(argv, true, nullptr, e))
       return false;
+    set_process_fifo(snk.pid(), kAudioRtPrio);
     // A small pipe: what sits in it is latency between a change (a gain, a tone's frequency) and
     // the speaker. 16 KiB is ~85 ms of 48 kHz stereo; the sink's own buffer does the rest.
     fcntl(snk.in_fd(), F_SETPIPE_SZ, 16384);
@@ -1054,6 +1067,43 @@ void AudioEngine::Stream::run() {
     if (why.empty()) set_sink("none", "");
     else set_sink("failed", target, why);
     next_ms = heard_ms = mono_ms();
+  };
+
+  // The sink lost and being looked for again (kSinkReopenMs): its spec, why it went, and until when.
+  SinkSpec lost_sink;
+  std::string lost_why;
+  int64_t reopen_until = 0, reopen_next = 0;
+
+  // The same for a capture's source: until when it is looked for, and the frames it has given since
+  // it was opened again (half a second of them: it is back).
+  std::string src_lost_why;
+  int64_t src_reopen_until = 0, src_reopen_next = 0;
+  uint64_t src_frames = 0;
+
+  // A sink that is gone for good. The sink it was started with, and nobody else listening: the
+  // stream has failed (true). A sink switched to, or with browsers listening, goes alone (a
+  // speaker turned off).
+  auto give_up_sink = [&](const std::string& target, const std::string& why, const std::string& lost) -> bool {
+    reopen_until = 0;
+    bool heard;
+    {
+      std::lock_guard<std::mutex> lk(m);
+      heard = !listeners.empty();
+    }
+    if (!switched && !heard) {
+      set_sink("failed", target, why.empty() ? lost : why);
+      fail = lost;
+      return true;
+    }
+    LOG_WARN("audio: stream {} lost its sink {}: {}", id, target, lost);
+    sink = SinkSpec{};
+    {
+      std::lock_guard<std::mutex> lk(m);
+      spec.sink = sink;
+    }
+    set_sink("failed", target, why.empty() ? lost : why);
+    next_ms = heard_ms = mono_ms();
+    return false;
   };
 
   // A URL stream's next decoder: track `to` of the playlist (which may have grown since the
@@ -1106,6 +1156,7 @@ void AudioEngine::Stream::run() {
         sink_seq = sink_req;
       }
       switched = true;
+      reopen_until = 0;
       drop_sink("");
       if (want.type != "none") {
         sink = want;
@@ -1119,6 +1170,22 @@ void AudioEngine::Stream::run() {
         }
       }
       LOG_INFO("audio: stream {} now plays to {}", id, sink.type == "none" ? "its listeners only" : sink.target);
+    }
+    // The sink that went away, looked for again; given up after kSinkReopenMs.
+    if (reopen_until && sink.type == "none") {
+      const int64_t now = mono_ms();
+      if (now >= reopen_next) {
+        sink = lost_sink;
+        std::string e;
+        if (!open_sink(&e)) {
+          sink = SinkSpec{};
+          set_sink("reconnecting", lost_sink.target, lost_why);
+          reopen_next = now + kSinkRetryMs;
+        }
+      }
+      if (sink.type == "none" && now >= reopen_until &&
+          give_up_sink(lost_sink.target, lost_why, lost_sink.target + " did not come back"))
+        break;
     }
     // Live changes: the gain, a tone's frequencies and level, a noise's level.
     {
@@ -1144,6 +1211,27 @@ void AudioEngine::Stream::run() {
     } else if (gen) {
       gen->fill(buf.data(), frames_per_chunk);
       if (sweep && sweep->done()) ended = true;
+    } else if (src_reopen_until && src.out_fd() < 0) {
+      // The capture's source went away: silence on the pump's clock, and the capture opened again
+      // every kSinkRetryMs until kSinkReopenMs is up.
+      std::fill(buf.begin(), buf.end(), 0);
+      const int64_t now = mono_ms();
+      if (now >= src_reopen_next) {
+        src_reopen_next = now + kSinkRetryMs;
+        std::vector<std::string> argv;
+        std::string e;
+        if (capture_argv(sp.source, rate, ch, sp.latency_ms, node_name + "-in", *tools, &argv, &e) &&
+            src.start(argv, false, [this](const std::string& l) { on_source_line(l); }, &e)) {
+          set_process_fifo(src.pid(), kAudioRtPrio);
+          pending.clear();
+          strip = WavStripper{};
+          src_frames = 0;
+        }
+      }
+      if (src.out_fd() < 0 && now >= src_reopen_until) {
+        fail = sp.source.target + " did not come back: " + src_lost_why;
+        break;
+      }
     } else {
       bool eof = false;
       std::string raw;
@@ -1168,12 +1256,25 @@ void AudioEngine::Stream::run() {
             next = order.next(spec.source.repeat_mode, false, spec.source.shuffle);
           }
           if (!start_track(next, &fail)) ended = true;
+        } else if (type == "capture" && sp.source.backend == "pipewire" && !sp.source.target.empty() &&
+                   (!src_reopen_until || mono_ms() < src_reopen_until)) {
+          if (!src_reopen_until) {
+            src_lost_why = why.empty() ? "exit " + std::to_string(st) : why;
+            LOG_INFO("audio: stream {}: {} went away ({}); looking for it again", id, sp.source.target, src_lost_why);
+            src_reopen_until = mono_ms() + kSinkReopenMs;
+          }
+          src_reopen_next = mono_ms() + kSinkRetryMs;
+          next_ms = mono_ms();
         } else {
           fail = src.name() + (type == "url" ? " stopped" : " ended") +
                  (why.empty() ? " (exit " + std::to_string(st) + ")" : ": " + why);
         }
+      } else if (src_reopen_until && (src_frames += got_frames) >= static_cast<uint64_t>(rate / 2)) {
+        LOG_INFO("audio: stream {}: {} is back", id, sp.source.target);
+        src_reopen_until = 0;
       }
       if (got_frames == 0) {
+        if (src_reopen_until && fail.empty()) continue;  // the capture's source, looked for again
         if (ended || !fail.empty() || src.out_fd() < 0) break;
         continue;  // the next track's decoder is starting
       }
@@ -1197,7 +1298,7 @@ void AudioEngine::Stream::run() {
 
     // Clocked by the pump when nothing else is real-time: no sink, and a source that is not a
     // capture (a generator would run flat out, a radio stream drain its server's burst).
-    const bool clocked = sink.type == "none" && type != "capture";
+    const bool clocked = sink.type == "none" && (type != "capture" || (src_reopen_until && src.out_fd() < 0));
     if (sink.type != "none") {
       // A sink that takes nothing for 2 s (a Bluetooth link that stopped streaming) holds the
       // pump, and the listeners with it: said, until it takes audio again.
@@ -1220,23 +1321,29 @@ void AudioEngine::Stream::run() {
           const int st = snk.stop();
           const std::string why = snk.reason();
           const std::string lost = snk.name() + " (the sink) ended" + (why.empty() ? " (exit " + std::to_string(st) + ")" : ": " + why);
-          bool heard;
-          {
-            std::lock_guard<std::mutex> lk(m);
-            heard = !listeners.empty();
-          }
-          // The sink it was started with, and nobody else listening: the stream has failed. A
-          // sink switched to, or with browsers listening, goes alone (a speaker turned off).
-          if (!switched && !heard) {
-            set_sink("failed", sink.target, why.empty() ? lost : why);
-            fail = lost;
+          const int64_t now = mono_ms();
+          if (sink.type == "pipewire" && !sink.target.empty() && (!reopen_until || now < reopen_until)) {
+            // Paced by the pump's clock meanwhile; the sink keeps its place in the stream's spec.
+            if (!reopen_until) {
+              LOG_INFO("audio: stream {}: {} went away ({}); looking for it again", id, sink.target, lost);
+              reopen_until = now + kSinkReopenMs;
+              lost_sink = sink;
+              lost_why = why.empty() ? lost : why;
+            }
+            set_sink("reconnecting", sink.target, lost_why);
+            sink = SinkSpec{};
+            reopen_next = now + kSinkRetryMs;
+            next_ms = heard_ms = now;
+          } else if (give_up_sink(sink.target, why, lost)) {
             break;
           }
-          LOG_WARN("audio: stream {} lost its sink {}: {}", id, sink.target, lost);
-          drop_sink(why.empty() ? lost : why);
         }
       } else if (sink_frames < static_cast<uint64_t>(rate / 2) && (sink_frames += got_frames) >= static_cast<uint64_t>(rate / 2)) {
         set_sink("playing", sink.target);
+        if (reopen_until) {
+          LOG_INFO("audio: stream {}: {} is back", id, sink.target);
+          reopen_until = 0;
+        }
       }
     } else if (clocked) {
       next_ms += static_cast<int64_t>(got_frames) * 1000 / rate;

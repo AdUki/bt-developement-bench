@@ -537,8 +537,10 @@ last words: a refused URL, the sink it started with gone and nobody listening), 
 is the last 250 ms after the gain. `sink_status` is the sink as the pump has it: `{state, target,
 error, since_ms, seq}`, `state` one of `none`, `starting` (open, not yet taking audio), `playing`
 (has taken half a second), `stalled` (has taken nothing for 2 s: a Bluetooth link that stopped
-streaming), `failed` (it would not open, or stopped: `error`, of `target`; a stream switched to it,
-or with listeners, goes on without a sink). A named PipeWire sink is that one only
+streaming), `reconnecting` (a PipeWire sink that went away, opened again every 300 ms for up to
+10 s: a codec change makes a Bluetooth sink's node anew under the same name; the pump keeps time
+meanwhile), `failed` (it would not open, or stopped, or did not come back: `error`, of `target`; a
+stream switched to it, or with listeners, goes on without a sink). A named PipeWire sink is that one only
 (`node.dont-fallback`, `node.dont-reconnect`): never the default output instead. `meta` carries an ICY stream's station name and current title (from the decoder, or —
 when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to.
 `meta.art` is the cover the station sends with its title (ICY `StreamUrl`: an image, or a

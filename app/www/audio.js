@@ -243,9 +243,9 @@ function newAudioContext() {
 }
 
 // One listening stream: reads the WAV, turns each ~100 ms of samples into an AudioBuffer and
-// schedules it right after the previous one, keeping about a third of a second queued. A gap
-// (Wi-Fi) re-primes that cushion; more than two seconds queued (a background tab let it pile
-// up) drops blocks to catch up.
+// schedules it right after the previous one, keeping about a third of a second queued (played a
+// hair faster or slower to stay there). A gap (Wi-Fi) re-primes that cushion; more than two
+// seconds queued (a background tab let it pile up) drops blocks to catch up.
 class Listen {
   constructor(id, ctx) {
     this.id = id;
@@ -310,11 +310,17 @@ class Listen {
       this.dropped++;
       return;
     }
+    // The board's clock and this browser's output differ by up to a few hundred ppm: left alone the
+    // cushion drains into a gap every few minutes, or grows. Each block plays a little faster or
+    // slower to hold it near 0.3 s (the error averaged over ~1 s of blocks), at most ±0.5%: 9 cents.
+    this.err = 0.9 * (this.err || 0) + 0.1 * (this.next - now - 0.3);
+    const rate = Math.min(1.005, Math.max(0.995, 1 + 0.02 * this.err));
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
+    src.playbackRate.value = rate;
     src.connect(this.gain);
     src.start(this.next);
-    this.next += buf.duration;
+    this.next += buf.duration / rate;
   }
 
   buffered() { return Math.max(0, this.next - this.ctx.currentTime); }

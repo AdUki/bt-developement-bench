@@ -192,6 +192,10 @@ as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
   of stream, a generator into a sink the lightest. Watch the console's CPU readout (or Traffic →
   Graphs) while one runs. At most four streams run at once, and one that plays nowhere ends after
   30 s with nobody listening.
+- **Real time.** The capture and the sink (pw-cat, or arecord/aplay) run SCHED_FIFO 30, the
+  decoder at the pump's nice -15. pw-cat moves each graph cycle (512 frames, 10.7 ms) in its main
+  loop: at a nice value the Zero W had it late about once a second, and PipeWire dropped that cycle
+  (a click, and a listening browser's buffer running dry minutes later).
 
 ## bluetoothd
 
