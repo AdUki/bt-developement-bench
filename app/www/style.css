@@ -735,7 +735,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-btn.mode { width: 2.6rem; height: 2.6rem; }
 .np-btn.mode svg { width: 19px; height: 19px; }
 .np-foot { display: flex; align-items: center; gap: 0.6rem 1.4rem; flex-wrap: wrap; margin-top: 0.9rem; }
-.np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 200px; max-width: 320px; }
+.np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 100%; }
 .np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .np-vol input { flex: 1; }
 /* Where the board plays (player.js renderOuts): its outputs as buttons, this browser as a
@@ -861,7 +861,6 @@ td.acts > * { margin-right: 0.25rem; }
   .np-src, .np-row, .np-foot, .np-from, .np-flow { justify-content: center; }
   .np-ctl { align-items: center; }
   .np-time { text-align: left; }
-  .np-vol { max-width: none; }
   .rm-layout { grid-template-columns: 1fr; justify-items: center; }
   .rm-layout .remote { width: min(100%, 320px); }
   .rm-side { width: 100%; }
