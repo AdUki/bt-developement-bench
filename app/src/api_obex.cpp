@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 
 #include "bluez_model.h"
+#include "dbus_util.h"
 #include "http_util.h"
 #include "obex/obex.h"
 #include "util/log.h"
@@ -147,7 +148,13 @@ void install_obex_routes(httplib::Server& svr, Deps& d) {
   // ObexPort (its thumbnail unless full=1), cached per image handle.
   svr.Get("/api/media/players/cover", [&o, &d](const httplib::Request& req, httplib::Response& res) {
     const std::string path = query(req, "path");
-    const json m = model_media(*d.bt.objects());
+    const auto objs = d.bt.objects();
+    const json m = model_media(*objs);
+    // The adapter the player's device is connected on, for the BIP channel to leave from.
+    const auto ad = objs->find("/org/bluez/" + adapter_from_path(path));
+    const std::string source = ad != objs->end() && ad->contains("org.bluez.Adapter1")
+                                   ? str_of((*ad)["org.bluez.Adapter1"], "Address")
+                                   : "";
     for (const json& p : m["players"]) {
       if (p["path"] != path) continue;
       const std::string handle = p["track"].value("img_handle", std::string{});
@@ -157,13 +164,13 @@ void install_obex_routes(httplib::Server& svr, Deps& d) {
         // next track info carries one (the console asks again on the next media update).
         std::string err;
         int status = 502;
-        if (!o.cover_connect(p["address"].get<std::string>(), p["obex_port"].get<uint16_t>(), &err, &status))
+        if (!o.cover_connect(p["address"].get<std::string>(), source, p["obex_port"].get<uint16_t>(), &err, &status))
           return send_error(res, status, err);
         return send_error(res, 404, "no image for this track yet: the cover-art channel is open, the next track info carries a handle");
       }
       std::string file, err;
       int status = 502;
-      if (!o.cover_art(p["address"].get<std::string>(), p["obex_port"].get<uint16_t>(), handle,
+      if (!o.cover_art(p["address"].get<std::string>(), source, p["obex_port"].get<uint16_t>(), handle,
                        query(req, "full") != "1", &file, &err, &status))
         return send_error(res, status, err);
       return send_file(res, file, file);

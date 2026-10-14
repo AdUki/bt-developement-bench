@@ -681,8 +681,8 @@ the board's OBEX server does with an incoming push (`auto` saves it into `in/`; 
 `request` for `POST /api/obex/request` `{"id", "accept", "name"}`, 55 s). The policy is kept in
 `/data/btbench/obex.json`.
 
-`POST /api/obex/sessions` `{"address", "target": "opp|ftp|pbap|map|bip-avrcp", "channel"|"psm"}`
-(201) opens a client session; `DELETE /api/obex/sessions/{id}` closes it.
+`POST /api/obex/sessions` `{"address", "target": "opp|ftp|pbap|map|bip-avrcp", "channel"|"psm", "source"}`
+(201) opens a client session (`source`: the local adapter's address, else the one the kernel routes to); `DELETE /api/obex/sessions/{id}` closes it.
 `POST /api/obex/sessions/{id}` `{"op": ..., ...}` runs one operation:
 
 | target | op | arguments | answer |

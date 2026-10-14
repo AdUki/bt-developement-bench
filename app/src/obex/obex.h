@@ -92,7 +92,8 @@ class ObexManager {
 
   // ---- client sessions ----
   // target: opp | ftp | pbap | map | bip-avrcp; opts: channel, psm (bip-avrcp needs the
-  // player's ObexPort). Answers {id, path, target, destination, ...}.
+  // player's ObexPort), source (the local adapter's address). Answers {id, path, target,
+  // destination, ...}.
   bool create_session(const std::string& address, const std::string& target,
                       const nlohmann::json& opts, nlohmann::json* out, std::string* err, int* status);
   bool remove_session(const std::string& id, std::string* err, int* status);
@@ -114,12 +115,14 @@ class ObexManager {
 
   // Cover art: an AVRCP player's current image (BIP over its ObexPort), fetched once per handle
   // and kept under in/cover/. Returns the local file. `thumbnail` pulls the 200×200 JPEG every
-  // BIP responder has, else the native image.
-  bool cover_art(const std::string& address, uint16_t psm, const std::string& handle,
+  // BIP responder has, else the native image. `source` is the adapter the player is on: with two,
+  // a session without one leaves from whichever the kernel routes it to, and finds no link there.
+  bool cover_art(const std::string& address, const std::string& source, uint16_t psm, const std::string& handle,
                  bool thumbnail, std::string* file, std::string* err, int* status);
   // Opens the BIP channel to a player's ObexPort, if none is open. A phone puts image handles in
   // the track metadata only while one is (AVRCP 1.6): the handle comes with the next track info.
-  bool cover_connect(const std::string& address, uint16_t psm, std::string* err, int* status);
+  bool cover_connect(const std::string& address, const std::string& source, uint16_t psm, std::string* err,
+                     int* status);
 
   struct Bus;  // the bus thread's callbacks
 
@@ -169,7 +172,8 @@ class ObexManager {
   };
   std::unique_ptr<Request> request_;
   uint64_t next_request_id_ = 1;
-  bool cover_session(const std::string& address, uint16_t psm, std::string* sid, std::string* err, int* status);
+  bool cover_session(const std::string& address, const std::string& source, uint16_t psm, std::string* sid,
+                     std::string* err, int* status);
   std::mutex cover_m_;
 
   // The bus thread.

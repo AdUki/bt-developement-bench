@@ -810,6 +810,8 @@ bool ObexManager::create_session(const std::string& address, const std::string& 
   if (opts.contains("channel") && opts["channel"].is_number_unsigned())
     d.push_back({"Channel", DVar{'y', "", opts["channel"].get<int>(), {}, {}}});
   if (opts.contains("psm") && opts["psm"].is_number_unsigned()) d.push_back({"PSM", DVar::u16(opts["psm"].get<uint16_t>())});
+  if (opts.contains("source") && opts["source"].is_string() && !opts["source"].get<std::string>().empty())
+    d.push_back({"Source", DVar::str(opts["source"].get<std::string>())});
   const CallResult r = call(kClientPath, "org.bluez.obex.Client1", "CreateSession", [address, d](sd_bus_message* m) {
     int rc = sd_bus_message_append(m, "s", address.c_str());
     if (rc >= 0) rc = append_dict(m, d);
@@ -1110,8 +1112,8 @@ bool ObexManager::transfer_action(const std::string& id, const std::string& acti
 // A device's BIP responder takes one connection: any open bip-avrcp session to it is the one to
 // use — ours from before, or one opened by hand on the OBEX tab — and a second CreateSession
 // would be refused (OBEX 0x53, service unavailable).
-bool ObexManager::cover_session(const std::string& address, uint16_t psm, std::string* sid, std::string* err,
-                                int* status) {
+bool ObexManager::cover_session(const std::string& address, const std::string& source, uint16_t psm,
+                                std::string* sid, std::string* err, int* status) {
   {
     std::lock_guard<std::mutex> lk(m_);
     for (const auto& [path, p] : sessions_) {
@@ -1123,7 +1125,7 @@ bool ObexManager::cover_session(const std::string& address, uint16_t psm, std::s
     }
   }
   json s;
-  if (!create_session(address, "bip-avrcp", json{{"psm", psm}}, &s, err, status)) return false;
+  if (!create_session(address, "bip-avrcp", json{{"psm", psm}, {"source", source}}, &s, err, status)) return false;
   *sid = s["id"].get<std::string>();
   // A handle names an image within one BIP connection only (a phone starts again at 0000001 on
   // the next): what was kept from an earlier one is another track's cover.
@@ -1136,14 +1138,16 @@ bool ObexManager::cover_session(const std::string& address, uint16_t psm, std::s
   return true;
 }
 
-bool ObexManager::cover_connect(const std::string& address, uint16_t psm, std::string* err, int* status) {
+bool ObexManager::cover_connect(const std::string& address, const std::string& source, uint16_t psm, std::string* err,
+                                int* status) {
   std::lock_guard<std::mutex> guard(cover_m_);
   std::string sid;
-  return cover_session(address, psm, &sid, err, status);
+  return cover_session(address, source, psm, &sid, err, status);
 }
 
-bool ObexManager::cover_art(const std::string& address, uint16_t psm, const std::string& handle, bool thumbnail,
-                            std::string* file, std::string* err, int* status) {
+bool ObexManager::cover_art(const std::string& address, const std::string& source, uint16_t psm,
+                            const std::string& handle, bool thumbnail, std::string* file, std::string* err,
+                            int* status) {
   if (handle.empty() || handle.size() > 16 || handle.find_first_not_of("0123456789") != std::string::npos) {
     *status = 400;
     *err = "an image handle is seven digits";
@@ -1154,7 +1158,7 @@ bool ObexManager::cover_art(const std::string& address, uint16_t psm, const std:
   // clears them, cover_session).
   std::lock_guard<std::mutex> guard(cover_m_);
   std::string sid;
-  if (!cover_session(address, psm, &sid, err, status)) return false;
+  if (!cover_session(address, source, psm, &sid, err, status)) return false;
   const std::string local = opt_.root + "/in/cover/" + upper(address) + "-" + handle + (thumbnail ? "-thumb" : "") + ".jpg";
   struct stat st{};
   if (stat(local.c_str(), &st) == 0 && st.st_size > 0) {
