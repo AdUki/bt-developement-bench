@@ -7,7 +7,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -118,6 +120,12 @@ int main(int argc, char** argv) {
   btb::BtManager bt;
   bt.set_adapter(bt_adapter);
   bt.set_default_alias(!pc);
+  if (!pc) {
+    std::ifstream f("/etc/btbench/board.env");
+    std::stringstream board;
+    board << f.rdbuf();
+    bt.set_accept_central(btb::parse_env(board.str())["BT_CENTRAL"] == "yes");
+  }
   bt.set_state_file(data_dir + "/bluetooth.json");
   btb::AdvManager adv(bt);
   btb::GattServer gatt_server(bt, [&publish](const nlohmann::json& ev) { publish("gatt.server", ev); });

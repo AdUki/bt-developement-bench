@@ -231,6 +231,16 @@ Run `systemctl restart bluetooth` after editing (`bench bt-args "-d"` does both)
   `BLUETOOTHD_NOPLUGIN=` (empty) and stop `btbench-audio-pipewire.target`, or remove `hfp_hf`
   from WirePlumber's roles.
 
+**Receiving A2DP on the Zero W.** The BCM43430A1 shares one radio between Wi-Fi and Bluetooth,
+and as the peripheral of a link it gets too little of it: another board streaming aptX HD
+(576 kbit/s) to it got about half its packets through, the rest dropped at the sender for want of
+credits. As central the same link carries all of it. So the Zero W's controller asks for the central
+role on every link it accepts (`BT_CENTRAL=yes` in board.env: btbenchd sets the kernel's link mode,
+`hciconfig hci0 lm` says `ACCEPT CENTRAL`); the links it opens itself are central anyway. aptX HD
+still lost a packet now and then with the Wi-Fi awake (a ~100-200 ms gap, 0.7-1.3 a minute over
+3 min runs); with the Wi-Fi in power save (`WIFI_POWERSAVE=on` in board.env, btbench-wifi sets
+it) 0-0.3 a minute. aptX (384 kbit/s) arrived whole in a minute with the Wi-Fi awake.
+
 **LE Audio on the Zero W.** The BCM43430A1 is a Bluetooth 4.1 controller without ISO channels.
 To exercise BAP, use a USB dongle that has them (with the gadget off, `BTBENCH_GADGET = "off"`)
 or a virtual controller: `btvirt -l2` or a vhci device.

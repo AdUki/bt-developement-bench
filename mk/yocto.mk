@@ -312,6 +312,8 @@ auto-conf: $(YB)/conf/bblayers.conf
 	   echo 'BTBENCH_TRY_METHOD = "$(TRY_METHOD)"'; \
 	   echo 'BTBENCH_GADGET_UDC = "$(GADGET_UDC)"'; \
 	   echo 'BTBENCH_BT_HCI = "$(BT_HCI)"'; \
+	   echo 'BTBENCH_BT_CENTRAL = "$(BT_CENTRAL)"'; \
+	   echo 'BTBENCH_WIFI_POWERSAVE = "$(WIFI_POWERSAVE)"'; \
 	   echo 'BTBENCH_ROOT = "$(ROOT)"'; \
 	   echo 'require $(ROOT)/$(YOCTO)/conf/versions.conf'; \
 	   echo 'require $(ROOT)/$(BOARD_CONF)'; \

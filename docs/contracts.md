@@ -25,7 +25,8 @@ libubootenv-bin), `btbench-base` (system), `btbenchd` (btbenchd).
 `BTBENCH_BOARD`, `BTBENCH_KERNEL` (next|rpi), `BTBENCH_KARCH`, `BTBENCH_KIMAGE`,
 `BTBENCH_KDEFCONFIG`, `BTBENCH_DTBS`, `BTBENCH_DTS_EXTRA` (absolute path or empty),
 `BTBENCH_KFRAGMENT_BOARD` (the board's kernel fragment, `boards/<board>.cfg`: absolute path or empty),
-`BTBENCH_TRY_METHOD`, `BTBENCH_GADGET_UDC`, `BTBENCH_BT_HCI`, `BTBENCH_ROOT` (the repo checkout),
+`BTBENCH_TRY_METHOD`, `BTBENCH_GADGET_UDC`, `BTBENCH_BT_HCI`, `BTBENCH_BT_CENTRAL` (yes|empty), `BTBENCH_WIFI_POWERSAVE` (on|empty),
+`BTBENCH_ROOT` (the repo checkout),
 `BTBENCH_{BLUEZ,PIPEWIRE,WIREPLUMBER,LINUX}_{SRCREV,PV}` (yocto/conf/versions.conf).
 
 Board conf (`yocto/conf/boards/<board>.conf`): `BTBENCH_WKS` (the card layout in `wic/`),
@@ -43,7 +44,9 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
 
 ## On the board
 
-- `/etc/btbench/board.env` — shell `KEY=VALUE`: `BOARD KERNEL KARCH KIMAGE DTBS TRY_METHOD GADGET_UDC BT_HCI`.
+- `/etc/btbench/board.env` — shell `KEY=VALUE`: `BOARD KERNEL KARCH KIMAGE DTBS TRY_METHOD GADGET_UDC BT_HCI
+  BT_CENTRAL WIFI_POWERSAVE` (`BT_CENTRAL=yes`: btbenchd makes the board's own controller central on the
+  links it accepts; `WIFI_POWERSAVE=on`: btbench-wifi leaves the Wi-Fi in power save, else off).
 - `/etc/btbench/device.env` — `HOSTNAME AP_PSK WIFI_COUNTRY GADGET HTTP_PORT`.
 - `/data` — ext4 partition (label `data`), mounted at boot, grown to fill the card at first boot.
   - `/data/btbench/bluetoothd.env` — `BLUETOOTHD_ARGS="-d ..."` (no `-n`: under systemd it only duplicates

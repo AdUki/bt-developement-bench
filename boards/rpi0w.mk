@@ -41,6 +41,15 @@ GADGET_UDC := 20980000.usb
 
 # The onboard controller.
 BT_HCI := hci0
+# It asks for the central role on the links it accepts (btbenchd, BtManager::set_accept_central).
+# As a peripheral the BCM43430 shares its radio with the Wi-Fi so badly that a phone or another
+# board streaming aptX HD to it got half its packets through (~280 of 576 kbit/s, the rest dropped
+# at the sender); as central the same link carried all of it.
+BT_CENTRAL := yes
+# Its Wi-Fi in power save (btbench-wifi): awake, it took the shared radio from the Bluetooth often
+# enough for an aptX HD stream received from another board to drop out ~1/min (0.7-1.3 in 3 min
+# runs); asleep between beacons, 0-0.3/min. It costs tens of ms on what comes in over Wi-Fi.
+WIFI_POWERSAVE := on
 
 # The SDK's environment script (one per tune).
 SDK_ENV_GLOB := environment-setup-arm1176jzfshf*

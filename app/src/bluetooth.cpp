@@ -5,6 +5,8 @@
 #include <poll.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <systemd/sd-bus.h>
 #include <time.h>
 #include <unistd.h>
@@ -297,6 +299,7 @@ BtManager::~BtManager() { stop(); }
 
 void BtManager::set_adapter(std::string want) { want_adapter_ = std::move(want); }
 void BtManager::set_default_alias(bool on) { default_alias_ = on; }
+void BtManager::set_accept_central(bool on) { accept_central_ = on; }
 
 namespace {
 
@@ -317,6 +320,31 @@ bool adapter_on_usb(const std::string& apath) {
   char buf[PATH_MAX];
   const char* r = realpath(("/sys/class/bluetooth/" + name + "/device").c_str(), buf);
   return r && strstr(r, "/usb") != nullptr;
+}
+
+// hciN's link mode to "accept, and become central" (hciconfig hciN lm accept,master). The kernel
+// keeps it until the controller is unregistered (a rebind after a hang makes a new one).
+bool accept_as_central(const std::string& name, std::string* err) {
+  struct HciDevReq {
+    uint16_t dev_id;
+    uint32_t dev_opt;
+  };
+  constexpr unsigned long kHciSetLinkMode = _IOW('H', 226, int);
+  constexpr uint32_t kLmAccept = 0x8000, kLmMaster = 0x0001;
+  if (name.compare(0, 3, "hci") != 0 || name.size() < 4) {
+    *err = "not an hci device";
+    return false;
+  }
+  const int fd = socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, 1 /* BTPROTO_HCI */);
+  if (fd < 0) {
+    *err = strerror(errno);
+    return false;
+  }
+  HciDevReq dr{static_cast<uint16_t>(atoi(name.c_str() + 3)), kLmAccept | kLmMaster};
+  const bool ok = ioctl(fd, kHciSetLinkMode, &dr) == 0;
+  if (!ok) *err = strerror(errno);
+  close(fd);
+  return ok;
 }
 
 }  // namespace
@@ -404,6 +432,11 @@ void BtManager::restore_adapters(const json& objs, const std::vector<BtAdapterId
     sd_bus_error_free(&fe);
 
     const std::string name = adapter_from_path(a.path);
+    if (accept_central_ && !a.usb) {
+      std::string e;
+      if (accept_as_central(name, &e)) LOG_INFO("bluetooth: {} becomes central on the links it accepts", name);
+      else LOG_WARN("bluetooth: {}: link mode central: {}", name, e);
+    }
     DDict props;
     bool own_alias = false;
     {

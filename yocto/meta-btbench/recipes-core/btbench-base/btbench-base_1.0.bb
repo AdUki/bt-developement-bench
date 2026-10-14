@@ -67,6 +67,8 @@ BTBENCH_DTBS ??= ""
 BTBENCH_TRY_METHOD ??= "none"
 BTBENCH_GADGET_UDC ??= ""
 BTBENCH_BT_HCI ??= "hci0"
+BTBENCH_BT_CENTRAL ??= ""
+BTBENCH_WIFI_POWERSAVE ??= ""
 # The board's MAC after its hostname (btbench-hostname): btbench-257bfc. "0" keeps it plain.
 BTBENCH_HOSTNAME_MAC ??= "1"
 
@@ -136,6 +138,8 @@ DTBS=${@btbench_shq(d, 'BTBENCH_DTBS')}
 TRY_METHOD=${@btbench_shq(d, 'BTBENCH_TRY_METHOD')}
 GADGET_UDC=${@btbench_shq(d, 'BTBENCH_GADGET_UDC')}
 BT_HCI=${@btbench_shq(d, 'BTBENCH_BT_HCI')}
+BT_CENTRAL=${@btbench_shq(d, 'BTBENCH_BT_CENTRAL')}
+WIFI_POWERSAVE=${@btbench_shq(d, 'BTBENCH_WIFI_POWERSAVE')}
 EOF
     cat >${D}${sysconfdir}/btbench/device.env <<'EOF'
 # This bench's settings (btbench-device.conf). Written by btbench-base; shell syntax.
@@ -217,7 +221,7 @@ FILES:${PN} += " \
 # The settings are baked into /etc/btbench; the package must be rebuilt when they change.
 do_install[vardeps] += " \
     BTBENCH_BOARD BTBENCH_KERNEL BTBENCH_KARCH BTBENCH_KIMAGE BTBENCH_DTBS BTBENCH_TRY_METHOD \
-    BTBENCH_GADGET_UDC BTBENCH_BT_HCI BTBENCH_HOSTNAME BTBENCH_AP_PSK BTBENCH_WIFI_COUNTRY \
+    BTBENCH_GADGET_UDC BTBENCH_BT_HCI BTBENCH_BT_CENTRAL BTBENCH_WIFI_POWERSAVE BTBENCH_HOSTNAME BTBENCH_AP_PSK BTBENCH_WIFI_COUNTRY \
     BTBENCH_GADGET BTBENCH_HTTP_PORT BTBENCH_WIFI_SSID BTBENCH_WIFI_PSK \
     BTBENCH_HOSTNAME_MAC \
 "

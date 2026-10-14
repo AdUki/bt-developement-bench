@@ -154,6 +154,11 @@ class BtManager {
   // an alias set to "" goes back to that. Off on a PC, whose adapters are the desktop's.
   // Before start().
   void set_default_alias(bool on);
+  // The board's own controller (not on USB) asks for the central role on every link it accepts
+  // (the kernel's HCI_LM_MASTER: Accept Connection Request with a role switch), set each time BlueZ
+  // shows it. For a Wi-Fi/Bluetooth combo chip that shares its radio badly as a peripheral (the
+  // Zero W's; board.env BT_CENTRAL). Before start().
+  void set_accept_central(bool on);
   void add_user(BusUser* u);  // before start()
   // Value changes of GATT characteristics (notifications, and reads), on the bus thread.
   using NotifyFn = std::function<void(const std::string& path, const std::vector<uint8_t>& value)>;
@@ -319,6 +324,7 @@ class BtManager {
   // Set before start(), read on the bus thread.
   std::string want_adapter_;
   bool default_alias_ = false;
+  bool accept_central_ = false;
   std::vector<BusUser*> users_;
   NotifyFn notify_;
   std::function<void(bool)> change_fn_;

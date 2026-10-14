@@ -64,7 +64,10 @@ POLL=5
 
 WIFI_COUNTRY=
 AP_PSK=
+WIFI_POWERSAVE=
 [ -r /etc/btbench/device.env ] && . /etc/btbench/device.env
+# Only WIFI_POWERSAVE from the board's file: its other names (BOARD, KERNEL, ...) are not ours.
+[ -r /etc/btbench/board.env ] && eval "$(grep '^WIFI_POWERSAVE=' /etc/btbench/board.env)"
 
 log() { echo "btbench-wifi: $*" >&2; }
 die() {
@@ -468,8 +471,14 @@ start_sta() {
     # Restarted rather than started: it reads the networks file only when it starts.
     systemctl restart "$WPA_UNIT"
     # brcmfmac's power save adds tens of ms to every packet the board receives; on a bench that is
-    # reached over ssh and measured with iperf3 that is all cost and no gain.
-    iw dev "$IFACE" set power_save off 2>/dev/null
+    # reached over ssh and measured with iperf3 that is all cost and no gain. Except where the Wi-Fi
+    # shares its radio with the Bluetooth (board.env WIFI_POWERSAVE=on, the Zero W): awake, it
+    # kept the radio from an aptX HD stream the board received about once a minute.
+    if [ "$WIFI_POWERSAVE" = on ]; then
+        iw dev "$IFACE" set power_save on 2>/dev/null
+    else
+        iw dev "$IFACE" set power_save off 2>/dev/null
+    fi
     cur_ssid=""
     set_state connecting
 }
