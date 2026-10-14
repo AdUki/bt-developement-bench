@@ -454,40 +454,90 @@ void test_pw_dump_parse() {
   CHECK(parse_pw_dump("").empty());
 }
 
-// The order a playlist plays in, with repeat and shuffle.
+// The order a playlist plays in, with repeat and shuffle: shuffled, the list itself is in the
+// order it plays.
+std::vector<PlaylistItem> tracks(int n) {
+  std::vector<PlaylistItem> l(static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) l[static_cast<size_t>(i)].title = std::to_string(i);
+  return l;
+}
+std::string titles(const std::vector<PlaylistItem>& l) {
+  std::string s;
+  for (const PlaylistItem& it : l) s += it.title;
+  return s;
+}
+
 void test_play_order() {
   PlayOrder o(7);
-  o.reset(3, 0, false);
-  CHECK_EQ(o.next("off", false, false), 1);
-  CHECK_EQ(o.next("off", false, false), 2);
-  CHECK_EQ(o.next("off", false, false), -1);   // the end of the list
-  CHECK_EQ(o.next("off", true, false), 2);     // next on the last track: it again
-  CHECK_EQ(o.next("track", false, false), 2);  // repeat one: at its end, the same track
-  CHECK_EQ(o.next("all", false, false), 0);    // repeat all: round again
-  CHECK_EQ(o.previous("off"), 0);              // previous on the first: it again
-  CHECK_EQ(o.previous("all"), 2);              // ... or, repeating all, the last
-  o.go(1);
-  CHECK_EQ(o.next("off", true, false), 2);
-  o.grow(4, false);
-  CHECK_EQ(o.next("off", false, false), 3);
+  std::vector<PlaylistItem> l = tracks(3);
+  o.reset(l, false);
+  CHECK(l[0].id && l[1].id && l[2].id && l[0].id != l[1].id);
+  CHECK_EQ(o.next(l, "off", false), 1);
+  CHECK_EQ(o.next(l, "off", false), 2);
+  CHECK_EQ(o.next(l, "off", false), -1);   // the end of the list
+  CHECK_EQ(o.next(l, "off", true), 2);     // next on the last track: it again
+  CHECK_EQ(o.next(l, "track", false), 2);  // repeat one: at its end, the same track
+  CHECK_EQ(o.next(l, "all", false), 0);    // repeat all: round again
+  CHECK_EQ(o.previous(l, "off"), 0);       // previous on the first: it again
+  CHECK_EQ(o.previous(l, "all"), 2);       // ... or, repeating all, the last
+  o.go(l, 1);
+  CHECK_EQ(o.next(l, "off", true), 2);
+  o.insert(l, tracks(1), false);
+  CHECK_EQ(o.next(l, "off", false), 3);
+  CHECK_EQ(titles(l), std::string("0120"));
 
-  // Shuffled: the one playing first, then every other track once, then the end.
-  o.reset(6, 4, true);
-  CHECK_EQ(o.order().front(), 4);
-  std::vector<int> seen{4};
-  for (int t; (t = o.next("off", false, true)) >= 0;) seen.push_back(t);
-  std::sort(seen.begin(), seen.end());
-  CHECK(seen == (std::vector<int>{0, 1, 2, 3, 4, 5}));
-  // Repeating all, a new round does not start with the track that just ended.
-  const int last = o.order().back();
-  CHECK(o.next("all", false, true) != last);
-  CHECK_EQ(o.order().size(), size_t(6));
-  // A track enqueued while shuffled comes later, not before the one playing.
-  o.reset(2, 1, true);
-  o.grow(3, true);
-  CHECK_EQ(o.order().front(), 1);
-  CHECK_EQ(o.order().size(), size_t(3));
-  CHECK(PlayOrder().next("off", true, false) == -1);  // nothing to play
+  // Added to play next: right after the one playing.
+  o.go(l, 1);
+  std::vector<PlaylistItem> x = tracks(1);
+  x[0].title = "x";
+  o.insert(l, x, true);
+  CHECK_EQ(titles(l), std::string("01x20"));
+  CHECK_EQ(o.next(l, "off", true), 2);
+  // Taken out: any but the one playing.
+  CHECK(!o.remove(l, l[2].id));
+  CHECK(o.remove(l, l[0].id));
+  CHECK(!o.remove(l, 999));
+  CHECK_EQ(titles(l), std::string("1x20"));
+  CHECK_EQ(o.at(l), 1);
+
+  // Shuffled: the one playing first, then every other track once in the list's own order, then
+  // the end; off again, back as listed with the one playing where it was.
+  l = tracks(6);
+  o.reset(l, false);
+  o.go(l, 4);
+  o.shuffle(l, true);
+  CHECK_EQ(l.front().title, std::string("4"));
+  CHECK_EQ(o.at(l), 0);
+  std::string order = titles(l);
+  std::sort(order.begin(), order.end());
+  CHECK_EQ(order, std::string("012345"));
+  const std::string shuffled = titles(l);
+  std::string played = l.front().title;
+  for (int t; (t = o.next(l, "off", false)) >= 0;) played += l[static_cast<size_t>(t)].title;
+  CHECK_EQ(played, shuffled);
+  // Added while shuffled, to play next: after the one playing in both orders.
+  std::vector<PlaylistItem> y = tracks(1);
+  y[0].title = "y";
+  o.insert(l, y, true);
+  CHECK_EQ(l.back().title, std::string("y"));  // the last track plays
+  o.shuffle(l, false);
+  std::string listed = "012345";
+  listed.insert(listed.find(shuffled.back()) + 1, "y");
+  CHECK_EQ(titles(l), listed);
+  CHECK_EQ(l[static_cast<size_t>(o.at(l))].title, std::string(1, shuffled.back()));
+
+  // Repeating all, a new round is a new order that does not start with the track just played.
+  l = tracks(6);
+  o.reset(l, true);
+  CHECK_EQ(l.front().title, std::string("0"));
+  while (o.next(l, "off", false) >= 0) {}
+  const uint32_t last = o.current();
+  CHECK_EQ(o.next(l, "all", false), 0);
+  CHECK(l.front().id != last);
+  CHECK_EQ(l.size(), size_t(6));
+
+  std::vector<PlaylistItem> none;
+  CHECK(PlayOrder().next(none, "off", true) == -1);  // nothing to play
 }
 
 void test_cards() {

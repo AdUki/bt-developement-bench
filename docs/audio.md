@@ -270,7 +270,9 @@ has a play state and nothing else.
   default sink when it is a Bluetooth one, else the first Bluetooth sink, else the default sink.
   The folder the entry is in (or the folder played) becomes the now playing list; next and
   previous go round it, and a track that ends (the sweep, a station that drops) is followed by
-  the next (repeat one: by itself; repeat all: round again; shuffle: by any other). Pause and stop end the stream; play starts the track again. A speaker that drops and comes back
+  the next (repeat one: by itself; repeat all: round again). Shuffle puts the list itself in a
+  random order, the track playing first (off: back as listed), so the now playing list a remote
+  browses is the order it plays in; repeating all, each round is a new order. Pause and stop end the stream; play starts the track again. A speaker that drops and comes back
   gets the music back: while the player plays to something else it looks for a Bluetooth sink
   every 5 s and moves its stream there. A station's ICY title
   becomes the track's title (its "Artist - " part the artist), the station its album.
@@ -280,7 +282,9 @@ has a play state and nothing else.
   repeat and shuffle, which the remote can change. The remote's buttons act on that stream. A
   URL stream's playlist is then the now playing list the remote browses (items
   `<player>/item/s<stream>_<n>`, the track playing its trackid); playing one of them jumps the
-  stream to it.
+  stream to it. A change to that list (shuffle, which reorders it, tracks added or removed) goes
+  to the remote as a changed now playing list (AVRCP NOW_PLAYING_CONTENT_CHANGED), and the remote
+  reads it again.
 - **Browsing.** The remote can browse the library, the now playing list and search results
   (names, by every word), play an entry and add one to the now playing list. Upstream BlueZ
   rejects these commands in the target role; the bench's fork answers them (the image's BlueZ,

@@ -52,6 +52,7 @@ const PL_SVG = {
   folder: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2z',
   plus: 'M12 5v14M5 12h14',
   remove: 'M6 6l12 12M18 6L6 18',
+  playnext: 'M4 6h12M4 11h12M4 16h6M14 14v6l5-3z',  // into the queue, right after what plays
   wave: 'M2 12h3l3-7 4 14 4-10 3 3h3',
   mic: 'M12 3a3 3 0 013 3v6a3 3 0 01-6 0V6a3 3 0 013-3zM5 11a7 7 0 0014 0M12 18v3',
   into: 'M12 3v11M7 9l5 5 5-5M4 15v4h16v-4',     // music coming into the board
@@ -462,21 +463,30 @@ function renderQueue(c) {
   let rows = '', note = '';
   if (c.kind === 'board') {
     const s = c.s, list = s.source.playlist || [];
-    if (list.length > 1) {
-      rows = list.map((it, i) => `<div class="tr${i === s.track ? ' now' : ''}" data-track="${i}">
-          <span class="tr-n">${i === s.track ? svg(PL_SVG.play) : i + 1}</span>
-          <span class="tr-t">${esc(it.title || it.url)}</span></div>`).join('');
-      note = `${list.length} tracks`;
+    // The list in the order it plays (shuffled too: the board shuffles the list itself), each
+    // track but the one playing with a remove.
+    if (list.length > 1 || streamKind(s).what === 'Media server') {
+      rows = list.map((it, i) => {
+        const now = i === s.track, d = it.duration_ms || (it.duration_s || 0) * 1000;
+        return `<div class="tr${now ? ' now' : ''}" data-track="${i}">
+          <span class="tr-n">${now ? svg(PL_SVG.play) : i + 1}</span>
+          <span class="tr-t">${esc(it.title || it.url)}${it.artist ? ` <span class="muted">${esc(it.artist)}</span>` : ''}</span>
+          ${d ? `<span class="tr-d">${fmtMs(d)}</span>` : ''}
+          ${now || it.id == null ? '<span class="icon-btn" aria-hidden="true"></span>' : `<button class="icon-btn" data-q-del="${it.id}" title="Remove from the queue" aria-label="Remove from the queue">${svg(PL_SVG.remove)}</button>`}</div>`;
+      }).join('');
+      note = `${list.length} track${list.length > 1 ? 's' : ''}${s.source.shuffle ? ', shuffled' : ''}`;
     } else {
       note = isUrl(s) ? 'A radio stream' : streamKind(s).what;
     }
   } else if (c.kind === 'phone') {
     // The phone's now-playing list: read when the track changes, and retried a little later after
     // a failure (a phone answers browsing slowly, or not at all, for a while after it connects).
-    // Not re-read on a timer: every read moves the phone's browsing from the library's folder to
-    // Now Playing, which drops the items BlueZ holds for the other, and on some phones (an S25)
-    // costs 10 s during which the library waits.
-    const key = c.p.path + '|' + ((c.p.track || {}).title || '');
+    // Read again too when its shuffle changes, or it says its list changed (AVRCP's now playing
+    // content changed: another board reshuffling or editing its queue does). Not re-read on a
+    // timer: every read moves the phone's browsing from the library's folder to Now Playing,
+    // which drops the items BlueZ holds for the other, and on some phones (an S25) costs 10 s
+    // during which the library waits.
+    const key = [c.p.path, (c.p.track || {}).title || '', c.p.shuffle || '', c.p.playlist_changes || 0].join('|');
     const due = pl.queueKey !== key ? 0 : pl.queueOk ? Infinity : pl.queueEmpty === 1 ? 2000 : pl.queueEmpty ? 6000 : 8000;
     if (c.p.browsable && !pl.queueBusy && Date.now() - pl.queueAt > due) {
       pl.queueBusy = true;
@@ -808,8 +818,9 @@ function renderLib(empty, foot) {
     const cover = meta && (meta.art || meta.thumb) ? `<span class="lib-cover">${libArt({art: meta.art || meta.thumb}, PL_SVG.note)}</span>` : '';
     head = `<div class="lib-head${cover ? ' has-cover' : ''}">${cover}<div class="lib-head-t">${meta ? `<b>${esc(here.title)}</b>` : ''}
       <span class="muted small">${esc(facts)}</span>
-      <div class="row"><button class="primary small-btn" data-lib-all="play">${svg(PL_SVG.play)} Play all</button>
-        <button class="small-btn" data-lib-all="add" title="Add every track to the queue">${svg(PL_SVG.plus)} Add all</button></div></div></div>`;
+      <div class="row"><button class="primary small-btn" data-lib-all="">${svg(PL_SVG.play)} Play all</button>
+        <button class="small-btn" data-lib-all="next" title="Every track into the queue, right after what plays">${svg(PL_SVG.playnext)} Play next</button>
+        <button class="small-btn" data-lib-all="end" title="Every track at the end of the queue">${svg(PL_SVG.plus)} Add all</button></div></div></div>`;
   }
   const inAlbum = !!(meta && meta.album);
   // A folder of albums with covers is shown as covers.
@@ -840,6 +851,7 @@ function libRowsHTML(items, from, inAlbum) {
     const i = from + k;
     const open = it.kind === 'server' || it.kind === 'folder' || it.kind === 'pfolder';
     const add = it.kind === 'track' || (it.kind === 'ptrack' && it.playable);
+    const btn = (attr, icon, title) => `<button class="icon-btn" ${attr}="${i}" title="${title}" aria-label="${title}">${svg(icon)}</button>`;
     // Inside an album the tracks show their number (the cover is at the top); elsewhere their cover.
     const lead = it.kind === 'track' && inAlbum && it.track != null ? `<span class="tr-n">${it.track}</span>`
       : `<span class="tr-n tr-art">${libArt(it, icon[it.kind])}</span>`;
@@ -848,7 +860,9 @@ function libRowsHTML(items, from, inAlbum) {
       <span class="tr-t">${esc(it.title)}${it.sub && !(inAlbum && it.kind === 'track') ? `<span class="muted">${esc(it.sub)}</span>` : ''}</span>
       ${it.format ? `<span class="tr-fmt">${esc(it.format)}</span>` : ''}
       ${it.duration_s ? `<span class="tr-d">${fmtMs(it.duration_s * 1000)}</span>` : ''}
-      ${add ? `<button class="icon-btn" data-lib-add="${i}" title="Add to the queue" aria-label="Add to the queue">${svg(PL_SVG.plus)}</button>` : ''}
+      ${it.kind === 'folder' ? btn('data-lib-folder', PL_SVG.play, 'Play the whole folder') : ''}
+      ${it.kind === 'track' ? btn('data-lib-next', PL_SVG.playnext, 'Play next') : ''}
+      ${add ? btn('data-lib-add', PL_SVG.plus, it.kind === 'track' ? 'Add to the end of the queue' : 'Add to the queue') : ''}
       ${it.kind === 'station' ? `<button class="icon-btn" data-lib-del="${i}" title="Remove the station" aria-label="Remove the station">${svg(PL_SVG.remove)}</button>` : ''}
       ${open ? '<span class="chev"></span>' : ''}</div>`;
   }).join('');
@@ -876,22 +890,64 @@ function libAppend(rows) {
   libMoreLine();
 }
 
-// Play every track of the folder, or add them all to the queue.
+// Play every track of the folder, or put them all in the queue: `add` 'next' right after what
+// plays, 'end' at its end. A folder still loading more pages is read to its end first.
 function libAll(add) {
-  const tracks = pl.libItems.filter(x => x.kind === 'track');
+  const here = pl.libPath[pl.libPath.length - 1];
+  if (pl.libMore && here) return folderPlay(pl.upnpServer, here.id, here.title, (here.meta || {}).art || '', add);
+  queueTracks(pl.libItems.filter(x => x.kind === 'track'), add);
+}
+
+// Tracks (library rows) played on the board, or into its queue (`add`: 'next' or 'end') while a
+// URL stream plays.
+function queueTracks(tracks, add) {
   if (!tracks.length) return;
   const items = tracks.map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s, artist: x.artist, album: x.album, rate: x.rate}));
   const b = urlStream();
   if (add && b) {
     items.forEach(t => { pl.art[t.url] = t; });
-    return put(`/audio/streams/${b.id}`, {enqueue: items.map(playlistItem)})
-      .then(() => toast(`Added ${items.length} tracks to the queue`)).catch(fail);
+    const what = items.length > 1 ? `${items.length} tracks` : `“${items[0].title}”`;
+    return put(`/audio/streams/${b.id}`, {enqueue: items.map(playlistItem), at: add})
+      .then(() => { toast(add === 'next' ? `${what} play${items.length > 1 ? '' : 's'} next` : `Added ${what} to the queue`); refreshPlayerStreams(); })
+      .catch(fail);
   }
   playOnBoard(items);
 }
 
+// Every track of a media server's folder, its subfolders' too (depth first, a few levels down), up
+// to what one playlist holds: an artist or a folder of albums plays as one queue. Each track once:
+// a server shows the same file under several views (Music → Album, Artist, Genre, All music),
+// each with a URL of its own, so a track is known by what it is.
+const MAX_PLAYLIST = 500;  // the daemon's kMaxPlaylist
+async function folderTracks(server, id, art, out, depth, seen = new Set()) {
+  for (let start = 0; out.length < MAX_PLAYLIST;) {
+    const r = await api(`/audio/upnp/browse?server=${encodeURIComponent(server)}&object=${encodeURIComponent(id)}&start=${start}&count=${UPNP_PAGE}`);
+    const rows = upnpRows(r, art);
+    const key = t => [t.title, t.artist, t.album, t.duration_s, t.format].join('|');
+    rows.filter(x => x.kind === 'track' && !seen.has(key(x))).slice(0, MAX_PLAYLIST - out.length)
+      .forEach(t => { seen.add(key(t)); out.push(t); });
+    if (depth < 3) {
+      for (const f of rows.filter(x => x.kind === 'folder')) {
+        if (out.length >= MAX_PLAYLIST) break;
+        await folderTracks(server, f.id, f.art || art, out, depth + 1, seen);
+      }
+    }
+    start += r.returned || 0;
+    if (!(r.returned > 0 && (r.total ? start < r.total : r.returned >= UPNP_PAGE))) break;
+  }
+  return out;
+}
+
+function folderPlay(server, id, title, art, add) {
+  toast(`Getting the tracks of ${title}…`);
+  folderTracks(server, id, art, [], 0)
+    .then(ts => ts.length ? queueTracks(ts, add) : toast(`${title} has no tracks to play`))
+    .catch(fail);
+}
+
 // A library row: open a folder, or play — a station on its own, a track with the rest of its
-// folder after it (as the queue), a phone's item on the phone.
+// folder after it (as the queue), a phone's item on the phone. `add` ('next' or 'end') puts a
+// track in the queue instead.
 function libClick(i, add) {
   const it = pl.libItems[i];
   if (!it) return;
@@ -906,17 +962,7 @@ function libClick(i, add) {
   if (it.kind === 'station') return playOnBoard([{url: it.url, title: it.title}]);
   if (it.kind === 'signal') return playSignal(it.source);
   const tracks = pl.libItems.filter(x => x.kind === 'track');
-  const from = tracks.indexOf(it);
-  const items = (add ? [it] : tracks.slice(from)).map(x => ({url: x.url, title: x.title, art: x.art, duration_s: x.duration_s,
-    artist: x.artist, album: x.album, rate: x.rate}));
-  // "+" on a track while the board plays: onto the end of its queue.
-  const b = urlStream();
-  if (add && b) {
-    items.forEach(t => { pl.art[t.url] = t; });
-    return put(`/audio/streams/${b.id}`, {enqueue: items.map(playlistItem)})
-      .then(() => toast('Added to the queue')).catch(fail);
-  }
-  playOnBoard(items);
+  queueTracks(add ? [it] : tracks.slice(tracks.indexOf(it)), add);
 }
 
 // A track as the board's playlist keeps it: what the board's player tells a car or speaker over
@@ -1391,9 +1437,14 @@ function setupPlayer() {
   };
   $('np-listen').onchange = e => pickListen(e.target.checked);
   $('np-queue').onclick = e => {
+    const c = current();
+    const del = e.target.closest('[data-q-del]');
+    if (del) {
+      if (c.kind === 'board') put(`/audio/streams/${c.s.id}`, {remove: parseInt(del.dataset.qDel, 10)}).then(refreshPlayerStreams).catch(fail);
+      return;
+    }
     const r = e.target.closest('.tr');
     if (!r) return;
-    const c = current();
     if (r.dataset.track != null && c.kind === 'board') put(`/audio/streams/${c.s.id}`, {track: parseInt(r.dataset.track, 10), paused: false}).catch(fail);
     if (r.dataset.item && c.kind === 'phone') post('/media/items', {path: r.dataset.item, action: 'play'}).catch(fail);
   };
@@ -1420,9 +1471,16 @@ function setupPlayer() {
     if (e.target.closest('[data-lib-search]')) return upnpServers(true);
     if (e.target.closest('[data-lib-more]')) return libMoreLoad();
     const all = e.target.closest('[data-lib-all]');
-    if (all) return libAll(all.dataset.libAll === 'add');
+    if (all) return libAll(all.dataset.libAll);
     const add = e.target.closest('[data-lib-add]');
-    if (add) return libClick(parseInt(add.dataset.libAdd, 10), true);
+    if (add) return libClick(parseInt(add.dataset.libAdd, 10), 'end');
+    const next = e.target.closest('[data-lib-next]');
+    if (next) return libClick(parseInt(next.dataset.libNext, 10), 'next');
+    const folder = e.target.closest('[data-lib-folder]');
+    if (folder) {
+      const f = pl.libItems[parseInt(folder.dataset.libFolder, 10)];
+      return f && folderPlay(pl.upnpServer, f.id, f.title, f.art || '', '');
+    }
     const rm = e.target.closest('[data-lib-del]');
     if (rm) return stationRemove(parseInt(rm.dataset.libDel, 10));
     const r = e.target.closest('[data-lib-i]');

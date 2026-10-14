@@ -560,6 +560,8 @@ json model_media(const json& objs) {
               // The L2CAP PSM of the device's BIP responder: cover art is there to pull.
               {"obex_port", p.contains("ObexPort") ? json(num_of(p, "ObexPort")) : json(nullptr)},
               {"searchable", bool_of(p, "Searchable")},
+              // How many times the player said its now playing list changed (BtManager counts).
+              {"playlist_changes", num_of(p, "PlaylistChanges")},
               {"items", json::array()}};
       // The transport of the same device, for the volume next to the transport controls.
       pl["transport"] = nullptr;
@@ -632,14 +634,22 @@ bool player_method(const std::string& action, std::string* method, int* key) {
 }
 
 json browse_items(const json& reply) {
-  // ListItems answers a{oa{sv}}: read_json makes that one object keyed by item path.
+  // ListItems answers a{oa{sv}}: BtManager::call keeps its order as [[path, {props}], ...]; read
+  // by read_json it is one object keyed by item path.
   json out = json::array();
   const json& list = reply.is_array() && !reply.empty() ? reply[0] : json::object();
-  if (!list.is_object()) return out;
-  for (auto it = list.begin(); it != list.end(); ++it) {
-    const json& m = it.value();
+  std::vector<std::pair<std::string, const json*>> entries;
+  if (list.is_array()) {
+    for (const json& e : list)
+      if (e.is_array() && e.size() == 2 && e[0].is_string() && e[1].is_object())
+        entries.emplace_back(e[0].get<std::string>(), &e[1]);
+  } else if (list.is_object()) {
+    for (auto it = list.begin(); it != list.end(); ++it) entries.emplace_back(it.key(), &it.value());
+  }
+  for (const auto& [path, props] : entries) {
+    const json& m = *props;
     const json md = m.contains("Metadata") ? m["Metadata"] : json::object();
-    out.push_back(json{{"path", it.key()},
+    out.push_back(json{{"path", path},
                        {"name", str_of(m, "Name")},
                        {"type", str_of(m, "Type")},
                        {"folder_type", str_of(m, "FolderType")},

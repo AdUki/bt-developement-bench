@@ -178,7 +178,7 @@ PlaylistItem playlist_item(const json& it) {
 }
 
 json playlist_item_json(const PlaylistItem& it) {
-  return json{{"url", it.url}, {"title", it.title}, {"artist", it.artist}, {"album", it.album},
+  return json{{"id", it.id}, {"url", it.url}, {"title", it.title}, {"artist", it.artist}, {"album", it.album},
               {"duration_ms", it.duration_ms ? json(it.duration_ms) : json(nullptr)}, {"art", it.art}};
 }
 
@@ -192,59 +192,108 @@ std::string repeat_mode(const json& j, const std::string& def) {
 
 // ---- the play order ---------------------------------------------------------------------------
 
-void PlayOrder::reset(int n, int current, bool shuffle) {
-  order_.clear();
-  for (int i = 0; i < n; ++i) order_.push_back(i);
-  at_ = 0;
-  if (n <= 0) return;
-  current = std::clamp(current, 0, n - 1);
-  if (shuffle) {
-    // The one playing stays first; the rest follow in a random order.
-    std::swap(order_[0], order_[static_cast<size_t>(current)]);
-    std::shuffle(order_.begin() + 1, order_.end(), rng_);
-  } else {
-    at_ = static_cast<size_t>(current);
-  }
+int playlist_index(const std::vector<PlaylistItem>& list, uint32_t id) {
+  for (size_t i = 0; i < list.size(); ++i)
+    if (list[i].id == id) return static_cast<int>(i);
+  return -1;
 }
 
-void PlayOrder::grow(int n, bool shuffle) {
-  for (int i = static_cast<int>(order_.size()); i < n; ++i) {
-    if (!shuffle || at_ + 1 >= order_.size()) {
-      order_.push_back(i);
-    } else {
-      std::uniform_int_distribution<size_t> d(at_ + 1, order_.size());
-      order_.insert(order_.begin() + static_cast<std::ptrdiff_t>(d(rng_)), i);
-    }
-  }
+int PlayOrder::at(const std::vector<PlaylistItem>& list) const { return std::max(0, playlist_index(list, cur_)); }
+
+void PlayOrder::reset(std::vector<PlaylistItem>& list, bool shuffle) {
+  for (PlaylistItem& it : list) it.id = next_id_++;
+  shuffled_ = false;
+  listed_.clear();
+  cur_ = list.empty() ? 0 : list.front().id;
+  this->shuffle(list, shuffle);
 }
 
-int PlayOrder::next(const std::string& repeat, bool asked, bool shuffle) {
-  if (order_.empty()) return -1;
-  if (!asked && repeat == "track") return order_[at_];
-  if (at_ + 1 < order_.size()) return order_[++at_];
+void PlayOrder::shuffle(std::vector<PlaylistItem>& list, bool on) {
+  if (on == shuffled_) return;
+  shuffled_ = on;
+  if (on) {
+    listed_.clear();
+    for (const PlaylistItem& it : list) listed_.push_back(it.id);
+    if (list.empty()) return;
+    // The one playing first; every other after it in a random order.
+    const auto playing = list.begin() + at(list);
+    std::rotate(list.begin(), playing, playing + 1);
+    std::shuffle(list.begin() + 1, list.end(), rng_);
+    return;
+  }
+  // As listed; a track the list does not know (none should be) at the end.
+  std::vector<PlaylistItem> out;
+  std::vector<bool> taken(list.size());
+  for (const uint32_t id : listed_) {
+    const int i = playlist_index(list, id);
+    if (i < 0 || taken[static_cast<size_t>(i)]) continue;
+    taken[static_cast<size_t>(i)] = true;
+    out.push_back(list[static_cast<size_t>(i)]);
+  }
+  for (size_t i = 0; i < list.size(); ++i)
+    if (!taken[i]) out.push_back(list[i]);
+  list.swap(out);
+  listed_.clear();
+}
+
+void PlayOrder::insert(std::vector<PlaylistItem>& list, std::vector<PlaylistItem> add, bool next) {
+  std::vector<uint32_t> ids;
+  for (PlaylistItem& it : add) {
+    it.id = next_id_++;
+    ids.push_back(it.id);
+  }
+  const size_t where = next && !list.empty() ? static_cast<size_t>(at(list)) + 1 : list.size();
+  list.insert(list.begin() + static_cast<std::ptrdiff_t>(where), add.begin(), add.end());
+  if (list.size() == add.size()) cur_ = list.front().id;
+  if (!shuffled_) return;
+  // Listed after the one playing too, for when shuffle goes off.
+  auto l = next ? std::find(listed_.begin(), listed_.end(), cur_) : listed_.end();
+  if (l != listed_.end()) ++l;
+  listed_.insert(l, ids.begin(), ids.end());
+}
+
+bool PlayOrder::remove(std::vector<PlaylistItem>& list, uint32_t id) {
+  const int i = playlist_index(list, id);
+  if (i < 0 || id == cur_) return false;
+  list.erase(list.begin() + i);
+  listed_.erase(std::remove(listed_.begin(), listed_.end(), id), listed_.end());
+  return true;
+}
+
+int PlayOrder::next(std::vector<PlaylistItem>& list, const std::string& repeat, bool asked) {
+  const int n = static_cast<int>(list.size());
+  if (n == 0) return -1;
+  const int i = at(list);
+  if (!asked && repeat == "track") return i;
+  if (i + 1 < n) {
+    cur_ = list[static_cast<size_t>(i) + 1].id;
+    return i + 1;
+  }
   if (repeat == "all") {
     // Round again; shuffled, in a new order that does not start with the track just played.
-    const int last = order_[at_];
-    if (shuffle && order_.size() > 1) {
-      std::shuffle(order_.begin(), order_.end(), rng_);
-      if (order_[0] == last) std::swap(order_[0], order_[order_.size() - 1]);
+    if (shuffled_ && n > 1) {
+      const uint32_t last = cur_;
+      std::shuffle(list.begin(), list.end(), rng_);
+      if (list.front().id == last) std::swap(list.front(), list.back());
     }
-    at_ = 0;
-    return order_[0];
+    cur_ = list.front().id;
+    return 0;
   }
-  return asked ? order_[at_] : -1;
+  return asked ? i : -1;
 }
 
-int PlayOrder::previous(const std::string& repeat) {
-  if (order_.empty()) return -1;
-  if (at_ > 0) return order_[--at_];
-  if (repeat == "all") at_ = order_.size() - 1;
-  return order_[at_];
+int PlayOrder::previous(const std::vector<PlaylistItem>& list, const std::string& repeat) {
+  const int n = static_cast<int>(list.size());
+  if (n == 0) return -1;
+  int i = at(list);
+  if (i > 0) --i;
+  else if (repeat == "all") i = n - 1;
+  cur_ = list[static_cast<size_t>(i)].id;
+  return i;
 }
 
-void PlayOrder::go(int track) {
-  const auto it = std::find(order_.begin(), order_.end(), track);
-  if (it != order_.end()) at_ = static_cast<size_t>(it - order_.begin());
+void PlayOrder::go(const std::vector<PlaylistItem>& list, int track) {
+  if (track >= 0 && track < static_cast<int>(list.size())) cur_ = list[static_cast<size_t>(track)].id;
 }
 
 // A stream's "sink": null (listeners only) or {type, target}. Throws std::invalid_argument.
@@ -1331,7 +1380,7 @@ void AudioEngine::Stream::run() {
           int next;
           {
             std::lock_guard<std::mutex> lk(m);
-            next = order.next(spec.source.repeat_mode, false, spec.source.shuffle);
+            next = order.next(spec.source.playlist, spec.source.repeat_mode, false);
           }
           if (!start_track(next, &fail)) ended = true;
         } else {
@@ -1532,7 +1581,7 @@ bool AudioEngine::create(const json& body, json* out, std::string* err, int* sta
     s = std::make_shared<Stream>();
     s->id = next_id_++;
     s->spec = spec;
-    s->order.reset(static_cast<int>(spec.source.playlist.size()), 0, spec.source.shuffle);
+    s->order.reset(s->spec.source.playlist, spec.source.shuffle);
     s->label = spec.label.empty() ? default_label(spec) : spec.label;
     s->node_name = "btbench-stream-" + std::to_string(s->id);
     s->tools = &tools_;
@@ -1581,14 +1630,24 @@ bool AudioEngine::update(int id, const json& body, json* out, std::string* err, 
     std::lock_guard<std::mutex> lk(s->m);
     StreamSpec sp = s->spec;
     if (body.contains("gain_db")) sp.gain_db = std::clamp(num(body, "gain_db", 0), -60.0, 20.0);
-    const bool list_op = body.contains("next") || body.contains("previous") || body.contains("track") || body.contains("enqueue");
+    const bool list_op = body.contains("next") || body.contains("previous") || body.contains("track") ||
+                         body.contains("enqueue") || body.contains("remove");
     if (list_op && sp.source.type != "url") throw std::invalid_argument("only a URL stream has a playlist");
+    std::vector<PlaylistItem> add;
     if (body.contains("enqueue")) {
       if (!body["enqueue"].is_array()) throw std::invalid_argument("enqueue is an array of {url, title}");
-      for (const json& it : body["enqueue"]) {
-        if (sp.source.playlist.size() >= kMaxPlaylist) throw std::invalid_argument("the playlist is full");
-        sp.source.playlist.push_back(playlist_item(it));
-      }
+      for (const json& it : body["enqueue"]) add.push_back(playlist_item(it));
+      if (sp.source.playlist.size() + add.size() > kMaxPlaylist)
+        throw std::invalid_argument("the playlist is full (" + std::to_string(kMaxPlaylist) + " tracks)");
+    }
+    const std::string at = str(body, "at", "end");
+    if (at != "end" && at != "next") throw std::invalid_argument("at is end or next");
+    uint32_t remove = 0;
+    if (body.contains("remove")) {
+      if (!body["remove"].is_number_unsigned()) throw std::invalid_argument("remove is a track's id");
+      remove = body["remove"].get<uint32_t>();
+      if (playlist_index(sp.source.playlist, remove) < 0) throw std::invalid_argument("no such track in the playlist");
+      if (remove == s->order.current()) throw std::invalid_argument("the track playing stays: skip it first");
     }
     if (body.contains("repeat") || body.contains("shuffle")) {
       if (sp.source.type != "url") throw std::invalid_argument("only a URL stream repeats and shuffles its playlist");
@@ -1608,19 +1667,11 @@ bool AudioEngine::update(int id, const json& body, json* out, std::string* err, 
       s->paused = body["paused"].get<bool>();
     }
     const int n = static_cast<int>(sp.source.playlist.size());
-    if (sp.source.type == "url") {
-      // Shuffle switched: a new order from the track playing. Tracks enqueued: into the order.
-      if (sp.source.shuffle != s->spec.source.shuffle) s->order.reset(n, s->track, sp.source.shuffle);
-      else s->order.grow(n, sp.source.shuffle);
-    }
-    if (body.value("next", false)) s->jump_to = s->order.next(sp.source.repeat_mode, true, sp.source.shuffle);
-    if (body.value("previous", false)) s->jump_to = s->order.previous(sp.source.repeat_mode);
+    int track = -1;
     if (body.contains("track")) {
       if (!body["track"].is_number_integer()) throw std::invalid_argument("track is a number");
-      const int t = body["track"].get<int>();
-      if (t < 0 || t >= n) throw std::invalid_argument("track is 0.." + std::to_string(n - 1));
-      s->order.go(t);
-      s->jump_to = t;
+      track = body["track"].get<int>();
+      if (track < 0 || track >= n) throw std::invalid_argument("track is 0.." + std::to_string(n - 1));
     }
     if (body.contains("source")) {
       const json& sj = body["source"];
@@ -1636,6 +1687,28 @@ bool AudioEngine::update(int id, const json& body, json* out, std::string* err, 
         throw std::invalid_argument("only a tone's freq/freq_right/level_db and a noise's level_db change live; "
                                     "start a new stream for anything else");
       }
+    }
+    // The playlist's changes, all checked by now: a track picked (by its place in the list as it
+    // was), tracks taken out and added, shuffle, then next or previous. The track playing and the
+    // one asked for are found again by their ids where the list has moved them.
+    if (sp.source.type == "url") {
+      std::vector<PlaylistItem>& list = sp.source.playlist;
+      const auto id_at = [&list](int i) {
+        return i >= 0 && i < static_cast<int>(list.size()) ? list[static_cast<size_t>(i)].id : 0u;
+      };
+      const uint32_t playing = id_at(s->track);
+      uint32_t jump = id_at(s->jump_to);
+      if (track >= 0) {
+        s->order.go(list, track);
+        jump = id_at(track);
+      }
+      if (remove) s->order.remove(list, remove);
+      if (!add.empty()) s->order.insert(list, std::move(add), at == "next");
+      s->order.shuffle(list, sp.source.shuffle);
+      if (body.value("next", false)) jump = id_at(s->order.next(list, sp.source.repeat_mode, true));
+      if (body.value("previous", false)) jump = id_at(s->order.previous(list, sp.source.repeat_mode));
+      s->track = std::max(0, playlist_index(list, playing));
+      s->jump_to = jump ? playlist_index(list, jump) : -1;
     }
     const bool relabel = s->label == default_label(s->spec);
     s->spec = sp;

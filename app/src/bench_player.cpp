@@ -1071,6 +1071,7 @@ bool BenchPlayer::action(const std::string& what, std::string* err) {
       // Nothing chosen yet: the test signals, from the first.
       queue_ = lib_.tracks(lib_.root().front());
       pos_ = 0;
+      if (shuffle_) shuffle_queue_locked(true);
       lk.unlock();
       changed(true, false, true);
     } else {
@@ -1090,7 +1091,7 @@ bool BenchPlayer::action(const std::string& what, std::string* err) {
       return false;
     }
     const int n = static_cast<int>(queue_.size());
-    // Wraps: a bench has no end of an album. Shuffled, next is any other track.
+    // Wraps: a bench has no end of an album.
     pos_ = what == "next" ? next_pos_locked(true) : (pos_ + n - 1) % n;
     icy_title_.clear();
     art_.clear();
@@ -1118,6 +1119,7 @@ bool BenchPlayer::play_item(int id, bool enqueue, std::string* err) {
   }
   if (enqueue) {
     queue_.insert(queue_.end(), tracks.begin(), tracks.end());
+    if (shuffle_) listed_.insert(listed_.end(), tracks.begin(), tracks.end());
     if (pos_ < 0) pos_ = 0;
     lk.unlock();
     changed(false, false, true);
@@ -1131,6 +1133,8 @@ bool BenchPlayer::play_item(int id, bool enqueue, std::string* err) {
     queue_ = lib_.tracks(it->parent);
     pos_ = static_cast<int>(std::find(queue_.begin(), queue_.end(), id) - queue_.begin());
   }
+  listed_.clear();
+  if (shuffle_) shuffle_queue_locked(true);
   icy_title_.clear();
   art_.clear();
   lk.unlock();
@@ -1143,14 +1147,34 @@ int BenchPlayer::next_pos_locked(bool asked) {
   const int n = static_cast<int>(queue_.size());
   if (pos_ < 0 || n == 0) return -1;
   if (!asked && repeat_ == "track") return pos_;
-  if (shuffle_ && n > 1) {
-    // The library's folders are short and played round and round: a random other track, with
-    // no memory of what was played (unlike a stream's playlist, which plays each once).
-    const int r = static_cast<int>(rng_() % static_cast<uint32_t>(n - 1));
-    return r >= pos_ ? r + 1 : r;
-  }
   if (pos_ + 1 < n) return pos_ + 1;
-  return asked || repeat_ == "all" ? 0 : -1;
+  if (!asked && repeat_ != "all") return -1;
+  // Round again; shuffled, in a new order that does not start with the track just played.
+  if (shuffle_ && n > 1) {
+    const int last = queue_[static_cast<size_t>(pos_)];
+    std::shuffle(queue_.begin(), queue_.end(), rng_);
+    if (queue_.front() == last) std::swap(queue_.front(), queue_.back());
+    pending_playlist_ = true;
+  }
+  return 0;
+}
+
+void BenchPlayer::shuffle_queue_locked(bool on) {
+  if (on) {
+    listed_ = queue_;
+    if (queue_.empty()) return;
+    const auto playing = queue_.begin() + std::clamp(pos_, 0, static_cast<int>(queue_.size()) - 1);
+    std::rotate(queue_.begin(), playing, playing + 1);
+    std::shuffle(queue_.begin() + 1, queue_.end(), rng_);
+    if (pos_ >= 0) pos_ = 0;
+    return;
+  }
+  if (listed_.size() == queue_.size() && !queue_.empty()) {
+    const int playing = pos_ >= 0 && pos_ < static_cast<int>(queue_.size()) ? queue_[static_cast<size_t>(pos_)] : -1;
+    queue_ = listed_;
+    if (playing >= 0) pos_ = static_cast<int>(std::find(queue_.begin(), queue_.end(), playing) - queue_.begin());
+  }
+  listed_.clear();
 }
 
 bool BenchPlayer::set_settings(const std::string& repeat, const bool* shuffle, std::string* err) {
@@ -1177,10 +1201,14 @@ bool BenchPlayer::set_settings(const std::string& repeat, const bool* shuffle, s
     return true;
   }
   if (!repeat.empty()) repeat_ = repeat;
-  if (shuffle) shuffle_ = *shuffle;
+  const bool reorder = shuffle && *shuffle != shuffle_;
+  if (reorder) {
+    shuffle_ = *shuffle;
+    shuffle_queue_locked(shuffle_);
+  }
   save_state();
   lk.unlock();
-  changed(false, false, false, true);
+  changed(false, false, reorder, true);
   return true;
 }
 

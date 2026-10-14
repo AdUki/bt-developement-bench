@@ -296,6 +296,13 @@ void test_players() {
   CHECK_EQ(items[0]["path"].get<std::string>(), std::string("/p/item1"));
   CHECK_EQ(items[0]["artist"].get<std::string>(), std::string("X"));
   CHECK(browse_items(json::array()).empty());
+  // In the listing's order, as BtManager::call keeps it.
+  const json listed = browse_items(json::parse(R"([[["/p/item2", {"Name": "Two"}], ["/p/item10", {"Name": "Ten"}],
+      ["/p/item1", {"Name": "One"}]]])"));
+  CHECK_EQ(listed.size(), size_t(3));
+  CHECK_EQ(listed[0]["name"].get<std::string>(), std::string("Two"));
+  CHECK_EQ(listed[1]["name"].get<std::string>(), std::string("Ten"));
+  CHECK_EQ(listed[2]["path"].get<std::string>(), std::string("/p/item1"));
 }
 
 // What a connected device has up: its GATT services here (the tree's HRM), and on a phone an A2DP

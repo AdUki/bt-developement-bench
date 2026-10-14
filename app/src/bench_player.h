@@ -167,8 +167,11 @@ class BenchPlayer : public BusUser {
   // True when the bus loop has a Seeked to send (the caller wakes it, with m_ released).
   bool note_position_locked(int64_t ms);
   // The now playing list's next position: at a track's end (`asked` false) or on next, with
-  // repeat and shuffle; -1 at the end. m_ held.
+  // repeat; -1 at the end. Past the end, shuffled, the list is put in a new order. m_ held.
   int next_pos_locked(bool asked);
+  // Shuffle on: the now playing list in a random order, the track playing first; off: as listed.
+  // So the list a remote browses is the order it plays in. m_ held.
+  void shuffle_queue_locked(bool on);
   int64_t position_locked(int64_t now_ms) const;
   void emit_changes(sd_bus* bus);
   void queue_cmd(Cmd::Kind k);
@@ -187,8 +190,9 @@ class BenchPlayer : public BusUser {
   mutable std::mutex m_;
   bool enabled_ = true;
   BenchLibrary lib_;
-  std::vector<int> queue_;  // the now playing list: track ids
+  std::vector<int> queue_;  // the now playing list: track ids, in the order they play
   int pos_ = -1;            // in queue_
+  std::vector<int> listed_;  // shuffled: queue_ as listed
   Status status_ = Status::stopped;
   int stream_ = 0;          // the stream that plays it (0: none)
   // Not playing itself, the player tells what another stream plays to a Bluetooth sink (one

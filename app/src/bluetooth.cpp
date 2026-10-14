@@ -43,6 +43,7 @@ constexpr const char* kDeviceIface = "org.bluez.Device1";
 constexpr const char* kBearerLeIface = "org.bluez.Bearer.LE1";
 constexpr const char* kBearerBredrIface = "org.bluez.Bearer.BREDR1";
 constexpr const char* kCharIface = "org.bluez.GattCharacteristic1";
+constexpr const char* kPlayerIface = "org.bluez.MediaPlayer1";
 
 // Calls that should be quick get this long: BlueZ answers a property write in milliseconds, and a
 // bus thread stuck for the default 25 s is an agent that misses its pairings.
@@ -698,6 +699,9 @@ void BtManager::on_signal(sd_bus_message* m) {
         if (notify_ && path) notify_(path, bytes_of(changed, "Value"));
         if (changed.size() == 1) return;
       }
+      if (strcmp(iface, kPlayerIface) == 0 && changed.contains("Playlist")) {
+        if (const char* path = sd_bus_message_get_path(m)) ++playlist_changes_[path];
+      }
       if (strcmp(iface, kDeviceIface) == 0) {
         // Connected after all (the device paged the board itself): what a Connect that failed
         // said is past, and "page timeout" next to a connected device reads as if it were not.
@@ -884,6 +888,15 @@ void BtManager::refreshed(sd_bus_message* reply) {
     logged_error_ = err;
   }
 
+  for (auto it = playlist_changes_.begin(); it != playlist_changes_.end();) {
+    const auto o = objs->find(it->first);
+    if (o == objs->end() || !o->contains(kPlayerIface)) {
+      it = playlist_changes_.erase(it);
+      continue;
+    }
+    (*o)[kPlayerIface]["PlaylistChanges"] = it->second;
+    ++it;
+  }
   {
     std::lock_guard<std::mutex> lk(m_);
     objs_ = objs;
@@ -1835,6 +1848,22 @@ int call_reply(sd_bus_message* m, void* data, sd_bus_error*) {
   if (e) {
     r.error = friendly(e);
     r.error_name = e->name ? e->name : "";
+  } else if (const char* sig = sd_bus_message_get_signature(m, true); sig && strcmp(sig, "a{oa{sv}}") == 0) {
+    // Objects with their properties (MediaFolder1.ListItems): in BlueZ's order, the listing's,
+    // as [[path, {props}], ...]. An object keyed by path would sort them as text (item10 before
+    // item2), and a phone's item paths carry its UIDs, in no order at all.
+    r.ok = true;
+    json list = json::array();
+    if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "{oa{sv}}") > 0) {
+      while (sd_bus_message_enter_container(m, SD_BUS_TYPE_DICT_ENTRY, "oa{sv}") > 0) {
+        json path, props;
+        if (read_json(m, &path) <= 0 || read_json(m, &props) <= 0) break;
+        list.push_back(json::array({std::move(path), std::move(props)}));
+        if (sd_bus_message_exit_container(m) < 0) break;
+      }
+      sd_bus_message_exit_container(m);
+    }
+    r.reply.push_back(std::move(list));
   } else {
     r.ok = true;
     for (;;) {

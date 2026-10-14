@@ -404,7 +404,7 @@ BlueZ's `MediaPlayer1`, whichever audio stack runs:
  "track": {"title": "...", "artist": "...", "album": "...", "genre": "...", "track_number": 3,
            "number_of_tracks": 12, "duration_ms": 180000, "img_handle": ""},
  "position_ms": 42000, "repeat": "off", "shuffle": "alltracks", "equalizer": null, "scan": null,
- "browsable": true, "searchable": false, "transport": ".../sep1/fd0",
+ "browsable": true, "searchable": false, "playlist_changes": 0, "transport": ".../sep1/fd0",
  "folder": {"name": "/NowPlaying", "items": 12},
  "items": [{"path": ".../player0/NowPlaying/item1", "name": "...", "type": "audio", "folder_type": "",
             "playable": true, "metadata": { ...as track... }}]}
@@ -414,7 +414,9 @@ BlueZ's `MediaPlayer1`, whichever audio stack runs:
 A setting the player does not offer is `null`; an unknown number (all ones on the wire) is `null`
 or a `duration_ms` of 0. `position_ms` is as of the last update the phone sent (on play, pause,
 seek and track changes): count on from there while it plays. `transport` is the same device's
-transport, for its volume. `items` are what browsing listed (see below), in listing order.
+transport, for its volume. `playlist_changes` counts the times the player said its now playing
+list changed (AVRCP's NOW_PLAYING_CONTENT_CHANGED, BlueZ's `Playlist` sent again): a list read
+before is stale once it moves. `items` are what browsing listed (see below), in listing order.
 
 | route | body | what |
 |---|---|---|
@@ -531,7 +533,7 @@ phones at once say) are not local: any number of them run beside it.
 | `sweep` | `from`, `to` Hz, `seconds`, `log` (default true), `repeat` (default true), `level_db` |
 | `noise` | `color`: `white`, `pink` or `brown`; `level_db` is the RMS (default -20) |
 | `silence` | — |
-| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest — AAC, Ogg, FLAC; a URL whose extension does not say is told by its first bytes, docs/audio.md), `title` (a name for the label), `playlist`: `[{url, title, artist, album, duration_ms, art}, ...]` (up to 500; all but `url` optional, what a media server said about the track, for the board's player to tell remotes; `art` the cover's http(s) URL) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]`; `repeat` `off\|track\|all` (default off) and `shuffle` (each track once in a random order, the first first) |
+| `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest — AAC, Ogg, FLAC; a URL whose extension does not say is told by its first bytes, docs/audio.md), `title` (a name for the label), `playlist`: `[{url, title, artist, album, duration_ms, art}, ...]` (up to 500; all but `url` optional, what a media server said about the track, for the board's player to tell remotes; `art` the cover's http(s) URL) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]`; `repeat` `off\|track\|all` (default off) and `shuffle` (the list put in a random order, the first first) |
 | `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
 
 `sinks` is a list of up to 4 sinks, each played the same audio: `[]` (listeners only),
@@ -585,16 +587,19 @@ when it reports none, as ffmpeg does not — asked of the server every 15 s); `m
 now-playing JSON such as Bauer's eventdata, whose image is looked up), often its logo, `""` for
 none; `meta.description` its `icy-description` header. `node` is
 the PipeWire stream's name (`wpctl status`, `pw-top`): the first sink's; each other sink's has a
-number after it (`btbench-stream-3-2`). A URL stream's `track` is its position in
-`source.playlist` (`meta.title` is that item's title), `track_seconds` how much of it has played
-(paused time not counted); the stream ends after the last track, unless it repeats. With repeat
-`track` a track that ends plays again (next still moves on); with `all` the last is followed by the
-first (shuffled: by a new order) and previous on the first goes to the last.
+number after it (`btbench-stream-3-2`). A URL stream's `source.playlist` is in the order it
+plays, each item with an `id` the stream gave it; `track` is the position of the one playing
+(`meta.title` is that item's title), `track_seconds` how much of it has played (paused time not
+counted); the stream ends after the last track, unless it repeats. Shuffled, the list itself is in
+a random order, the track playing first; shuffle off puts it back as listed, tracks added since
+included. With repeat `track` a track that ends plays again (next still moves on); with `all` the
+last is followed by the first (shuffled: the list in a new order) and previous on the first goes
+to the last.
 
 | route | what |
 |---|---|
 | `GET /api/audio/streams/{id}` | one stream |
-| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; shuffled, at random places after the current track), `{"repeat": "all"}`, `{"shuffle": true}` (a new order from the current track), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sinks": [...]}` (or one `{"sink": {...} \| null}`) changes its sinks without stopping the source: the ones kept play on untouched, new ones open, the others close; `[]` leaves its listeners only. The answer's `sink_req` numbers the request, and `sink_seq` says which one `sinks_status` answers |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; with `"at": "next"`, right after the track playing), `{"remove": <item id>}` (any track but the one playing), `{"repeat": "all"}`, `{"shuffle": true}` (the list in a random order, the track playing first; `false`: back as listed), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sinks": [...]}` (or one `{"sink": {...} \| null}`) changes its sinks without stopping the source: the ones kept play on untouched, new ones open, the others close; `[]` leaves its listeners only. The answer's `sink_req` numbers the request, and `sink_seq` says which one `sinks_status` answers |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
 

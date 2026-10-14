@@ -93,8 +93,9 @@ nlohmann::json model_media(const nlohmann::json& objs);
 // An AVRCP action as the API takes it ("play", "fast-forward", "press:0x44", ...) → the
 // MediaPlayer1 method, and for Press/Hold the key (else -1). False for anything else.
 bool player_method(const std::string& action, std::string* method, int* key);
-// MediaFolder1.ListItems' reply (as read_json gives it) → [{path, name, type, folder_type,
-// playable, title, artist, album, duration_ms}].
+// MediaFolder1.ListItems' reply (as BtManager::call gives it: [[path, props], ...] in the
+// listing's order) → [{path, name, type, folder_type, playable, title, artist, album,
+// duration_ms}].
 nlohmann::json browse_items(const nlohmann::json& reply);
 
 // Class of Device's major class ("audio/video", "phone", ...), and an appearance in words.

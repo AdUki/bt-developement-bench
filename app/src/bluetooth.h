@@ -346,6 +346,10 @@ class BtManager {
   std::set<std::string> restored_;  // adapter paths given their kept settings since BlueZ showed them
   std::map<std::string, std::string> started_here_;  // device path -> the PIN to offer
   std::set<std::string> after_pair_;  // devices whose Connect follows the pairing done here
+  // A player's now playing list changed (MediaPlayer1's Playlist said again, AVRCP's
+  // NOW_PLAYING_CONTENT_CHANGED): how many times, by player path. The tree read shows it as the
+  // player's PlaylistChanges, since the property's value itself stays the same.
+  std::map<std::string, uint32_t> playlist_changes_;
   Pending* pending_ = nullptr;
   uint64_t next_request_id_ = 1;
   bool change_pending_ = false;

@@ -53,30 +53,46 @@ struct PlaylistItem {
   std::string artist, album;
   uint32_t duration_ms = 0;  // 0: unknown
   std::string art;           // its cover (a media server's albumArtURI), "" for none
+  uint32_t id = 0;           // the stream numbers its tracks as they come (PlayOrder)
 };
 
-// The order a URL stream's playlist plays in: as listed, or shuffled (each track once, the one
-// playing first); and what comes next at a track's end or on next/previous, with repeat off, of
-// the one track, or of all. Pure: the pump asks it, the tests drive it with a fixed seed.
+// A URL stream's playlist as it plays. Shuffled, the tracks themselves are put in a random order
+// (the one playing first), so the list says what plays next; shuffle off puts them back as they
+// were listed, the one playing where it was. Each track is numbered as it comes (`id`): a change
+// asked from a list on screen finds its track wherever it has moved since. Pure: the stream calls
+// it with its playlist under its lock, the tests with a fixed seed.
 class PlayOrder {
  public:
   explicit PlayOrder(uint32_t seed = 1) : rng_(seed) {}
-  // Starts over with `n` tracks, `current` playing.
-  void reset(int n, int current, bool shuffle);
-  // Tracks appended up to `n`: at the end as listed, at random places after the current shuffled.
-  void grow(int n, bool shuffle);
-  // The track after the current one, made current: at its end (`asked` false) or on next. -1 at
-  // the end of the list with repeat off (on next: the current track again).
-  int next(const std::string& repeat, bool asked, bool shuffle);
-  int previous(const std::string& repeat);
-  void go(int track);  // a track picked by its number
-  const std::vector<int>& order() const { return order_; }
+  // A new list, its first track playing; shuffled, the others after it in a random order.
+  void reset(std::vector<PlaylistItem>& list, bool shuffle);
+  // Shuffle switched on or off; nothing when it already is.
+  void shuffle(std::vector<PlaylistItem>& list, bool on);
+  // Tracks added right after the one playing (`next`), or at the end.
+  void insert(std::vector<PlaylistItem>& list, std::vector<PlaylistItem> add, bool next);
+  // Track `id` taken out. False for no such track, or the one playing.
+  bool remove(std::vector<PlaylistItem>& list, uint32_t id);
+  // The track after the one playing, made the one playing: at its end (`asked` false) or on
+  // next. -1 at the end of the list with repeat off (on next: the one playing again). Repeating
+  // all, shuffled, a new round puts the list in a new order that does not start with the track
+  // just played.
+  int next(std::vector<PlaylistItem>& list, const std::string& repeat, bool asked);
+  int previous(const std::vector<PlaylistItem>& list, const std::string& repeat);
+  void go(const std::vector<PlaylistItem>& list, int track);  // a track picked by its place
+  // The one playing: its id, and its place in `list` (0 when it is not there).
+  uint32_t current() const { return cur_; }
+  int at(const std::vector<PlaylistItem>& list) const;
 
  private:
-  std::vector<int> order_;
-  size_t at_ = 0;
+  bool shuffled_ = false;
+  uint32_t cur_ = 0;
+  std::vector<uint32_t> listed_;  // shuffled: the tracks' ids as listed
+  uint32_t next_id_ = 1;
   std::mt19937 rng_;
 };
+
+// The place of track `id` in `list`, -1 for none.
+int playlist_index(const std::vector<PlaylistItem>& list, uint32_t id);
 
 struct SourceSpec {
   std::string type = "tone";  // tone | sweep | noise | silence | url | capture
@@ -93,7 +109,8 @@ struct SourceSpec {
   std::string decoder = "auto";  // auto | mpg123 | ffmpeg
   std::string title;             // what the console calls it (a station's name), for the label
   // url: the tracks to play one after another (UPnP files, a list of URLs); the first is `url`.
-  // One item for a radio. It can grow while the stream runs (PUT {"enqueue": [...]}).
+  // One item for a radio. It changes while the stream runs (PUT enqueue, remove, shuffle), in the
+  // order it plays.
   std::vector<PlaylistItem> playlist;
   std::string repeat_mode = "off";  // off | track | all ("repeat" in the JSON; a sweep's is a bool)
   bool shuffle = false;
@@ -164,7 +181,8 @@ class AudioEngine {
   nlohmann::json list() const;
   nlohmann::json get(int id) const;  // null when there is no such stream
   // PUT: gain_db at any time; a tone's freq/freq_right/level_db and a noise's level_db live; for a
-  // URL stream, its playlist: {"next": true}, {"previous": true}, {"track": n}, {"enqueue": [...]},
+  // URL stream, its playlist: {"next": true}, {"previous": true}, {"track": n}, {"enqueue": [...]}
+  // (with "at": "next" right after the track playing), {"remove": <track id>},
   // {"repeat": "off|track|all"}, {"shuffle": bool}. Any stream: {"sinks": [...]} (or one "sink"),
   // the outputs kept playing on, the new ones opened, the others closed.
   bool update(int id, const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);

@@ -51,17 +51,21 @@ phone and one per stream the board plays. Above the title it says which way the 
 same way for both: *Receiving · Bluetooth* from a device (and whether its audio is streaming into
 the board, or only its player is known), or *Playing from the board* · Internet radio, Media
 server, Test signal or Audio input; then the path, source → this board → where it plays. *Library*, a page of its own so long folders get the screen, has
-*Up next* first — the phone's now-playing list, or the board's queue; a click plays that track —
+*Up next* first — the phone's now-playing list (read again when its shuffle changes or the phone
+says the list changed), or the board's queue with each track's artist and length and **×** to take
+a track out; shuffled, it is in the order it plays; a click plays that track —
 then the phone's own folders and search (for a browsable player), the radio stations, the media servers
 on the LAN, and *Test signals* (tones, a left/right check, a sweep, pink and white noise, silence,
 and a tone of any frequency and level): a station plays on its own, a track plays with the rest of
-its folder after it as the queue, and **+** adds a track to the end of the queue. The board plays one
+its folder after it as the queue, **+** adds a track to the end of the queue and *Play next*
+right after the track playing, and ▶ on a media server's folder plays all of it (its subfolders'
+tracks too, up to 500). The board plays one
 thing of its own at a time: a station, tracks or a test signal takes the place of what it plays, on
 its outputs (and in this browser if that one was heard here), or on the outputs chosen when nothing
 plays; what phones send the board plays on beside it, each a source of its own. Under the stations a stream's URL adds
 it, named as the stream calls itself, and **×** on a station removes it. Media servers show their covers: a folder of
 albums is a grid of them (title, artist, year), an album opens with its cover, artist, year, genre,
-track count and length, *Play all* and *Add all*, and its tracks by number with their format
+track count and length, *Play all*, *Play next* and *Add all*, and its tracks by number with their format
 (`FLAC 24/96`, `MP3 44.1 kHz`); a track without a cover of its own shows its album's in Now
 playing. Covers load from the server itself, so a browser on another network than the server
 shows the plain icons. On a wide screen both are on screen side by side, so the two view buttons are not shown. A
