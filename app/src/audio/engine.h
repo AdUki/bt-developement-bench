@@ -52,6 +52,7 @@ struct PlaylistItem {
   std::string title;
   std::string artist, album;
   uint32_t duration_ms = 0;  // 0: unknown
+  std::string art;           // its cover (a media server's albumArtURI), "" for none
 };
 
 // The order a URL stream's playlist plays in: as listed, or shuffled (each track once, the one

@@ -164,19 +164,22 @@ PlaylistItem titled(const std::string& url, const std::string& title) {
 }
 
 PlaylistItem playlist_item(const json& it) {
-  if (!it.is_object()) throw std::invalid_argument("a playlist item is {url, title, artist, album, duration_ms}");
+  if (!it.is_object()) throw std::invalid_argument("a playlist item is {url, title, artist, album, duration_ms, art}");
   PlaylistItem p = titled(trim(str(it, "url", "")), str(it, "title", "").substr(0, 120));
   if (!url_ok(p.url)) throw std::invalid_argument("a playlist url must be an http:// or https:// URL");
   p.artist = str(it, "artist", "").substr(0, 120);
   p.album = str(it, "album", "").substr(0, 120);
   // Up to a day: a media server's length of a recording, never a radio's (no end).
   p.duration_ms = static_cast<uint32_t>(std::clamp(num(it, "duration_ms", 0), 0.0, 86400000.0));
+  // The cover goes on to a Bluetooth remote (the board's player); one that is no URL is dropped.
+  p.art = trim(str(it, "art", ""));
+  if (!url_ok(p.art)) p.art.clear();
   return p;
 }
 
 json playlist_item_json(const PlaylistItem& it) {
   return json{{"url", it.url}, {"title", it.title}, {"artist", it.artist}, {"album", it.album},
-              {"duration_ms", it.duration_ms ? json(it.duration_ms) : json(nullptr)}};
+              {"duration_ms", it.duration_ms ? json(it.duration_ms) : json(nullptr)}, {"art", it.art}};
 }
 
 std::string repeat_mode(const json& j, const std::string& def) {

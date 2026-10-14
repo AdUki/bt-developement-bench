@@ -899,15 +899,15 @@ function libClick(i, add) {
 }
 
 // A track as the board's playlist keeps it: what the board's player tells a car or speaker over
-// AVRCP (artist, album, length) goes along; the cover stays here (pl.art), by URL.
+// AVRCP (artist, album, length, the cover) goes along.
 const playlistItem = it => ({url: it.url, title: it.title, artist: it.artist || '', album: it.album || '',
-  duration_ms: it.duration_s ? Math.round(it.duration_s * 1000) : null});
+  duration_ms: it.duration_s ? Math.round(it.duration_s * 1000) : null, art: it.art || ''});
 
 // What the board plays from the library: one stream with the tracks as its playlist. It takes the
 // place of the board's own stream playing (the daemon plays one at a time), on that one's outputs
 // and in this browser if that one was heard here; with none, it starts on the outputs chosen. What
-// devices send the board plays on beside it. The art a UPnP server gave is kept here by URL (the
-// daemon does not keep it).
+// devices send the board plays on beside it. What a UPnP server said of a track is kept here by URL
+// too (its length in seconds, for the progress bar).
 function playOnBoard(items) {
   items.forEach(it => { pl.art[it.url] = it; });
   playLocal({source: {type: 'url', url: items[0].url, title: items[0].title, playlist: items.map(playlistItem)},
@@ -976,7 +976,7 @@ const streamRate = r => r && r % 48000 === 0 ? 48000 : 44100;
 
 // The art and duration of the board's tracks, from what the library said about them.
 function decorate(s) {
-  (s.source.playlist || []).forEach(it => Object.assign(it, pl.art[it.url] ? {art: pl.art[it.url].art, duration_s: pl.art[it.url].duration_s} : {}));
+  (s.source.playlist || []).forEach(it => Object.assign(it, pl.art[it.url] ? {art: it.art || pl.art[it.url].art, duration_s: pl.art[it.url].duration_s} : {}));
   return s;
 }
 

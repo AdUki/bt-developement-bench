@@ -122,7 +122,8 @@ void test_stream_track() {
   // first track's ("One and 1 more" from the console), never the album.
   const json folder{{"source", {{"type", "url"}, {"title", "One"},
                                 {"playlist", json::array({{{"title", "One"}},
-                                                          {{"title", "Two"}, {"artist", "Band"}, {"album", "LP"}, {"duration_ms", 183000}}})}}},
+                                                          {{"title", "Two"}, {"artist", "Band"}, {"album", "LP"}, {"duration_ms", 183000},
+                                                           {"art", "http://s/cover.jpg"}}})}}},
                     {"label", "One and 1 more"}, {"track", 1}};
   md = stream_track(folder);
   CHECK_EQ(md.value("Title", ""), std::string("Two"));
@@ -131,6 +132,7 @@ void test_stream_track() {
   CHECK_EQ(md.value("Duration", 0u), 183000u);
   CHECK_EQ(md.value("Number", 0u), 2u);
   CHECK_EQ(md.value("NumberOfTracks", 0u), 2u);
+  CHECK_EQ(md.value("Art", ""), std::string("http://s/cover.jpg"));
   // A sweep's label keeps its own arrow; only where it goes is cut.
   md = stream_track(json{{"source", {{"type", "sweep"}}}, {"label", "sweep 20 Hz → 20 kHz → bluez_output.x"}});
   CHECK_EQ(md.value("Title", ""), std::string("Sweep 20 Hz → 20 kHz"));

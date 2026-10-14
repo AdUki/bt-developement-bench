@@ -255,8 +255,12 @@ void test_specs() {
 
   // A media server's track carries its artist, album and length; repeat and shuffle round-trip.
   CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","repeat":"all","shuffle":true,"playlist":[
-      {"url":"http://u/1.mp3","title":"One","artist":"Band","album":"LP","duration_ms":183000}]}})"), &s, &err));
+      {"url":"http://u/1.mp3","title":"One","artist":"Band","album":"LP","duration_ms":183000,"art":"http://u/1.jpg"},
+      {"url":"http://u/2.mp3","title":"Two","art":"cover.jpg"}]}})"), &s, &err));
   CHECK_EQ(s.source.playlist[0].artist, std::string("Band"));
+  // Its cover, kept for a Bluetooth remote; one that is no URL is dropped.
+  CHECK_EQ(stream_spec_json(s)["source"]["playlist"][0]["art"].get<std::string>(), std::string("http://u/1.jpg"));
+  CHECK_EQ(s.source.playlist[1].art, std::string());
   CHECK_EQ(s.source.playlist[0].duration_ms, 183000u);
   CHECK_EQ(stream_spec_json(s)["source"]["repeat"].get<std::string>(), std::string("all"));
   CHECK(stream_spec_json(s)["source"]["shuffle"].get<bool>());

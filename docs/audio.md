@@ -277,13 +277,17 @@ has a play state and nothing else.
 - **Other streams.** Playing nothing itself, the player tells the remote about the newest stream
   that plays to a Bluetooth sink (the console's Listen, a radio, a media server's folder): its
   track with the artist, album and length the media server gave, the position, and the stream's
-  repeat and shuffle, which the remote can change. The remote's buttons act on that stream.
+  repeat and shuffle, which the remote can change. The remote's buttons act on that stream. A
+  URL stream's playlist is then the now playing list the remote browses (items
+  `<player>/item/s<stream>_<n>`, the track playing its trackid); playing one of them jumps the
+  stream to it.
 - **Browsing.** The remote can browse the library, the now playing list and search results
   (names, by every word), play an entry and add one to the now playing list. Upstream BlueZ
   rejects these commands in the target role; the bench's fork answers them (the image's BlueZ,
   and `make bluez` from `src/bluez`). With an
   unpatched bluetoothd the player still shows, plays and changes tracks, without the library.
-- **Cover art.** A station's cover (the image its ICY StreamUrl names) reaches the remote as
+- **Cover art.** A station's cover (the image its ICY StreamUrl names), or a media server's
+  track's (its playlist item's `art`), reaches the remote as
   AVRCP 1.6 cover art, the way a phone's reaches the board: btbenchd's BIP responder
   (`obex/cover_art.h`) listens on a dynamic L2CAP PSM in ERTM, the player registers it as
   `ObexPort`, and the fork's target record then offers cover art there (feature bit 8, an

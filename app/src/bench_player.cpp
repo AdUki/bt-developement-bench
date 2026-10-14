@@ -202,6 +202,8 @@ json stream_track(const json& s) {
       md["NumberOfTracks"] = static_cast<uint32_t>(n);
       if (item.contains("duration_ms") && item["duration_ms"].is_number() && item["duration_ms"].get<double>() > 0)
         md["Duration"] = static_cast<uint32_t>(item["duration_ms"].get<double>());
+      const std::string art = item.value("art", std::string{});
+      if (!art.empty()) md["Art"] = art;
     } else {
       // A radio: the song it says it plays, the station as the album. Stations send ICY titles as
       // "Artist - Title" by convention; split there, else the whole of it is the title.
@@ -261,6 +263,20 @@ bool stream_to_bluetooth(const json& s, const std::string& default_bt) {
 
 namespace {
 
+// <player>/item/s<stream>_<n>: the stream's id and the track's number.
+bool parse_stream_item(const std::string& path, int* stream, int* track) {
+  const std::string pre = std::string(kItemPrefix) + "/s";
+  if (path.compare(0, pre.size(), pre) != 0) return false;
+  const size_t us = path.find('_', pre.size());
+  if (us == std::string::npos) return false;
+  const std::string a = path.substr(pre.size(), us - pre.size()), b = path.substr(us + 1);
+  for (const std::string* x : {&a, &b})
+    if (x->empty() || x->size() > 9 || x->find_first_not_of("0123456789") != std::string::npos) return false;
+  *stream = std::stoi(a);
+  *track = std::stoi(b);
+  return true;
+}
+
 BenchPlayer* self(void* data) { return static_cast<BenchPlayer*>(data); }
 
 int m_play(sd_bus_message* m, void* d, sd_bus_error* e) { return self(d)->on_mpris(m, "Play", e); }
@@ -289,7 +305,7 @@ int p_set(sd_bus*, const char*, const char*, const char* prop, sd_bus_message* v
 // The items under <player>/item/: one vtable for all of them, found by path.
 int item_find(sd_bus*, const char* path, const char*, void* d, void** found, sd_bus_error*) {
   int id = 0;
-  if (!self(d)->item_exists(path, &id)) return 0;
+  if (!self(d)->item_exists(path, &id) && !self(d)->stream_item_exists(path, &id)) return 0;
   *found = d;
   return 1;
 }
@@ -453,6 +469,19 @@ bool BenchPlayer::item_exists(const std::string& path, int* id) const {
   return true;
 }
 
+bool BenchPlayer::stream_item_exists(const std::string& path, int* track) const {
+  int sid = 0, t = 0;
+  if (!parse_stream_item(path, &sid, &t)) return false;
+  std::lock_guard<std::mutex> lk(m_);
+  if (!mirroring_locked() || sid != mirror_ || t >= static_cast<int>(mirror_list_.size())) return false;
+  *track = t;
+  return true;
+}
+
+std::string BenchPlayer::stream_item_path_locked(int track) const {
+  return std::string(kItemPrefix) + "/s" + std::to_string(mirror_) + "_" + std::to_string(track);
+}
+
 size_t BenchPlayer::item_count() const {
   std::lock_guard<std::mutex> lk(m_);
   return lib_.items().size();
@@ -521,19 +550,21 @@ int BenchPlayer::on_list_items(sd_bus_message* m, sd_bus_error* e) {
   r = sd_bus_message_new_method_return(m, &reply);
   if (r < 0) return r;
   std::lock_guard<std::mutex> lk(m_);
-  const std::vector<int> entries = folder_entries_locked(folder_);
+  // Telling another stream: its playlist is what plays now, not the player's own list.
+  const bool stream = folder_ == kNowPlaying && mirroring_locked();
+  const std::vector<int> entries = stream ? std::vector<int>{} : folder_entries_locked(folder_);
   // Start and End are offsets, End included, as AVRCP's GetFolderItems has them.
-  const long long n = static_cast<long long>(entries.size());
+  const long long n = static_cast<long long>(stream ? mirror_list_.size() : entries.size());
   const long long start = num_of(filter, "Start", 0);
   const long long end = std::min(num_of(filter, "End", n - 1), n - 1);
   r = sd_bus_message_open_container(reply, 'a', "{oa{sv}}");
   for (long long i = start; r >= 0 && i <= end && i < n; ++i) {
-    const LibItem& it = lib_.items()[entries[i]];
-    const std::string p = item_path(it.id);
+    const std::string p = stream ? stream_item_path_locked(static_cast<int>(i)) : item_path(entries[i]);
     r = sd_bus_message_open_container(reply, 'e', "oa{sv}");
     if (r >= 0) r = sd_bus_message_append(reply, "o", p.c_str());
     if (r >= 0) {
-      append_item_props(reply, it);
+      if (stream) append_stream_item_props(reply, static_cast<int>(i));
+      else append_item_props(reply, lib_.items()[entries[i]]);
       r = sd_bus_message_close_container(reply);
     }
   }
@@ -558,6 +589,23 @@ int BenchPlayer::on_search(sd_bus_message* m, sd_bus_error* e) {
 
 int BenchPlayer::on_item(sd_bus_message* m, const std::string& method, sd_bus_error* e) {
   int id = 0;
+  if (stream_item_exists(sd_bus_message_get_path(m), &id)) {
+    if (method == "AddtoNowPlaying")
+      return sd_bus_error_set(e, "org.bluez.Error.NotSupported", "already in the now playing list");
+    int stream;
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      stream = mirror_;
+    }
+    LOG_INFO("player: track {} of stream {} from {}", id + 1, stream,
+             sd_bus_message_get_sender(m) ? sd_bus_message_get_sender(m) : "?");
+    {
+      std::lock_guard<std::mutex> wl(wm_);
+      cmds_.push_back(Cmd{Cmd::mirror, json{{"op", "track"}, {"stream", stream}, {"track", id}}});
+    }
+    wcv_.notify_one();
+    return sd_bus_reply_method_return(m, "");
+  }
   if (!item_exists(sd_bus_message_get_path(m), &id))
     return sd_bus_error_set(e, "org.bluez.Error.DoesNotExist", "no such item");
   std::string err;
@@ -584,6 +632,36 @@ void BenchPlayer::append_item_props(sd_bus_message* m, const LibItem& it) const 
   if (r >= 0) sd_bus_message_close_container(m);
 }
 
+// MediaItem1's Metadata of a track of the told stream's playlist.
+void BenchPlayer::append_stream_metadata(sd_bus_message* m, int track) const {
+  const json& it = mirror_list_[track];
+  const std::string title = it.value("title", std::string{});
+  int r = sd_bus_message_open_container(m, 'a', "{sv}");
+  if (r >= 0) r = dict_str(m, "Title", !title.empty() ? title : it.value("url", std::string{}));
+  if (r >= 0) r = dict_str(m, "Artist", it.value("artist", std::string{}));
+  if (r >= 0) r = dict_str(m, "Album", it.value("album", std::string{}));
+  if (r >= 0) r = dict_entry(m, "Number", 'u', static_cast<uint32_t>(track + 1));
+  if (r >= 0) r = dict_entry(m, "NumberOfTracks", 'u', static_cast<uint32_t>(mirror_list_.size()));
+  if (r >= 0 && it.contains("duration_ms") && it["duration_ms"].is_number() && it["duration_ms"].get<double>() > 0)
+    r = dict_entry(m, "Duration", 'u', static_cast<uint32_t>(it["duration_ms"].get<double>()));
+  if (r >= 0) sd_bus_message_close_container(m);
+}
+
+void BenchPlayer::append_stream_item_props(sd_bus_message* m, int track) const {
+  const std::string title = mirror_list_[track].value("title", std::string{});
+  int r = sd_bus_message_open_container(m, 'a', "{sv}");
+  if (r >= 0) r = dict_entry(m, "Player", 'o', kPath);
+  if (r >= 0) r = dict_str(m, "Name", !title.empty() ? title : mirror_list_[track].value("url", std::string{}));
+  if (r >= 0) r = dict_str(m, "Type", "audio");
+  if (r >= 0) r = sd_bus_message_open_container(m, 'e', "sv");
+  if (r >= 0) r = sd_bus_message_append(m, "s", "Metadata");
+  if (r >= 0) r = sd_bus_message_open_container(m, 'v', "a{sv}");
+  if (r >= 0) append_stream_metadata(m, track);
+  if (r >= 0) r = sd_bus_message_close_container(m);
+  if (r >= 0) r = sd_bus_message_close_container(m);
+  if (r >= 0) sd_bus_message_close_container(m);
+}
+
 // The cover of the track, as BlueZ's target passes it on: an image handle at the player's
 // ObexPort, sent only while a controller is connected there (AVRCP 1.6: a handle means nothing
 // to one that is not).
@@ -601,12 +679,15 @@ void BenchPlayer::set_cover_art(CoverArtServer* cover) {
 void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
   int r = sd_bus_message_open_container(m, 'a', "{sv}");
   if (id == kMirrorTrack && r >= 0) {
-    // Another stream's track: no library item behind it, so no trackid for a remote to look up.
+    // Another stream's track: no library item behind it. One of a playlist is its item in the now
+    // playing list (the trackid a remote finds there); any other has no trackid.
     const json& md = mirror_md_;
     const std::string title = md.value("Title", std::string{}), album = md.value("Album", std::string{});
     const std::string artist = md.value("Artist", std::string{}), genre = md.value("Genre", std::string{});
     if (mpris) {
-      r = dict_str(m, "xesam:title", title);
+      if (mirror_track_ >= 0 && mirror_track_ < static_cast<int>(mirror_list_.size()))
+        r = dict_entry(m, "mpris:trackid", 'o', stream_item_path_locked(mirror_track_).c_str());
+      if (r >= 0) r = dict_str(m, "xesam:title", title);
       if (r >= 0) r = dict_strv(m, "xesam:artist", artist);
       if (r >= 0) r = dict_str(m, "xesam:album", album);
       if (r >= 0) r = dict_strv(m, "xesam:genre", genre);
@@ -655,7 +736,21 @@ void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
 int BenchPlayer::get_prop(sd_bus_message* reply, const std::string& iface, const std::string& prop,
                           const std::string& path, sd_bus_error* e) {
   std::lock_guard<std::mutex> lk(m_);
-  if (iface == kItemIface) {
+  int sid = 0, track = 0;
+  if (iface == kItemIface && parse_stream_item(path, &sid, &track)) {
+    if (!mirroring_locked() || sid != mirror_ || track >= static_cast<int>(mirror_list_.size()))
+      return sd_bus_error_set(e, "org.bluez.Error.DoesNotExist", "no such item");
+    const std::string title = mirror_list_[track].value("title", std::string{});
+    if (prop == "Player") return sd_bus_message_append(reply, "o", kPath);
+    if (prop == "Name") return sd_bus_message_append(reply, "s", title.c_str());
+    if (prop == "Type") return sd_bus_message_append(reply, "s", "audio");
+    if (prop == "FolderType") return sd_bus_message_append(reply, "s", "");
+    if (prop == "Playable") return sd_bus_message_append(reply, "b", 1);
+    if (prop == "Metadata") {
+      append_stream_metadata(reply, track);
+      return 1;
+    }
+  } else if (iface == kItemIface) {
     const std::string pre = std::string(kItemPrefix) + "/";
     const LibItem* it = path.size() > pre.size() ? lib_.find(std::atoi(path.c_str() + pre.size())) : nullptr;
     if (!it) return sd_bus_error_set(e, "org.bluez.Error.DoesNotExist", "no such item");
@@ -670,7 +765,9 @@ int BenchPlayer::get_prop(sd_bus_message* reply, const std::string& iface, const
     }
   } else if (iface == kFolderIface) {
     if (prop == "NumberOfItems")
-      return sd_bus_message_append(reply, "u", static_cast<uint32_t>(folder_entries_locked(folder_).size()));
+      return sd_bus_message_append(reply, "u", static_cast<uint32_t>(folder_ == kNowPlaying && mirroring_locked()
+                                                                         ? mirror_list_.size()
+                                                                         : folder_entries_locked(folder_).size()));
     if (prop == "Name") {
       const std::string n = folder_ == kNowPlaying ? "/NowPlaying"
                             : folder_ == kSearch   ? "/Search"
@@ -1149,6 +1246,7 @@ void BenchPlayer::start_stream() {
       stream_ = out.value("id", 0);
       mirror_ = 0;
       mirror_md_ = nullptr;
+      mirror_list_ = json::array();
       sink_ = sink.value("target", std::string{});
       status_ = Status::playing;
       error_.clear();
@@ -1197,7 +1295,7 @@ void BenchPlayer::mirror_poll() {
     std::lock_guard<std::mutex> lk(m_);
     mirror_default_bt_ = def_bt;
   }
-  bool track = false, status = false, settings = false;
+  bool track = false, status = false, playlist = false, settings = false;
   int64_t at = -1;  // where the stream is in its track, measured after the change is noted
   {
     std::lock_guard<std::mutex> lk(m_);
@@ -1222,6 +1320,10 @@ void BenchPlayer::mirror_poll() {
     const std::string repeat = url ? src.value("repeat", std::string("off")) : "off";
     const bool shuffle = url && src.value("shuffle", false);
     if (repeat != mirror_repeat_ || shuffle != mirror_shuffle_) settings = true;
+    const json list = url && src.contains("playlist") && src["playlist"].is_array() ? src["playlist"] : json::array();
+    if (id != mirror_ || list != mirror_list_) playlist = true;
+    mirror_list_ = list;
+    mirror_track_ = id ? pick.value("track", 0) : 0;
     mirror_ = id;
     mirror_md_ = md;
     mirror_paused_ = paused;
@@ -1231,7 +1333,7 @@ void BenchPlayer::mirror_poll() {
     status_ = st;
     if (id) at = static_cast<int64_t>(pick.value("track_seconds", 0.0) * 1000);
   }
-  if (track || status || settings) changed(track, status, false, settings);
+  if (track || status || playlist || settings) changed(track, status, playlist, settings);
   if (at >= 0) {
     bool wake;
     {
@@ -1251,6 +1353,8 @@ void BenchPlayer::mirror_cmd(const json& body) {
     id = mirror_;
   }
   if (!id) return;
+  // A track picked from a list the remote read while another stream played: not this one's.
+  if (body.contains("stream") && body.value("stream", 0) != id) return;
   const std::string op = body.value("op", std::string{});
   const json s = audio_.get(id);
   if (s.is_null()) return;
@@ -1262,6 +1366,8 @@ void BenchPlayer::mirror_cmd(const json& body) {
     audio_.remove(id);
   } else if (op == "pause" || op == "play") {
     if (url) audio_.update(id, json{{"paused", op == "pause"}}, &out, &err, &status);
+  } else if (op == "track" && url) {
+    audio_.update(id, json{{"track", body.value("track", 0)}, {"paused", false}}, &out, &err, &status);
   } else if ((op == "next" || op == "previous") && url) {
     audio_.update(id, json{{op, true}}, &out, &err, &status);
   } else if (op == "settings" && url) {

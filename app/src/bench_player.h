@@ -136,6 +136,8 @@ class BenchPlayer : public BusUser {
                const std::string& path, sd_bus_error* e);
   int set_prop(sd_bus_message* value, const std::string& prop, sd_bus_error* e);
   bool item_exists(const std::string& path, int* id) const;
+  // An item of the told stream's playlist (<player>/item/s<stream>_<n>): its track number.
+  bool stream_item_exists(const std::string& path, int* track) const;
   size_t item_count() const;
 
  private:
@@ -154,6 +156,10 @@ class BenchPlayer : public BusUser {
   void append_metadata(sd_bus_message* m, int id, bool mpris) const;
   int append_img_handle(sd_bus_message* m, const std::string& art) const;
   void append_item_props(sd_bus_message* m, const LibItem& it) const;
+  // The told stream's playlist entry `track`, as a MediaItem1 (m_ held).
+  std::string stream_item_path_locked(int track) const;
+  void append_stream_metadata(sd_bus_message* m, int track) const;
+  void append_stream_item_props(sd_bus_message* m, int track) const;
   void register_on(sd_bus* bus, const std::string& adapter);
   void unregister_all(sd_bus* bus);
   void changed(bool track, bool status, bool playlist, bool settings = false);
@@ -201,6 +207,10 @@ class BenchPlayer : public BusUser {
   std::string mirror_repeat_ = "off";
   bool mirror_shuffle_ = false;
   bool mirror_url_ = false;  // the told stream is a URL stream: it has a playlist to repeat
+  // Its playlist (the stream's source.playlist) and the track playing: the now playing list a
+  // remote browses while the player tells that stream.
+  nlohmann::json mirror_list_ = nlohmann::json::array();
+  int mirror_track_ = 0;
   // Where the track is: pos_ms_ measured at pos_at_ms_ (steady clock), moving while it plays.
   // BlueZ keeps its own count for the remote (a new track is 0, a clock runs while Playing):
   // told_* is that count, so a Seeked goes out only when the two drift apart (a stream joined
