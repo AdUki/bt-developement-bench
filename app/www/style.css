@@ -922,6 +922,8 @@ details.more-fields > .set-row:first-of-type { border-top: 0; }
   67% { background: color-mix(in srgb, currentColor 25%, transparent); box-shadow: 0.57em 0 color-mix(in srgb, currentColor 25%, transparent), 1.14em 0 currentColor; }
 }
 .ld:empty::before, .wait:empty::before { color: var(--muted); font-size: 1.2rem; margin: 0.5em 0 0.5em 0.15em; }
+/* The whole page, while its scripts are on the way. */
+#boot.ld:empty::before { font-size: 1.8rem; margin: 4rem auto; translate: -0.57em 0; }
 /* A list or a table is not drawn while it is empty, but one waiting for its answer is. */
 .rows.ld:empty, .tbl.ld:empty { display: block; }
 .rows.ld:empty { padding: 0.4rem 1rem; }

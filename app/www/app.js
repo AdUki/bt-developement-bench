@@ -688,5 +688,6 @@ function startConsole() {
   buildNav();
   const t = lsGet('btbench.tab') || 'player';
   go(location.hash.slice(1) || (panes[t] ? t + '/' + panes[t] : t), true);
+  $('boot').remove();
   connectWs();
 }
