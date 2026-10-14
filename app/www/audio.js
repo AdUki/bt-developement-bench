@@ -10,7 +10,7 @@
 // element (which buffers seconds and cannot say how much), and the AudioContext is made in the
 // click that asked for it, so autoplay rules let it play.
 
-const au = {adOpen: {}, browse: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {}, sw: {},
+const au = {adOpen: {}, browse: {}, cover: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {}, sw: {},
   tick: null, radio: []};
 
 function renderAudio(s) {
@@ -541,6 +541,7 @@ function playerPosition(p) {
 }
 
 function notePlayers(players) {
+  for (const path of Object.keys(au.cover)) if (!players.some(p => p.path === path)) delete au.cover[path];
   for (const p of players) {
     const c = au.playerClock[p.path];
     if (!c || c.pos !== p.position_ms || c.status !== p.status) au.playerClock[p.path] = {pos: p.position_ms, at: Date.now(), status: p.status};
@@ -646,11 +647,18 @@ function coverRetry(img) {
 
 // A player with cover art but no image handle yet: the phone sends handles only while a BIP
 // channel is open, so open one (once per player); the next track info then carries a handle.
-function coverConnect(p) {
-  au.coverAsked = au.coverAsked || {};
-  if (!au.coverAsked[p.path]) {
-    au.coverAsked[p.path] = true;
-    fetch('/api/media/players/cover?path=' + encodeURIComponent(p.path)).catch(() => {});
+// The cover-art (BIP) channel to a player's device: opened once per connection (a player that
+// goes away is forgotten, see notePlayers), again 10 s after a failure. au.cover[path] is
+// {state: asking | open | failed, at}: `at` is when it opened, 0 when it was open already (a
+// player BlueZ made again); `changed` is called when the answer comes.
+function coverConnect(p, changed) {
+  const c = au.cover[p.path];
+  if (!c || (c.state === 'failed' && Date.now() - c.at > 10000)) {
+    const e = au.cover[p.path] = {state: 'asking', at: Date.now()};
+    const done = (state, at) => { e.state = state; e.at = at; if (changed) changed(); };
+    fetch('/api/media/players/cover?path=' + encodeURIComponent(p.path))
+      .then(r => r.ok ? r.json().catch(() => ({})) : Promise.reject())
+      .then(j => done('open', j.channel === 'open' ? 0 : Date.now()), () => done('failed', Date.now()));
   }
   return '';
 }

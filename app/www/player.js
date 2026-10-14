@@ -184,12 +184,17 @@ function renderNowPlaying() {
         `&t=${encodeURIComponent([t.title, t.album].join('|'))}`;
       artSrc = base + (pl.artTries[base] ? '&r=' + pl.artTries[base] : '');
     } else if (p.obex_port != null) {
-      coverConnect(p);
-      // The phone sends a cover's handle only once its image channel is up: a few seconds after
-      // a track starts (or the board connects). Shown as loading for that long, then as no cover.
+      coverConnect(p, renderNowPlaying);
+      // A cover's handle comes with the track info once the image channel is open. Loading while
+      // it opens, and for a few seconds after for a track that came before it (a phone sends the
+      // handle a little later); a track that came while it was open and has none has no cover,
+      // and neither has any while it cannot be opened.
       const k = p.path + '|' + (t.title || '');
       if (!pl.artWait[k]) pl.artWait[k] = Date.now();
-      artLoading = Date.now() - pl.artWait[k] < 12000;
+      const ch = au.cover[p.path] || {state: 'asking'};
+      artLoading = ch.state === 'asking' ? Date.now() - pl.artWait[k] < 12000
+        : ch.state === 'open' && pl.artWait[k] < ch.at && Date.now() - ch.at < 5000;
+      if (artLoading && !pl.artTimer) pl.artTimer = setTimeout(() => { pl.artTimer = null; renderNowPlaying(); }, 1000);
     }
     can = {prev: true, next: true, play: true, stop: true};
   } else if (c.kind === 'board' && isUrl(c.s)) {
@@ -472,19 +477,25 @@ function renderQueue(c) {
     // Now Playing, which drops the items BlueZ holds for the other, and on some phones (an S25)
     // costs 10 s during which the library waits.
     const key = c.p.path + '|' + ((c.p.track || {}).title || '');
-    const due = pl.queueKey !== key ? 0 : pl.queueOk ? Infinity : 8000;
+    const due = pl.queueKey !== key ? 0 : pl.queueOk ? Infinity : pl.queueEmpty === 1 ? 2000 : pl.queueEmpty ? 6000 : 8000;
     if (c.p.browsable && !pl.queueBusy && Date.now() - pl.queueAt > due) {
       pl.queueBusy = true;
       pl.queueAt = Date.now();
       post('/media/players/browse', {path: c.p.path, folder: c.p.path + '/NowPlaying'})
         .then(r => {
           const items = r.items || [];
-          // An empty answer right after a track change is the phone rebuilding its list (AVRCP
-          // "UIDs changed": BlueZ drops the old items meanwhile). The list on screen stays, and
-          // the phone is asked again in a few seconds instead of the queue going blank.
-          if (!items.length && pl.queueItems.length && pl.queuePlayer === c.p.path) {
+          // An empty answer right after a track change can be the phone rebuilding its list (AVRCP
+          // "UIDs changed": BlueZ drops the old items meanwhile), or the new list not there yet.
+          // For a track of a list (it has a number) what is on screen stays, and the phone is
+          // asked again 2 s later and 6 s after that; empty a third time, it is empty. A track
+          // with no number (a test tone after a playlist) has no list.
+          const numbered = ((c.p.track || {}).track_number || 0) > 0;
+          pl.queueEmpty = pl.queueKey === key ? pl.queueEmpty || 0 : 0;
+          if (!items.length && numbered && pl.queueEmpty < 2) {
             pl.queueKey = key;
+            pl.queueEmpty++;
             pl.queueOk = false;
+            setTimeout(renderNowPlaying, pl.queueEmpty === 1 ? 2100 : 6100);
             return;
           }
           pl.queueItems = items;
@@ -492,7 +503,12 @@ function renderQueue(c) {
           pl.queueKey = key;
           pl.queueOk = true;
         })
-        .catch(() => { pl.queueKey = key; pl.queueOk = false; })
+        .catch(() => {
+          if (pl.queueKey !== key) pl.queueEmpty = 0;
+          pl.queueKey = key;
+          pl.queueOk = false;
+          setTimeout(renderNowPlaying, 8100);
+        })
         .finally(() => { pl.queueBusy = false; renderNowPlaying(); });
     }
     const cur = (c.p.track || {}).title;

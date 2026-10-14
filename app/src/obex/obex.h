@@ -121,8 +121,9 @@ class ObexManager {
                  bool thumbnail, std::string* file, std::string* err, int* status);
   // Opens the BIP channel to a player's ObexPort, if none is open. A phone puts image handles in
   // the track metadata only while one is (AVRCP 1.6): the handle comes with the next track info.
-  bool cover_connect(const std::string& address, const std::string& source, uint16_t psm, std::string* err,
-                     int* status);
+  // *opened: it was not open before.
+  bool cover_connect(const std::string& address, const std::string& source, uint16_t psm, bool* opened,
+                     std::string* err, int* status);
 
   struct Bus;  // the bus thread's callbacks
 
@@ -173,7 +174,7 @@ class ObexManager {
   std::unique_ptr<Request> request_;
   uint64_t next_request_id_ = 1;
   bool cover_session(const std::string& address, const std::string& source, uint16_t psm, std::string* sid,
-                     std::string* err, int* status);
+                     std::string* err, int* status, bool* opened = nullptr);
   std::mutex cover_m_;
 
   // The bus thread.

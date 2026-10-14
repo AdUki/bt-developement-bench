@@ -1113,7 +1113,8 @@ bool ObexManager::transfer_action(const std::string& id, const std::string& acti
 // use — ours from before, or one opened by hand on the OBEX tab — and a second CreateSession
 // would be refused (OBEX 0x53, service unavailable).
 bool ObexManager::cover_session(const std::string& address, const std::string& source, uint16_t psm,
-                                std::string* sid, std::string* err, int* status) {
+                                std::string* sid, std::string* err, int* status, bool* opened) {
+  if (opened) *opened = false;
   {
     std::lock_guard<std::mutex> lk(m_);
     for (const auto& [path, p] : sessions_) {
@@ -1127,6 +1128,7 @@ bool ObexManager::cover_session(const std::string& address, const std::string& s
   json s;
   if (!create_session(address, "bip-avrcp", json{{"psm", psm}, {"source", source}}, &s, err, status)) return false;
   *sid = s["id"].get<std::string>();
+  if (opened) *opened = true;
   // A handle names an image within one BIP connection only (a phone starts again at 0000001 on
   // the next): what was kept from an earlier one is another track's cover.
   const std::string dir = opt_.root + "/in/cover", prefix = upper(address) + "-";
@@ -1138,11 +1140,11 @@ bool ObexManager::cover_session(const std::string& address, const std::string& s
   return true;
 }
 
-bool ObexManager::cover_connect(const std::string& address, const std::string& source, uint16_t psm, std::string* err,
-                                int* status) {
+bool ObexManager::cover_connect(const std::string& address, const std::string& source, uint16_t psm, bool* opened,
+                                std::string* err, int* status) {
   std::lock_guard<std::mutex> guard(cover_m_);
   std::string sid;
-  return cover_session(address, source, psm, &sid, err, status);
+  return cover_session(address, source, psm, &sid, err, status, opened);
 }
 
 bool ObexManager::cover_art(const std::string& address, const std::string& source, uint16_t psm,
