@@ -32,15 +32,22 @@ std::vector<BtAdapterId> model_adapter_ids(const nlohmann::json& objs);
 // Every adapter: {name:"hci0", path, address, address_type, alias, powered, discoverable,
 // discoverable_timeout_s, pairable, discovering, roles, uuids:[...], adv:{supported_instances,
 // active_instances, supported_includes}|null, manufacturer:2|null, manufacturer_name:"Intel",
-// version:"5.4"|null (the controller's HCI version)}.
+// version:"5.4"|null (the controller's HCI version), system_name, connectable|null,
+// power_state|null ("on", "off-enabling", ...), pairable_timeout_s, class|null and class_major,
+// modalias|null and modalias_name, experimental:[{uuid, name}] (bluetoothd's enabled features)}.
 nlohmann::json model_adapters(const nlohmann::json& objs);
 // A Bluetooth company identifier's name, for the controller makers a bench meets ("" for others),
 // and an HCI/LMP version number as the spec's version ("5.4"; "" when unknown).
 std::string bt_company_name(int id);
 std::string bt_version_name(int v);
+// A Device ID modalias ("usb:v1D6Bp0246d0557") as who made it: "BlueZ 5.87" for BlueZ's own, the
+// company of a bluetooth: source; "" for others. An experimental feature's UUID as its name.
+std::string bt_modalias_name(const std::string& modalias);
+std::string bt_experimental_name(const std::string& uuid);
 
 // One device from its Device1 properties: address, address_type, name, alias, adapter, icon,
-// paired, bonded, trusted, blocked, connected, services_resolved, legacy_pairing, rssi|null,
+// paired, bonded, trusted, blocked, connected, services_resolved, legacy_pairing, cable_pairing,
+// modalias|null and modalias_name, security_level|null, encryption_type|null, rssi|null,
 // tx_power|null, class|null ("0x240404") and class_major, appearance|null and appearance_name,
 // uuids:[{uuid:"110b", name:"Audio Sink"}], manufacturer_data:{"0x004c":"hex"},
 // service_data:{"fe2c":"hex"}, advertising_flags:"hex"|null.

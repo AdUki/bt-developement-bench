@@ -62,6 +62,32 @@ function renderScanOptions(b) {
   return parts.join(' · ');
 }
 
+// A Device ID modalias with who made it: "BlueZ 5.87 usb:v1D6Bp0246d0557".
+const modaliasHTML = x => x.modalias ? `${esc(x.modalias_name || '')} <span class="mono muted">${esc(x.modalias)}</span>` : '';
+
+// What BlueZ says of the adapter beyond its switches: the controller, its class and Device ID, its
+// roles, advertising sets, bluetoothd's experimental features and the services it offers.
+function adapterInfoHTML(a) {
+  const adv = a.adv;
+  const co = a.manufacturer != null ? `${esc(a.manufacturer_name || 'company ' + a.manufacturer)} <span class="mono muted">0x${a.manufacturer.toString(16).padStart(4, '0')}</span>` : '';
+  return [
+    ['Address', `<span class="mono">${esc(a.address)}</span> <span class="muted">${esc(a.address_type)}</span>`],
+    ['Name', a.system_name && a.system_name !== a.alias ? esc(a.system_name) : ''],
+    ['Controller', [co, a.version ? 'Bluetooth ' + esc(a.version) : '', a.usb ? 'on USB' : 'the board\'s own'].filter(Boolean).join(' · ')],
+    ['Class', a.class && a.class !== '0x000000' ? esc(a.class_major || '') + ` <span class="mono muted">${esc(a.class)}</span>` : ''],
+    ['Device ID', modaliasHTML(a)],
+    ['Roles', esc((a.roles || []).join(', '))],
+    ['Power', a.power_state && a.power_state !== (a.powered ? 'on' : 'off') ? esc(a.power_state) : ''],
+    ['Connectable', a.connectable == null ? '' : a.connectable ? 'yes' : 'no'],
+    ['Pairable for', a.pairable ? (a.pairable_timeout_s ? a.pairable_timeout_s + ' s' : 'always') : ''],
+    ['Advertising', adv ? [`${adv.active_instances} of ${adv.supported_instances} sets in use`,
+      adv.supported_includes.length ? 'includes ' + esc(adv.supported_includes.join(', ')) : '',
+      adv.supported_secondary_channels.length ? 'secondary ' + esc(adv.supported_secondary_channels.join(', ')) : ''].filter(Boolean).join('<br>') : ''],
+    ['Experimental', (a.experimental || []).map(x => x.name ? esc(x.name) : `<span class="mono">${esc(x.uuid)}</span>`).join('<br>')],
+    ['Services', (a.uuids || []).slice().sort((x, y) => x.uuid.length - y.uuid.length || x.uuid.localeCompare(y.uuid)).map(u => `<div>${esc(u.name)} <span class="mono muted">${esc(short(u.uuid))}</span></div>`).join('')],
+  ].filter(r => r[1]).map(r => `<span>${r[0]}</span><span>${r[1]}</span>`).join('');
+}
+
 function renderAdapter(b) {
   const a = selAdapter(b);
   const as = b.adapters || [];
@@ -73,6 +99,7 @@ function renderAdapter(b) {
     setHTML($('ad-pick'), as.map(x => `<button class="seg${a && x.address === a.address ? ' on' : ''}" data-ad="${esc(x.address)}"
       title="${esc([x.alias, x.address, adWhat(x), x.primary ? 'primary' : ''].filter(Boolean).join(' · '))}">${esc(x.name)}${x.primary ? ' ★' : ''}</button>`).join(''));
   setText($('ad-name'), a ? [as.length > 1 ? '' : a.name, a.address, adWhat(a)].filter(Boolean).join(' · ') : '');
+  setHTML($('ad-info'), a ? adapterInfoHTML(a) : '<span class="muted">No adapter</span><span></span>');
   setHTML($('ad-role'), !a || as.length < 2 ? ''
     : a.primary ? '<span class="tag good" title="Advertising, the GATT server and the HID remote run on this adapter, and a request that names no adapter goes to it">primary</span>'
     : `<button class="small-btn" data-act="primary" title="Move advertising, the GATT server and the HID remote to ${esc(a.name)}">Make primary</button>`);
@@ -100,6 +127,13 @@ function renderAdapter(b) {
 }
 
 const short = u => u.length > 8 ? u.slice(0, 8) + '…' : u;
+
+// The link's security level and encryption (BlueZ's experimental SecurityLevel, EncryptionType).
+const SEC_LEVEL = ['no security', 'unauthenticated, encryption not required', 'unauthenticated, encrypted',
+  'authenticated, encrypted', 'FIPS authenticated, encrypted'];
+const ENC_TYPE = ['not encrypted', 'E0', 'AES-CCM'];
+const securityText = d => esc([SEC_LEVEL[d.security_level] || 'level ' + d.security_level,
+  d.encryption_type != null ? ENC_TYPE[d.encryption_type] || 'encryption ' + d.encryption_type : ''].filter(Boolean).join(' · '));
 
 // RSSI as bars: -55 dBm and better is four, below -85 one.
 function sigBars(rssi) {
@@ -277,6 +311,8 @@ function deviceRow(d) {
       ['Class', d.class ? esc(d.class_major || '') + ` <span class="mono muted">${esc(d.class)}</span>` : ''],
       ['Appearance', d.appearance ? esc(d.appearance_name || '') + ` <span class="mono muted">${esc(d.appearance)}</span>` : ''],
       ['Link', linkHTML(d)],
+      ['Security', d.connected && d.security_level != null ? securityText(d) : ''],
+      ['Device ID', modaliasHTML(d)],
       ['TX power', d.tx_power != null ? d.tx_power + ' dBm (advertised)' : ''],
       ['Advertising flags', d.advertising_flags ? `<span class="mono">${esc(d.advertising_flags)}</span>` : ''],
       ['Services', uuids],
@@ -289,6 +325,7 @@ function deviceRow(d) {
       d.blocked ? tag('blocked', 'bad') : '',
       d.address_type === 'random' ? tag('LE random address') : '',
       d.legacy_pairing ? tag('legacy pairing') : '',
+      d.cable_pairing ? tag('cable pairing') : '',
       d.connected && !d.services_resolved ? tag('resolving services', 'warn') : '',
     ].join(' ');
     const dl = 'dev-uuids-' + a.replace(/[:@]/g, '');

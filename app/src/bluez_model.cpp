@@ -150,6 +150,29 @@ std::string bt_version_name(int v) {
   return v >= 0 && v < static_cast<int>(sizeof kNames / sizeof *kNames) ? kNames[v] : std::string{};
 }
 
+std::string bt_modalias_name(const std::string& m) {
+  // usb:v1D6Bp0246d0557, bluetooth:v000Fp1200d1436: the Device ID's source, vendor, product, version.
+  unsigned v = 0, p = 0, d = 0;
+  char src[16] = {};
+  if (sscanf(m.c_str(), "%15[a-z]:v%4xp%4xd%4x", src, &v, &p, &d) != 4) return {};
+  if (std::string(src) == "usb" && v == 0x1d6b && p == 0x0246)  // BlueZ's own DeviceID
+    return "BlueZ " + std::to_string(d >> 8) + "." + std::to_string(d & 0xff);
+  if (std::string(src) == "bluetooth") return bt_company_name(static_cast<int>(v));
+  return std::string(src) == "usb" && v == 0x1d6b ? "Linux Foundation" : std::string{};
+}
+
+std::string bt_experimental_name(const std::string& uuid) {
+  static const std::map<std::string, std::string> kNames = {
+      {"d4992530-b9ec-469f-ab01-6c481c47da1c", "debug"},
+      {"671b10b5-42c0-4696-9227-eb28d1b049d6", "LE simultaneous central and peripheral"},
+      {"330859bc-7506-492d-9370-9a6f0614037f", "quality report"},
+      {"15c0a148-c273-11ea-b3de-0242ac130004", "RPA resolution"},
+      {"a6695ace-ee7f-4fb9-881a-5fac66c629af", "codec offload"},
+      {"6fbaf188-05e0-496a-9885-d6ddfdb4e03e", "ISO socket"}};
+  const auto it = kNames.find(lower(uuid));
+  return it == kNames.end() ? std::string{} : it->second;
+}
+
 json model_adapters(const json& objs) {
   json out = json::array();
   for (auto it = objs.begin(); it != objs.end(); ++it) {
@@ -170,7 +193,19 @@ json model_adapters(const json& objs) {
            {"adv", nullptr},
            {"manufacturer", a.contains("Manufacturer") ? json(num_of(a, "Manufacturer")) : json(nullptr)},
            {"manufacturer_name", bt_company_name(a.contains("Manufacturer") ? static_cast<int>(num_of(a, "Manufacturer")) : -1)},
-           {"version", a.contains("Version") ? json(bt_version_name(static_cast<int>(num_of(a, "Version")))) : json(nullptr)}};
+           {"version", a.contains("Version") ? json(bt_version_name(static_cast<int>(num_of(a, "Version")))) : json(nullptr)},
+           {"system_name", str_of(a, "Name")},
+           {"connectable", a.contains("Connectable") ? json(bool_of(a, "Connectable")) : json(nullptr)},
+           {"power_state", a.contains("PowerState") ? json(str_of(a, "PowerState")) : json(nullptr)},
+           {"pairable_timeout_s", num_of(a, "PairableTimeout")},
+           {"class", a.contains("Class") ? json(hexn(static_cast<uint32_t>(num_of(a, "Class")), 6)) : json(nullptr)},
+           {"class_major", a.contains("Class") ? class_major_name(static_cast<uint32_t>(num_of(a, "Class"))) : std::string{}},
+           {"modalias", a.contains("Modalias") ? json(str_of(a, "Modalias")) : json(nullptr)},
+           {"modalias_name", bt_modalias_name(str_of(a, "Modalias"))}};
+    json exp = json::array();
+    for (const std::string& u : strv_of(a, "ExperimentalFeatures"))
+      exp.push_back(json{{"uuid", u}, {"name", bt_experimental_name(u)}});
+    j["experimental"] = std::move(exp);
     if (it->contains(kAdvMgr)) {
       const json& m = (*it)[kAdvMgr];
       j["adv"] = json{{"supported_instances", num_of(m, "SupportedInstances")},
@@ -214,6 +249,13 @@ json model_device(const std::string& path, const json& d, const json* obj) {
          {"connected", bool_of(d, "Connected")},
          {"services_resolved", bool_of(d, "ServicesResolved")},
          {"legacy_pairing", bool_of(d, "LegacyPairing")},
+         {"cable_pairing", bool_of(d, "CablePairing")},
+         {"modalias", d.contains("Modalias") ? json(str_of(d, "Modalias")) : json(nullptr)},
+         {"modalias_name", bt_modalias_name(str_of(d, "Modalias"))},
+         // The link's security (0 none .. 4 FIPS) and encryption (0 none, 1 E0, 2 AES-CCM), while
+         // connected: experimental, so null without bluetoothd -E.
+         {"security_level", d.contains("SecurityLevel") ? json(num_of(d, "SecurityLevel")) : json(nullptr)},
+         {"encryption_type", d.contains("EncryptionType") ? json(num_of(d, "EncryptionType")) : json(nullptr)},
          {"rssi", d.contains("RSSI") ? json(num_of(d, "RSSI")) : json(nullptr)},
          {"tx_power", d.contains("TxPower") ? json(num_of(d, "TxPower")) : json(nullptr)},
          // A dual-mode device's choice of transport to connect on first (last-used, bredr, le,

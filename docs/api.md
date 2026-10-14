@@ -53,6 +53,10 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
              "adv": {"supported_instances": 4, "active_instances": 0, "supported_includes": ["tx-power"],
                      "supported_secondary_channels": ["1M"]},
              "manufacturer": 15, "manufacturer_name": "Broadcom", "version": "4.2",
+             "system_name": "btbench", "connectable": true, "power_state": "on", "pairable_timeout_s": 0,
+             "class": "0x6c0000", "class_major": "miscellaneous",
+             "modalias": "usb:v1D6Bp0246d0557", "modalias_name": "BlueZ 5.87",
+             "experimental": [{"uuid": "6fbaf188-05e0-496a-9885-d6ddfdb4e03e", "name": "ISO socket"}],
              "primary": true, "usb": false,
              "discovery": { ...as "discovery" below, this adapter's... }},
  "adapters": [ ...every adapter, the same shape... ],
@@ -70,6 +74,11 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 `adapter` is the primary adapter, `discovery` its scan. `manufacturer` is the controller maker's
 Bluetooth company ID (`manufacturer_name` for the common ones), `version` its HCI version; `usb`
 says the controller is on USB (a dongle, an M.2 card on an adapter) rather than the board's own.
+`system_name` is BlueZ's `Name` (the alias's default), `modalias` the Device ID bluetoothd gives
+the adapter and `modalias_name` who it names (`BlueZ 5.87` for BlueZ's own, a company for a
+`bluetooth:` source, else empty); `connectable`, `power_state` and `modalias` are null where
+BlueZ does not have them. `experimental` is bluetoothd's enabled experimental features (`name`
+empty for one btbenchd does not know).
 
 **Two adapters.** With more than one adapter (the VIM3L's own BCM4359 and an Intel BE200 on its
 USB, say) every one is the bench's: the device list has each adapter's devices (a device seen by
@@ -97,7 +106,8 @@ place with `stale: true` until the next one. A device is:
 {"path": "/org/bluez/hci0/dev_C0_FF_EE_00_00_01", "address": "C0:FF:EE:00:00:01", "address_type": "random",
  "name": "Bench HRM", "alias": "Bench HRM", "adapter": "hci0", "icon": "",
  "paired": false, "bonded": false, "trusted": false, "blocked": false, "connected": true,
- "services_resolved": true, "legacy_pairing": false, "rssi": -61, "tx_power": 4,
+ "services_resolved": true, "legacy_pairing": false, "cable_pairing": false, "rssi": -61, "tx_power": 4,
+ "modalias": null, "modalias_name": "", "security_level": 1, "encryption_type": 2,
  "class": null, "class_major": "", "appearance": "0x0341", "appearance_name": "Heart Rate Sensor",
  "uuids": [{"uuid": "180d", "name": "Heart Rate"}],
  "manufacturer_data": {"0x0059": "0102"}, "service_data": {"180d": "48"}, "advertising_flags": "06",
@@ -110,6 +120,9 @@ place with `stale: true` until the next one. A device is:
                      "at_ms": 1791661005562}}
 ```
 
+`security_level` (0 none, 1 low, 2 medium, 3 high, 4 FIPS) and `encryption_type` (0 none, 1 E0,
+2 AES-CCM) are BlueZ's experimental `SecurityLevel` and `EncryptionType`, null without them;
+`modalias` is the device's Device ID, as the adapter's.
 `rssi` (and the advertising data) are only there while BlueZ has them, i.e. during and shortly after
 a scan; a connected device's live link RSSI is `GET .../link` (below). `bearers` are BlueZ's
 experimental `org.bluez.Bearer.BREDR1` and `.LE1`, one per transport the device was seen on (null

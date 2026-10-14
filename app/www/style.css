@@ -290,6 +290,10 @@ details.more > .pop {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem;
   box-shadow: 0 10px 30px rgba(10, 20, 30, 0.16);
 }
+/* The adapter's details hang from the card's left edge, wherever the summary wrapped to. */
+#adapter-card { position: relative; }
+details.ad-info { position: static; }
+details.ad-info > .pop { left: 0.9rem; }
 /* A popover opened from the right end of a bar opens leftwards, inside the page. */
 .tb-main > details.more:last-child > .pop, details.more.right > .pop { left: auto; right: 0; width: min(460px, calc(100vw - 32px)); }
 details.more-fields, details.log-box { margin-top: 0.7rem; }
@@ -535,7 +539,7 @@ body.wifi-page main { max-width: 560px; margin: 0 auto; padding: 0.5rem 16px 2re
   details.more > .pop, .tb-main > details.more:last-child > .pop, details.more.right > .pop {
     position: static; width: auto; margin-top: 0.5rem; box-shadow: none;
   }
-  .tb-main > details.more { flex-basis: 100%; }
+  .tb-main > details.more, .tb-id > details.ad-info[open] { flex-basis: 100%; }
   /* Filter and Scan share a line; the scan options and state go under them. */
   .list-head .scan { display: contents; }
   .list-head input[type=search] { max-width: none; flex: 1 1 0; }

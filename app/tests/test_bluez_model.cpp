@@ -21,7 +21,9 @@ json tree() {
       "org.bluez.LEAdvertisingManager1": {"ActiveInstances": 1, "SupportedInstances": 4,
                                           "SupportedIncludes": ["tx-power", "appearance", "local-name"]}
     },
-    "/org/bluez/hci1": {"org.bluez.Adapter1": {"Address": "00:1B:DC:08:4B:CC", "Alias": "vhci", "Manufacturer": 2, "Version": 13}},
+    "/org/bluez/hci1": {"org.bluez.Adapter1": {"Address": "00:1B:DC:08:4B:CC", "Alias": "vhci", "Manufacturer": 2, "Version": 13,
+                                               "Name": "btbench", "Class": 7077888, "Modalias": "usb:v1D6Bp0246d0557",
+                                               "PowerState": "on", "ExperimentalFeatures": ["6fbaf188-05e0-496a-9885-d6ddfdb4e03e"]}},
     "/org/bluez/hci0/dev_C0_FF_EE_00_00_01": {"org.bluez.Device1": {
       "Address": "c0:ff:ee:00:00:01", "AddressType": "random", "Name": "Bench HRM", "Alias": "Bench HRM",
       "Paired": false, "Connected": true, "ServicesResolved": true, "RSSI": -61, "TxPower": 4,
@@ -30,7 +32,8 @@ json tree() {
       "AdvertisingFlags": [6]}},
     "/org/bluez/hci0/dev_A0_B1_C2_D3_E4_F5": {"org.bluez.Device1": {
       "Address": "A0:B1:C2:D3:E4:F5", "Name": "Galaxy Buds", "Alias": "Galaxy Buds", "Paired": true,
-      "Connected": false, "Class": 2360324}},
+      "Connected": false, "Class": 2360324, "Modalias": "bluetooth:v0075p0100d0201", "CablePairing": false,
+      "SecurityLevel": 4, "EncryptionType": 2}},
     "/org/bluez/hci0/dev_AA_00_00_00_00_01": {"org.bluez.Device1": {"Address": "AA:00:00:00:00:01", "Alias": "aardvark"}},
     "/org/bluez/hci1/dev_11_22_33_44_55_66": {"org.bluez.Device1": {"Address": "11:22:33:44:55:66", "Alias": "other"}},
     "/org/bluez/hci0/dev_C0_FF_EE_00_00_01/service000a": {"org.bluez.GattService1": {
@@ -94,6 +97,12 @@ void test_controller_names() {
   CHECK_EQ(bt_version_name(8), std::string("4.2"));
   CHECK_EQ(bt_version_name(13), std::string("5.4"));
   CHECK_EQ(bt_version_name(99), std::string());
+  CHECK_EQ(bt_modalias_name("usb:v1D6Bp0246d0557"), std::string("BlueZ 5.87"));
+  CHECK_EQ(bt_modalias_name("bluetooth:v000Fp1200d1436"), std::string("Broadcom"));
+  CHECK_EQ(bt_modalias_name("usb:v8087p0033d0000"), std::string());
+  CHECK_EQ(bt_modalias_name(""), std::string());
+  CHECK_EQ(bt_experimental_name("6FBAF188-05E0-496A-9885-D6DDFDB4E03E"), std::string("ISO socket"));
+  CHECK_EQ(bt_experimental_name("00000000-0000-0000-0000-000000000000"), std::string());
 }
 
 void test_adapters() {
@@ -109,6 +118,15 @@ void test_adapters() {
   CHECK_EQ(a[1]["manufacturer"].get<int>(), 2);
   CHECK_EQ(a[1]["manufacturer_name"].get<std::string>(), std::string("Intel"));
   CHECK_EQ(a[1]["version"].get<std::string>(), std::string("5.4"));
+  CHECK_EQ(a[1]["system_name"].get<std::string>(), std::string("btbench"));
+  CHECK_EQ(a[1]["class"].get<std::string>(), std::string("0x6c0000"));
+  CHECK_EQ(a[1]["class_major"].get<std::string>(), std::string("miscellaneous"));
+  CHECK_EQ(a[1]["modalias_name"].get<std::string>(), std::string("BlueZ 5.87"));
+  CHECK_EQ(a[1]["power_state"].get<std::string>(), std::string("on"));
+  CHECK_EQ(a[1]["experimental"][0]["name"].get<std::string>(), std::string("ISO socket"));
+  CHECK(a[0]["class"].is_null() && a[0]["modalias"].is_null() && a[0]["power_state"].is_null());
+  CHECK(a[0]["connectable"].is_null());
+  CHECK(a[0]["experimental"].empty());
 }
 
 void test_devices() {
@@ -135,6 +153,10 @@ void test_devices() {
   CHECK_EQ(b["class_major"].get<std::string>(), std::string("audio/video"));
   CHECK(b["rssi"].is_null());
   CHECK(b["advertising_flags"].is_null());
+  CHECK_EQ(b["modalias"].get<std::string>(), std::string("bluetooth:v0075p0100d0201"));
+  CHECK_EQ(b["security_level"].get<int>(), 4);
+  CHECK_EQ(b["encryption_type"].get<int>(), 2);
+  CHECK(h["security_level"].is_null() && h["modalias"].is_null());
   // No bearer objects in this tree: both null, and no preferred bearer.
   CHECK(h["bearers"]["le"].is_null() && h["bearers"]["bredr"].is_null());
   CHECK(h["preferred_bearer"].is_null());
