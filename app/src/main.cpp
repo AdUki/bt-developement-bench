@@ -15,6 +15,7 @@
 
 #include "adv.h"
 #include "audio/engine.h"
+#include "obex/cover_art.h"
 #include "obex/obex.h"
 #include "bluetooth.h"
 #include "bluez_model.h"
@@ -259,6 +260,14 @@ int main(int argc, char** argv) {
   // The board's own AVRCP player, for what it plays to (a car, a speaker): its library plays
   // through the audio streams.
   btb::BenchPlayer player(bt, audio, data_dir + "/player.json");
+  // Its cover art, for a controller that shows what the board plays (AVRCP 1.6 Cover Art): a BIP
+  // responder on an L2CAP PSM of its own, offered in BlueZ's target record.
+  btb::CoverArtServer cover_art("/tmp/btbench-cover");
+  {
+    std::string err;
+    if (cover_art.start(&err)) player.set_cover_art(&cover_art);
+    else LOG_WARN("cover art: not offered: {}", err);
+  }
   bt.add_user(&player);
 
   btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,

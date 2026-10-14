@@ -113,6 +113,7 @@ add_library(btbench_core STATIC
   src/hid_device.cpp
   src/hid_host.cpp
   src/jobs.cpp
+  src/obex/cover_art.cpp
   src/obex/obex.cpp
   src/journal.cpp
   src/logview.cpp

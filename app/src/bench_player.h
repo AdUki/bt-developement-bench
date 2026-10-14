@@ -41,6 +41,7 @@ namespace btb {
 namespace audio {
 class AudioEngine;
 }
+class CoverArtServer;
 
 // One entry of the library: a folder or something to play.
 struct LibItem {
@@ -113,6 +114,10 @@ class BenchPlayer : public BusUser {
   // of the stream it tells about when there is one, else of its own now playing list. "" or a
   // null `shuffle` leaves that one as it is.
   bool set_settings(const std::string& repeat, const bool* shuffle, std::string* err);
+  // The cover art responder (obex/cover_art.h): registered as the player's ObexPort, and the
+  // track's cover goes out as an image handle while a controller is connected to it. Set before
+  // the bus opens; the track is told again whenever that connection comes or goes.
+  void set_cover_art(CoverArtServer* cover);
 
   // BusUser
   void bus_opened(sd_bus* bus) override;
@@ -147,6 +152,7 @@ class BenchPlayer : public BusUser {
   std::vector<int> folder_entries_locked(int folder) const;
   std::string item_path(int id) const;
   void append_metadata(sd_bus_message* m, int id, bool mpris) const;
+  int append_img_handle(sd_bus_message* m, const std::string& art) const;
   void append_item_props(sd_bus_message* m, const LibItem& it) const;
   void register_on(sd_bus* bus, const std::string& adapter);
   void unregister_all(sd_bus* bus);
@@ -205,6 +211,8 @@ class BenchPlayer : public BusUser {
   std::string sink_;        // where it plays
   unsigned sink_polls_ = 0;  // polls since it last looked for a Bluetooth sink
   std::string icy_title_;   // a radio's current title
+  std::string art_;         // its cover (ICY StreamUrl): an image URL, "" for none
+  CoverArtServer* cover_ = nullptr;
   std::string error_;
   std::vector<int> search_;
   int folder_ = -1;  // MediaFolder1's current folder (the root, an item, or kNowPlaying/kSearch)

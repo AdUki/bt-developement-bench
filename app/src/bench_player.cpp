@@ -10,6 +10,7 @@
 
 #include "audio/engine.h"
 #include "dbus_util.h"
+#include "obex/cover_art.h"
 #include "util/log.h"
 #include "util/strings.h"
 
@@ -213,6 +214,9 @@ json stream_track(const json& s) {
       }
       md["Album"] = !station.empty() ? station : meta.value("name", std::string{});
       md["Genre"] = "Radio";
+      // The cover the station sends with its title, for the cover art responder.
+      const std::string art = meta.value("art", std::string{});
+      if (!art.empty()) md["Art"] = art;
     }
   } else if (type == "capture") {
     md["Title"] = src.value("title", std::string("What a device plays"));
@@ -569,6 +573,19 @@ void BenchPlayer::append_item_props(sd_bus_message* m, const LibItem& it) const 
   if (r >= 0) sd_bus_message_close_container(m);
 }
 
+// The cover of the track, as BlueZ's target passes it on: an image handle at the player's
+// ObexPort, sent only while a controller is connected there (AVRCP 1.6: a handle means nothing
+// to one that is not).
+int BenchPlayer::append_img_handle(sd_bus_message* m, const std::string& art) const {
+  if (art.empty() || !cover_ || !cover_->psm() || !cover_->connected()) return 0;
+  return dict_str(m, "bluez:ImgHandle", cover_->handle_for(art));
+}
+
+void BenchPlayer::set_cover_art(CoverArtServer* cover) {
+  cover_ = cover;
+  if (cover_) cover_->on_connected_change([this] { changed(true, false, false); });
+}
+
 // The track's metadata: MediaItem1's keys, or MPRIS's (xesam:*, mpris:length in µs) for the player.
 void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
   int r = sd_bus_message_open_container(m, 'a', "{sv}");
@@ -586,6 +603,7 @@ void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
       // The length makes the remote's progress bar: without it, AVRCP says "not known".
       if (r >= 0 && md.contains("Duration"))
         r = dict_entry(m, "mpris:length", 'x', static_cast<int64_t>(md["Duration"].get<uint32_t>()) * 1000);
+      if (r >= 0) r = append_img_handle(m, md.value("Art", std::string{}));
     } else {
       r = dict_str(m, "Title", title);
       if (r >= 0) r = dict_str(m, "Album", album);
@@ -608,6 +626,7 @@ void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
       if (r >= 0 && md.contains("Number")) r = dict_entry(m, "xesam:trackNumber", 'i', md["Number"].get<int32_t>());
       if (r >= 0 && it->duration_ms)
         r = dict_entry(m, "mpris:length", 'x', static_cast<int64_t>(it->duration_ms) * 1000);
+      if (r >= 0) r = append_img_handle(m, art_);
     } else {
       r = dict_str(m, "Title", title);
       if (r >= 0) r = dict_str(m, "Artist", it->artist);
@@ -770,6 +789,8 @@ void BenchPlayer::register_on(sd_bus* bus, const std::string& adapter) {
       if (r >= 0) r = dict_entry(m, f, 'b', 1);
     if (r >= 0) r = dict_entry(m, "CanSeek", 'b', 0);
     if (r >= 0) r = dict_entry(m, "Playlist", 'o', kNowPlayingPath);
+    // Cover art at this PSM: BlueZ's target record offers it (the bench's BlueZ series).
+    if (r >= 0 && cover_ && cover_->psm()) r = dict_entry(m, "ObexPort", 'q', cover_->psm());
     const bool mir = mirroring_locked();
     if (r >= 0) r = dict_str(m, "LoopStatus", loop_status(mir ? mirror_repeat_ : repeat_));
     if (r >= 0) r = dict_entry(m, "Shuffle", 'b', static_cast<int>(mir ? mirror_shuffle_ : shuffle_));
@@ -964,6 +985,7 @@ bool BenchPlayer::action(const std::string& what, std::string* err) {
     // Wraps: a bench has no end of an album. Shuffled, next is any other track.
     pos_ = what == "next" ? next_pos_locked(true) : (pos_ + n - 1) % n;
     icy_title_.clear();
+    art_.clear();
     const bool was = status_ == Status::playing;
     lk.unlock();
     changed(true, false, false);
@@ -1002,6 +1024,7 @@ bool BenchPlayer::play_item(int id, bool enqueue, std::string* err) {
     pos_ = static_cast<int>(std::find(queue_.begin(), queue_.end(), id) - queue_.begin());
   }
   icy_title_.clear();
+  art_.clear();
   lk.unlock();
   changed(true, false, true);
   queue_cmd(Cmd::play);
@@ -1283,11 +1306,13 @@ void BenchPlayer::run_worker() {
         const std::string st = s.is_null() ? "gone" : s.value("state", std::string{});
         if (st == "running" || st == "starting") {
           const std::string title = s.is_null() ? "" : s["meta"].value("title", std::string{});
+          const std::string art = s.is_null() ? "" : s["meta"].value("art", std::string{});
           bool track = false;
           {
             std::lock_guard<std::mutex> lk(m_);
-            if (title != icy_title_) {
+            if (title != icy_title_ || art != art_) {
               icy_title_ = title;
+              art_ = art;
               track = true;
             }
           }
@@ -1322,6 +1347,7 @@ void BenchPlayer::run_worker() {
           if (to >= 0) {
             pos_ = to;
             icy_title_.clear();
+            art_.clear();
             next = true;
           } else {
             status_ = Status::stopped;

@@ -279,6 +279,16 @@ has a play state and nothing else.
   rejects these commands in the target role; the bench's fork answers them (the image's BlueZ,
   and `make bluez` from `src/bluez`). With an
   unpatched bluetoothd the player still shows, plays and changes tracks, without the library.
+- **Cover art.** A station's cover (the image its ICY StreamUrl names) reaches the remote as
+  AVRCP 1.6 cover art, the way a phone's reaches the board: btbenchd's BIP responder
+  (`obex/cover_art.h`) listens on a dynamic L2CAP PSM in ERTM, the player registers it as
+  `ObexPort`, and the fork's target record then offers cover art there (feature bit 8, an
+  L2CAP + OBEX entry in its additional protocols). While a controller is connected to the
+  responder each track carries an image handle (`bluez:ImgHandle` in the player's Metadata), and
+  the controller pulls the image, its properties or its 200×200 thumbnail (made with ffmpeg) by
+  it; images are fetched with curl once per URL into `/tmp/btbench-cover`. A controller paired
+  before the record changed has it cached: pair again. Upstream BlueZ ignores `ObexPort`, and the
+  remote sees no cover.
 - **Off.** `PUT /api/media/local-player {"enabled": false}` (the console's *Offer it*) unregisters
   it, kept in `/data/btbench/player.json`. BlueZ's target then has no player, as in upstream's
   default.
