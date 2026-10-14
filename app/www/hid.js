@@ -43,6 +43,8 @@ function buildPad() {
 
 function renderRemote(s) {
   hid.remote = s;
+  loaded($('rm-bar'));
+  loaded($('rm-layout'));
   const on = s.enabled;
   if (idle($('rm-on'))) $('rm-on').checked = on;
   if (idle($('rm-name'))) $('rm-name').value = s.name;
@@ -64,7 +66,13 @@ function renderRemote(s) {
   setText($('rm-err'), (s.gatt && s.gatt.error) || (adv && adv.error) || '');
 }
 
-const refreshRemote = () => api('/le/hid').then(renderRemote).catch(e => setText($('rm-err'), e.message));
+const refreshRemote = () => api('/le/hid').then(renderRemote).catch(e => {
+  setText($('rm-err'), e.message);
+  if ($('rm-state').classList.contains('ld')) {
+    setText($('rm-state'), 'error');
+    setClass($('rm-state'), 'pill bad');
+  }
+});
 
 function sendKey(key, action) {
   return post('/le/hid/key', {key, action}).catch(e => { if (action !== 'up') fail(e); });
@@ -154,6 +162,7 @@ registerTab('remote', {
 
 function renderHost(s) {
   hid.host = s;
+  loaded($('hh-bar'));
   if (idle($('hh-media'))) $('hh-media').checked = s.media_keys;
   setHTML($('hh-devices'), s.devices.length ? s.devices.map(d => {
     const apps = ((d.summary || {}).applications || []).map(a => tag(a.name || `page ${a.page} usage ${a.usage}`)).join(' ');
@@ -183,7 +192,7 @@ function hostEvent(e) {
   }
 }
 
-const refreshHost = () => api('/hid').then(renderHost).catch(e => toast(e.message));
+const refreshHost = () => api('/hid').then(renderHost).catch(e => { ldFail(e, $('hh-devices')); toast(e.message); });
 
 function setupHost() {
   $('hh-media').onchange = e => put('/hid', {media_keys: e.target.checked}).then(renderHost).catch(fail);

@@ -131,7 +131,10 @@ function setDraft(kind, key, value, base) {
   renderSetup();
 }
 
-const refreshSetup = () => api('/setup').then(s => { su.state = s; renderSetup(); }).catch(fail);
+const refreshSetup = () => api('/setup').then(s => { su.state = s; renderSetup(); }).catch(e => {
+  ldFail(e, $('su-profiles'), $('su-bluetooth'), $('su-audio'), $('su-plugins'));
+  fail(e);
+});
 
 function setupSetup() {
   const panel = $('setup');

@@ -84,7 +84,8 @@ function logsLoad() {
   lg.scanned = 0;
   lg.took = null;
   setText($('lg-err'), '');
-  setText($('lg-count'), 'loading…');
+  // What was on screen is not what is coming: the view says it is on the way.
+  lgRender(false);
   lg.t0 = performance.now();
   api(lgUrl(`&lines=${Math.min(lg.target, LG_FIRST)}`)).then(r => {
     if (gen !== lg.gen) return;
@@ -140,6 +141,7 @@ function logsOlder() {
 }
 
 function lgError(e) {
+  loaded($('lg-view'));
   setText($('lg-err'), e.message);
   lgStatus('');
 }
@@ -342,7 +344,10 @@ function lgRender(keepPlace, older) {
   if (first > 0) html += `<div class="lg-more"><button class="small-btn" data-lg="draw">Show ${fmtNum(Math.min(LG_DRAW, first))} more of the ${fmtNum(first)} loaded above</button></div>`;
   else if (lg.before != null && !lg.busy) html += `<div class="lg-more"><button class="small-btn" data-lg="older">Load ${fmtNum(Number($('lg-lines').value))} older</button></div>`;
   for (let i = first; i < n; i++) html += lgLineHTML(lg.entries[i], mk);
-  if (!n) html += `<div class="muted">${lg.busy ? 'Searching…' : lg.q || lg.prio < 7 ? 'No line matches the filter.' : 'Nothing logged.'}</div>`;
+  const search = lg.q || lg.prio < 7;
+  if (!n) html += lg.busy ? `<div class="muted loading-line"><span class="dots"></span>${search ? 'Searching…' : 'Loading…'}</div>`
+    : `<div class="muted">${search ? 'No line matches the filter.' : 'Nothing logged.'}</div>`;
+  loaded(view);
   view.innerHTML = html;
   if (atEnd && !older) view.scrollTop = view.scrollHeight;
   else view.scrollTop = view.scrollHeight - fromBottom;  // the same line stays under the eye

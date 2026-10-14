@@ -40,15 +40,39 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
   c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
+// Waiting for the board: a Zero W just booted takes seconds to answer a tab's first read. A box
+// marked "ld" shows three dots while it is empty, and its first write (even an empty one: nothing
+// to show is an answer too) ends that; a group marked "pending" has its switches and buttons
+// greyed out, since what they show until then is the page's default, not the board's state.
+// loaded() ends both.
+const loaded = el => {
+  if (el && (el.classList.contains('ld') || el.classList.contains('pending'))) el.classList.remove('ld', 'pending');
+};
+// A first read that failed: a box still waiting says why instead of waiting on. A box that has
+// shown an answer keeps it (a later refresh failing is the toast's).
+function ldFail(e, ...els) {
+  const msg = esc(e && e.message || e);
+  for (const el of els) {
+    if (!el || !el.classList.contains('ld')) continue;
+    setHTML(el, el.tagName === 'TABLE' ? `<tr><td class="small bad-text">${msg}</td></tr>` : `<div class="small bad-text">${msg}</div>`);
+  }
+}
+
 // Periodic updates write only what changed: rewriting an element with the same content still
 // relayouts the page, and Chrome closes an open <select> when it does.
 function setHTML(el, html) {
-  if (el && el._html !== html) {
+  if (!el) return;
+  loaded(el);
+  if (el._html !== html) {
     el._html = html;
     el.innerHTML = html;
   }
 }
-const setText = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
+const setText = (el, t) => {
+  if (!el) return;
+  loaded(el);
+  if (el.textContent !== t) el.textContent = t;
+};
 const setClass = (el, c) => { if (el && el.className !== c) el.className = c; };
 // Inputs are updated from the daemon only while the user is not in them.
 const idle = el => document.activeElement !== el;
@@ -659,7 +683,7 @@ document.addEventListener('keydown', e => {
 function startConsole() {
   initFull();
   api('/system/health').then(renderHealthPills).catch(() => {});
-  api('/bluetooth').then(renderBtPill).catch(() => {});
+  api('/bluetooth').then(renderBtPill).catch(() => setClass($('pill-bt'), 'pill'));
   refreshRequest();
   buildNav();
   const t = lsGet('btbench.tab') || 'player';

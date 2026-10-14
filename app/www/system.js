@@ -43,11 +43,15 @@ function renderServices(sv) {
       ${u !== 'btbenchd.service' ? `<button class="small-btn" data-restart="${esc(u)}" title="Restart ${esc(u)}">Restart</button>` : ''}</div>`).join('')}</div>`);
 }
 
-const refreshSystem = () => api('/system').then(renderSystem).catch(fail);
+const refreshSystem = () => api('/system').then(renderSystem).catch(e => {
+  ldFail(e, $('sys-health'), $('sys-versions'), $('sys-services'));
+  fail(e);
+});
 
 // ---------------------------------------------------------------- jobs
 
 function renderJobs(r) {
+  loaded($('job-bar'));
   if (!$('job-cmd').options.length) $('job-cmd').innerHTML = r.allowed.map(c => `<option>${esc(c)}</option>`).join('');
   setHTML($('job-list'), r.jobs.slice(0, 8).map(j => `<div class="row wrap small">
       <a href="#" data-job="${j.id}">#${j.id}</a> <span class="mono">${esc(j.cmd + ' ' + j.args.join(' '))}</span>
@@ -127,7 +131,7 @@ function renderLogFiles(r) {
     : '<div class="muted small">No log files yet: btbench-logs.service writes them on the board.</div>');
 }
 
-const refreshLogFiles = () => api('/system/logs').then(r => { renderLogFiles(r); logsFiles(r.files); }).catch(() => {});
+const refreshLogFiles = () => api('/system/logs').then(r => { renderLogFiles(r); logsFiles(r.files); }).catch(e => ldFail(e, $('lf-list')));
 
 // ---------------------------------------------------------------- kernel Bluetooth logs
 
@@ -142,10 +146,12 @@ function renderBtDebug(s) {
   }).join(''));
   if (idle($('kd-keep'))) $('kd-keep').checked = s.areas.some(a => a.kept);
   setText($('kd-msg'), '');
+  loaded($('kd-card'));
 }
 
 const refreshBtDebug = () => api('/system/btdebug').then(renderBtDebug).catch(e => {
   setHTML($('kd-areas'), '');
+  loaded($('kd-card'));
   setText($('kd-msg'), e.status === 503 ? 'Kernel Bluetooth logs are switched on the board only.' : e.message);
 });
 

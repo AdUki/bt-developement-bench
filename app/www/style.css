@@ -332,8 +332,7 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 /* The row's main action keeps one width whatever it says, the work in progress included. */
 .rw-acts .dev-main { min-width: 9.5rem; text-align: center; white-space: nowrap; }
 .rw-acts .dev-rm { min-width: 8.5rem; text-align: center; white-space: nowrap; }
-.rw-acts .dev-main:disabled:has(.spin) { opacity: 0.8; }
-.rw-acts .dev-main .spin { display: inline-block; width: 0.85em; height: 0.85em; vertical-align: -0.12em; margin-right: 0.4em; }
+.rw-acts .dev-main:disabled:has(.dots) { opacity: 0.8; }
 .rw-title .tag.own { align-self: center; color: var(--accent); border: 1px dashed var(--accent); background: none; }
 /* A row whose state changed (connected, paired, busy) says so briefly instead of jumping. */
 .rw.changed { animation: rw-changed 1.2s ease-out; }
@@ -763,7 +762,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-o.busy { border-color: var(--accent); border-style: dashed; }
 .np-o.bad { border-color: var(--bad); color: var(--bad); }
 .np-o.gone { opacity: 0.6; }
-.np-o .spin { width: 13px; height: 13px; }
+.np-o .dots { margin-right: 0; }
 .np-out-status { display: flex; align-items: flex-start; gap: 0.45rem; margin-top: 0.5rem; min-height: 1.3em; color: var(--muted); }
 .np-out-status.quiet .dot { display: none; }
 .np-out-status .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 0.4em; background: var(--muted); }
@@ -773,7 +772,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-out-status.warn .dot { background: var(--warn); }
 .np-out-status.bad { color: var(--bad); }
 .np-out-status.bad .dot { background: var(--bad); }
-.np-out-status .spin { width: 13px; height: 13px; margin-top: 0.15em; }
+.np-out-status .dots { margin: 0.55em 0 0; }
 /* The library's page: its list grows with the page instead of scrolling in a box, and the bar
    with what plays stays at the bottom of the screen. */
 .np-libcard #np-lib, .np-libcard #np-queue { max-height: none; }
@@ -905,20 +904,44 @@ details.more-fields > .set-row:first-of-type { border-top: 0; }
 .kd-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0 1.2rem; margin-bottom: 0.6rem; }
 .kd-areas .set-row { border-top: 1px solid var(--line-soft); }
 
-/* Loading: the cover while its image (or the phone's handle for it) is on the way, and lists
-   while the phone or a server answers. */
+/* Loading: three dots lighting up in turn, in the text's colour so they read on a button as well
+   as in a muted line. A dot is drawn once and repeated by its shadow, so one element carries all
+   three: <span class="dots"> in a line or a button; a box marked .ld shows them while it is empty
+   (until its first answer is written, app.js), one marked .wait while its own code keeps the mark;
+   a pill marked .wait has them for its dot; a line saying what is coming is .loading-line. The
+   cover shows them over its placeholder while its image (or the phone's handle for it) is on the
+   way. */
+.dots { display: inline-block; width: 1.5em; height: 0.36em; vertical-align: 0.12em; margin-right: 0.35em; flex: none; }
+.dots::before, .ld:empty::before, .wait:empty::before, .pill.wait::before, .np-art.loading::after {
+  content: ""; display: block; width: 0.36em; height: 0.36em; border-radius: 50%;
+  animation: dots 1.2s ease-in-out infinite;
+}
+@keyframes dots {
+  0%, 100% { background: currentColor; box-shadow: 0.57em 0 color-mix(in srgb, currentColor 25%, transparent), 1.14em 0 color-mix(in srgb, currentColor 25%, transparent); }
+  33% { background: color-mix(in srgb, currentColor 25%, transparent); box-shadow: 0.57em 0 currentColor, 1.14em 0 color-mix(in srgb, currentColor 25%, transparent); }
+  67% { background: color-mix(in srgb, currentColor 25%, transparent); box-shadow: 0.57em 0 color-mix(in srgb, currentColor 25%, transparent), 1.14em 0 currentColor; }
+}
+.ld:empty::before, .wait:empty::before { color: var(--muted); font-size: 1.2rem; margin: 0.5em 0 0.5em 0.15em; }
+/* A list or a table is not drawn while it is empty, but one waiting for its answer is. */
+.rows.ld:empty, .tbl.ld:empty { display: block; }
+.rows.ld:empty { padding: 0.4rem 1rem; }
+/* In a line of text: the dots take a word's place. */
+span.ld:empty::before { display: inline-block; margin: 0 1.15em 0 0; vertical-align: 0.1em; font-size: 0.8rem; }
+/* A pill waiting for its state: its dot is the three, before the word it will have or none. */
+.pill.wait::before, .pill.ld:empty::before { width: 0.36em; height: 0.36em; margin: 0 1.14em 0 0; font-size: inherit; vertical-align: 0; }
+/* Switches, choices and buttons that show the page's defaults until the board's state arrives. */
+.pending :is(select, button, textarea, input:not(.switch > input), .switch, .upload) { pointer-events: none; }
+.pending :is(select, button, textarea, input:not(.switch > input), .upload), .pending .switch i { opacity: 0.45; }
 .np-art { position: relative; }
 .np-art img[hidden] { display: none; }
-.np-art.loading::after {
-  content: ""; position: absolute; inset: 0; margin: auto; width: 34px; height: 34px; border-radius: 50%;
-  border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite;
-}
+.np-art.loading::after { position: absolute; inset: 0; margin: auto; font-size: 28px; translate: -0.57em 0; color: var(--muted); }
 .np-art.loading svg.ph { opacity: 0.35; }
 .loading-line { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); }
-.spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; flex: none; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.loading-line .dots { margin-right: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .np-art.loading::after, .spin { animation: none; border-color: var(--accent); opacity: 0.5; }
+  .dots::before, .ld:empty::before, .wait:empty::before, .pill.wait::before, .np-art.loading::after {
+    animation: none; opacity: 0.5; background: currentColor; box-shadow: 0.57em 0 currentColor, 1.14em 0 currentColor;
+  }
 }
 
 /* Audio → PipeWire: PipeWire's graph (pw-top). */
@@ -1103,8 +1126,6 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 
 /* The GATT server's JSON grows with what is in it on a desktop rather than scrolling in the page. */
 @media (min-width: 901px) and (min-height: 560px) { #gs-json { overflow: hidden; resize: none; } }
-/* A spinner in a line of text (a device's busy note). */
-.rw-note .spin, .warn-text .spin { display: inline-block; width: 0.8em; height: 0.8em; vertical-align: -0.1em; margin-right: 0.35em; }
 
 /* Audio → Bluetooth: a device's links, one a row — which way, the codec, the state, listening. */
 .ad-link { display: grid; grid-template-columns: minmax(10rem, auto) minmax(0, 1fr) auto auto; gap: 0.3rem 0.8rem; align-items: center; padding: 0.5rem 0; border-top: 1px solid var(--line-soft); }

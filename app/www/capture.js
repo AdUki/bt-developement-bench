@@ -25,6 +25,7 @@
     setClass($('cap-state'), 'pill ' + (s.running ? 'good' : word ? '' : 'bad'));
     $('cap-state').title = word ? '' : st;
     setText($('cap-toggle'), s.running ? 'Stop recording' : 'Start recording');
+    $('cap-toggle').disabled = false;
     // The ring is in RAM (the SD card is kept for settings): what is worth keeping is downloaded.
     const ram = /^\/(tmp|run)\//.test(s.dir || '');
     setText($('cap-dir'), s.running ? `btmon writes every HCI packet to a ring of files here${ram ? ', in RAM: gone at reboot, download a file to keep it' : ''}.` : '');
@@ -46,7 +47,14 @@
   }
 
   const refreshCapture = () => api('/capture').then(s => { setText($('cap-msg'), ''); renderCapture(s); })
-    .catch(e => setText($('cap-msg'), e.message));
+    .catch(e => {
+      setText($('cap-msg'), e.message);
+      loaded($('cap-files'));
+      if ($('cap-state').classList.contains('ld')) {
+        setText($('cap-state'), 'error');
+        setClass($('cap-state'), 'pill bad');
+      }
+    });
 
   // ------------------------------------------------------------ the viewer: state
 
@@ -804,7 +812,7 @@
       $('cv-stats-btn').setAttribute('aria-expanded', String(cv.statsOpen));
       $('cv-stats-btn').classList.toggle('on', cv.statsOpen);
       if (cv.statsOpen) {
-        setHTML($('cv-stats'), '<div class="muted small loading-line"><span class="spin"></span>Counting…</div>');
+        setHTML($('cv-stats'), '<div class="muted small loading-line"><span class="dots"></span>Counting…</div>');
         fetchStats();
       }
     };

@@ -116,11 +116,12 @@ function loadGatt() {
   const addr = $('gx-dev').value;
   if (!addr) return;
   gx.addr = addr;
+  if (!gx.tree) setHTML($('gx-tree'), '<div class="small muted loading-line"><span class="dots"></span>Reading the services…</div>');
   api(gxUrl()).then(t => {
     gx.tree = t;
     gx.loaded = t.services_resolved;
     renderGatt();
-  }).catch(fail);
+  }).catch(e => { renderGatt(); fail(e); });
 }
 
 function gattAction(op, handle, btn) {
@@ -196,7 +197,7 @@ function refreshAdv() {
           <div class="rw-acts"><button data-adv="${i.id}" class="danger">Stop</button></div></div>
         ${i.error ? `<div class="rw-note bad-text">${esc(i.error)}</div>` : ''}</div>`;
     }).join('') || '<div class="empty">Not advertising. Fill in the form above and press Advertise.</div>');
-  }).catch(e => setText($('adv-mgr'), e.message));
+  }).catch(e => { loaded($('adv-list')); setText($('adv-mgr'), e.message); });
 }
 
 // ---------------------------------------------------------------- local GATT server
@@ -210,7 +211,14 @@ function renderServer(s) {
     : '<div class="muted">Nothing registered: Apply a service definition.</div>');
   if (s.app && !$('gs-json').value.trim()) { $('gs-json').value = JSON.stringify(s.app, null, 2); gsGrow(); }
 }
-const refreshServer = () => api('/le/gatt-server').then(renderServer).catch(fail);
+const refreshServer = () => api('/le/gatt-server').then(renderServer).catch(e => {
+  ldFail(e, $('gs-values'));
+  if ($('gs-state').classList.contains('ld')) {
+    setText($('gs-state'), 'error');
+    setClass($('gs-state'), 'pill bad');
+  }
+  fail(e);
+});
 
 // ---------------------------------------------------------------- wiring
 
@@ -262,7 +270,7 @@ function setupLe() {
 registerTab('le', {
   topics: () => ['bt', 'gatt.notify', 'gatt.server'],
   show() {
-    api('/bluetooth').then(btApply).catch(() => {});
+    api('/bluetooth').then(btApply).catch(e => { ldFail(e, $('le-adv-view')); loaded($('gx-state')); });
     refreshAdv();
     refreshServer().then(() => {
       if (!$('gs-json').value.trim()) $('gs-example').onclick();

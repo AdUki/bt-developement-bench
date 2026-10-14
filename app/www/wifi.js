@@ -21,10 +21,10 @@ function mountWifi(root, opts) {
   });
 
   root.innerHTML = `
-    <div class="card"><div class="row between"><h3>Wi-Fi</h3><span class="pill" data-w="state">…</span></div>
-      <div class="kv small" data-w="kv"></div>
+    <div class="card"><div class="row between"><h3>Wi-Fi</h3><span class="pill ld" data-w="state"></span></div>
+      <div class="kv small ld" data-w="kv"></div>
       <div class="small" data-w="msg"></div>
-      <div class="row wrap" style="margin-top:.6rem">Mode
+      <div class="row wrap pending" data-w="modes" style="margin-top:.6rem">Mode
         <button data-mode="auto">auto</button><button data-mode="sta">client</button>
         <button data-mode="ap">setup AP</button><button data-mode="off">off</button></div></div>
     <div class="card"><div class="row between"><h3>Networks in range</h3><button data-w="scan">Scan</button></div>
@@ -35,7 +35,7 @@ function mountWifi(root, opts) {
         <label>Password <input name="psk" type="password" maxlength="64" placeholder="empty for an open network"></label>
         <div class="row"><button class="primary" type="submit">Join</button></div>
       </form></div>
-    <div class="card"><h3>Saved networks</h3><div data-w="saved" class="small"></div></div>`;
+    <div class="card"><h3>Saved networks</h3><div data-w="saved" class="small ld"></div></div>`;
   const q = n => root.querySelector(`[data-w="${n}"]`);
   const say = (t, bad) => { q('msg').textContent = t; q('msg').className = 'small ' + (bad ? 'bad-text' : ''); };
 
@@ -56,14 +56,19 @@ function mountWifi(root, opts) {
       q('saved').innerHTML = (s.networks || []).map(n => `<div class="net"><span class="ssid">${e(n)}</span>
         <button class="small-btn danger" data-rm="${e(n)}">remove</button></div>`).join('') || '<span class="muted">none</span>';
       root.querySelectorAll('button[data-mode]').forEach(b => { b.disabled = b.dataset.mode === s.policy; });
+      q('modes').classList.remove('pending');
     }).catch(err => {
+      // Nothing more is coming for what still waits on its first answer.
+      q('kv').classList.remove('ld');
+      q('saved').classList.remove('ld');
+      q('state').className = 'pill' + (err.status === 503 ? '' : ' bad');
       q('state').textContent = err.status === 503 ? 'not here' : 'error';
       say(err.status === 503 ? 'Wi-Fi is managed on the board only (btbench-wifi is not installed on this machine).' : err.message, err.status !== 503);
     });
   }
 
   q('scan').onclick = () => {
-    q('scanlist').textContent = 'scanning…';
+    q('scanlist').innerHTML = '<div class="loading-line"><span class="dots"></span>scanning…</div>';
     call('GET', '/scan').then(list => {
       list.sort((a, b) => b.signal_dbm - a.signal_dbm);
       q('scanlist').innerHTML = list.map(n => `<div class="net"><span class="ssid">${e(n.ssid || '(hidden)')}</span>

@@ -91,6 +91,8 @@ function adapterInfoHTML(a) {
 function renderAdapter(b) {
   const a = selAdapter(b);
   const as = b.adapters || [];
+  loaded($('adapter-card'));
+  loaded($('sc-bar'));
   setText($('ad-msg'), b.error || (b.stale ? 'BlueZ is slow to answer: the devices are as it last listed them.' : ''));
   // Two adapters (the board's own and a USB one): which one this card is about, and which is the
   // primary — the one the advertisements, the GATT server and the HID remote run on.
@@ -163,7 +165,7 @@ function bearersHTML(d) {
     // A connect or disconnect of this transport alone says so here, not under the device's row.
     const here = d.busy && d.busy_on === k;
     const err = !d.busy && d.error && d.error_on === k ? `<span class="b-err small bad-text">${esc(d.error)}</span>` : '';
-    return `<span class="b-name">${BEARER_NAME[k]}</span><span class="small">${here ? `<span class="warn-text"><span class="spin"></span>${esc(d.busy)} ${BEARER_NAME[k]}…</span>` : st}</span>
+    return `<span class="b-name">${BEARER_NAME[k]}</span><span class="small">${here ? `<span class="warn-text"><span class="dots"></span>${esc(d.busy)} ${BEARER_NAME[k]}…</span>` : st}</span>
       <button class="small-btn" data-act="bearer-${act}" data-bearer="${k}" data-key="${a}"${d.busy ? ' disabled' : ''}>${x.connected ? 'Disconnect' : 'Connect'} ${BEARER_NAME[k]}</button>${err}`;
   }).join('');
   const pref = d.preferred_bearer != null ? `<label class="row small">Connect first on
@@ -251,7 +253,7 @@ function profileTags(d) {
 const isUuid = s => !!s && s.length > 5;
 function profilesHTML(d) {
   const ps = d.connected ? deviceProfiles(d) : [];
-  const busy = d.busy && isUuid(d.busy_on) ? `<div class="small warn-text"><span class="spin"></span>${esc(d.busy)} ${esc(uuidLabel(d, d.busy_on))}…</div>` : '';
+  const busy = d.busy && isUuid(d.busy_on) ? `<div class="small warn-text"><span class="dots"></span>${esc(d.busy)} ${esc(uuidLabel(d, d.busy_on))}…</div>` : '';
   const err = !d.busy && d.error && isUuid(d.error_on) ? `<div class="small bad-text">${esc(uuidLabel(d, d.error_on))}: ${esc(d.error)}</div>` : '';
   if (!d.connected) return busy + err;
   if (!ps.length && !busy && !err) return `<div class="small muted">${d.services_resolved ? 'No profile connected.' : 'Resolving services…'}</div>`;
@@ -285,7 +287,7 @@ function deviceRow(d) {
   // grow a line or move its neighbours while a device connects.
   let main;
   if (busy && d.busy === 'pairing') main = `<button data-act="cancel-pairing" data-key="${a}" class="dev-main">Cancel pairing</button>`;
-  else if (busy) main = `<button class="dev-main" disabled><span class="spin"></span>${esc(d.busy.charAt(0).toUpperCase() + d.busy.slice(1))}…</button>`;
+  else if (busy) main = `<button class="dev-main" disabled><span class="dots"></span>${esc(d.busy.charAt(0).toUpperCase() + d.busy.slice(1))}…</button>`;
   else if (d.connected) main = btn('disconnect', 'Disconnect', 'dev-main');
   else if (!d.paired) main = btn('pair', 'Pair', 'primary dev-main');
   else main = btn('connect', 'Connect', 'primary dev-main');
@@ -450,7 +452,13 @@ function patchRows(list, rows) {
   have.forEach(el => el.remove());
 }
 
-function refreshBt() { return api('/bluetooth').then(btApply).catch(fail); }
+function refreshBt() {
+  return api('/bluetooth').then(btApply).catch(e => {
+    ldFail(e, $('dev-list'));
+    if ($('ad-name').classList.contains('ld')) setText($('ad-name'), '');
+    fail(e);
+  });
+}
 
 function deviceAction(key, act, el) {
   const addr = keyAddr(key);

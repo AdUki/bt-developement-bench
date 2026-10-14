@@ -14,8 +14,8 @@
   <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span id="hostname">btbench</span></div>
   <nav id="areas" aria-label="Areas"></nav>
   <div class="status" aria-label="Status">
-    <span id="pill-bt" class="pill">bluetooth …</span>
-    <span id="pill-ws" class="pill">connecting</span>
+    <span id="pill-bt" class="pill wait">bluetooth</span>
+    <span id="pill-ws" class="pill wait">connecting</span>
     <span id="pill-power" class="pill" hidden></span>
     <a class="pill link" href="/api" target="_blank" rel="noopener">API reference</a>
   </div>
@@ -32,23 +32,23 @@
   <section id="player" class="panel">
     <div class="pane" data-pane="now">
     <div class="np card" id="np">
-      <div class="np-art" id="np-art"></div>
+      <div class="np-art loading" id="np-art"></div>
       <div class="np-main">
         <div class="np-src" id="np-src"></div>
         <div class="np-from" id="np-from"></div>
-        <div class="np-title" id="np-title">Nothing playing</div>
+        <div class="np-title wait" id="np-title"></div>
         <div class="np-sub" id="np-sub"></div>
         <div class="np-sub2" id="np-sub2"></div>
-        <div class="np-progress"><i id="np-bar"></i></div>
+        <div class="np-progress" hidden><i id="np-bar"></i></div>
         <div class="np-time"><span id="np-pos"></span><span id="np-dur"></span></div>
         <div class="np-ctl" id="np-ctl"></div>
         <div class="np-foot">
-          <label class="np-vol" id="np-vol-row"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7"/></svg>
+          <label class="np-vol" id="np-vol-row" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7"/></svg>
             <input type="range" id="np-vol" min="0" max="100" aria-label="Volume"></label>
           <div class="np-out" id="np-out-row">
             <div class="np-out-head"><span class="np-out-label">Play to</span>
-              <label class="np-listen"><input type="checkbox" id="np-listen"> Listen in this browser</label></div>
-            <div class="np-outs" id="np-outs" role="group" aria-label="The board's outputs"></div>
+              <label class="np-listen pending" id="np-listen-l"><input type="checkbox" id="np-listen"> Listen in this browser</label></div>
+            <div class="np-outs ld" id="np-outs" role="group" aria-label="The board's outputs"></div>
             <div class="np-out-status" id="np-out-status" role="status" aria-live="polite"></div>
           </div>
         </div>
@@ -62,7 +62,7 @@
         <div class="card-head"><div class="segs" id="np-lib-tabs"></div><span id="np-q-note" class="small muted" hidden></span></div>
         <div class="row" id="np-search-row" hidden><input type="search" id="np-search" class="grow" placeholder="Search the phone"></div>
         <div id="np-crumbs" class="small crumbs"></div>
-        <div id="np-lib" class="tracklist"></div>
+        <div id="np-lib" class="tracklist ld"></div>
         <div id="np-queue" class="tracklist" hidden></div>
       </div>
       <div class="np-mini card" id="np-mini" hidden>
@@ -74,11 +74,11 @@
 
   <!-- ======================================================== Devices -->
   <section id="devices" class="panel">
-    <div class="card toolbar" id="adapter-card">
+    <div class="card toolbar pending" id="adapter-card">
       <div class="tb-main">
         <div class="tb-id">
           <b>Adapter</b> <div class="segs" id="ad-pick" role="group" aria-label="Adapter" hidden></div>
-          <span id="ad-name" class="mono muted small"></span> <span id="ad-role"></span>
+          <span id="ad-name" class="mono muted small ld"></span> <span id="ad-role"></span>
           <details class="more ad-info">
             <summary>Details</summary>
             <div class="pop"><div class="kv" id="ad-info"></div></div>
@@ -114,7 +114,7 @@
 
     <div class="list-head">
       <input type="search" id="dev-filter" placeholder="Filter by name or address">
-      <div class="scan">
+      <div class="scan pending" id="sc-bar">
         <span id="sc-state" class="small muted"></span>
         <details class="more right">
           <summary title="Scan options">Options</summary>
@@ -135,18 +135,18 @@
         <button id="sc-toggle" class="primary">Scan</button>
       </div>
     </div>
-    <div id="dev-list" class="rows"></div>
+    <div id="dev-list" class="rows ld"></div>
   </section>
 
   <!-- ======================================================== Devices: input devices (HID host) -->
   <section id="hid" class="panel">
-    <div class="card toolbar">
+    <div class="card toolbar pending" id="hh-bar">
       <div class="tb-main">
         <label class="switch"><input type="checkbox" id="hh-media"><i></i> Media keys control what plays</label>
         <span id="hh-last" class="grow"></span>
       </div>
     </div>
-    <div id="hh-devices" class="rows-cards"></div>
+    <div id="hh-devices" class="rows-cards ld"></div>
     <div class="card" data-full>
       <div class="card-head"><h3>Key presses</h3><button class="small-btn" id="hh-clear">Clear</button></div>
       <pre id="hh-log" class="log tall" data-tail="40" data-empty="Press a key on a connected keyboard or remote: it shows here."></pre>
@@ -165,7 +165,7 @@
             <button id="gx-load" title="Read the services again">Reload</button>
           </div>
         </div>
-        <div id="gx-state" class="small muted"></div>
+        <div id="gx-state" class="small muted ld"></div>
         <div id="gx-tree"></div>
         <details class="log-box">
           <summary>Notifications <button class="small-btn" id="gx-clear">Clear</button></summary>
@@ -173,12 +173,12 @@
         </details>
       </div>
       <h2>Advertisers in range</h2>
-      <div id="le-adv-view" class="rows"></div>
+      <div id="le-adv-view" class="rows ld"></div>
     </div>
 
     <div class="pane" data-pane="adv">
       <div class="card">
-        <div class="card-head"><h3>New advertisement</h3><span id="adv-mgr" class="small muted"></span></div>
+        <div class="card-head"><h3>New advertisement</h3><span id="adv-mgr" class="small muted ld"></span></div>
         <form id="adv-form">
           <div class="grid">
             <label>Type <select name="type"><option value="peripheral">Connectable (peripheral)</option><option value="broadcast">Broadcast only</option></select></label>
@@ -203,13 +203,13 @@
         </form>
       </div>
       <h2>Advertising now</h2>
-      <div id="adv-list" class="rows"></div>
+      <div id="adv-list" class="rows ld"></div>
     </div>
 
     <div class="pane" data-pane="server">
       <div class="card">
         <div class="card-head">
-          <h3>Local GATT server <span id="gs-state" class="pill">none</span></h3>
+          <h3>Local GATT server <span id="gs-state" class="pill ld"></span></h3>
           <div class="acts">
             <button id="gs-example">Load example</button>
             <button id="gs-clear" class="danger">Remove</button>
@@ -220,7 +220,7 @@
         <textarea id="gs-json" rows="14" spellcheck="false" class="mono" aria-label="Services as JSON"></textarea>
       </div>
       <div class="cols">
-        <div class="card"><h3>Values</h3><div id="gs-values" class="small"></div></div>
+        <div class="card"><h3>Values</h3><div id="gs-values" class="small ld"></div></div>
         <div class="card" data-full>
           <div class="card-head"><h3>Events</h3><button class="small-btn" id="gs-log-clear">Clear</button></div>
           <pre id="gs-log" class="log" data-tail="40" data-empty="Reads, writes and subscriptions by connected devices show here."></pre>
@@ -231,16 +231,16 @@
 
   <!-- ======================================================== LE: the board as a remote (HID device) -->
   <section id="remote" class="panel">
-    <div class="card toolbar">
+    <div class="card toolbar pending" id="rm-bar">
       <div class="tb-main">
-        <div class="tb-id"><b>Remote control</b> <span id="rm-state" class="pill">off</span></div>
+        <div class="tb-id"><b>Remote control</b> <span id="rm-state" class="pill ld"></span></div>
         <label class="inline-label small">Name <input id="rm-name" maxlength="29" placeholder="btbench remote"></label>
         <label class="switch"><input type="checkbox" id="rm-on"><i></i> On</label>
       </div>
       <p class="hint" id="rm-hint"></p>
       <div id="rm-err" class="small bad-text"></div>
     </div>
-    <div class="rm-layout">
+    <div class="rm-layout pending" id="rm-layout">
       <div class="remote" id="rm-pad" tabindex="0" aria-label="Remote control keys"></div>
       <div class="rm-side">
         <div class="card">
@@ -263,7 +263,7 @@
     <!-- Bluetooth: one card per audio device — its links, codec, endpoints and the AVDTP probe. -->
     <div class="pane" data-pane="bt">
       <p class="hint">Each connected Bluetooth audio device: which way audio goes on it and in what codec, the profile PipeWire uses for it (that is the codec choice), and what it offers.</p>
-      <div id="ad-list" class="rows-cards"></div>
+      <div id="ad-list" class="rows-cards ld"></div>
       <div class="card">
         <div class="card-head">
           <h3>AVDTP probe</h3>
@@ -276,7 +276,7 @@
 
     <!-- Players: AVRCP — the phones' players and the board's own. -->
     <div class="pane" data-pane="players">
-      <div id="au-players" class="rows-cards"></div>
+      <div id="au-players" class="rows-cards ld"></div>
       <div id="au-local"></div>
     </div>
 
@@ -288,7 +288,7 @@
           <button id="st-refresh" class="small-btn" title="Read PipeWire's nodes again">Refresh</button>
         </div>
         <div class="st-play-to"><span class="np-out-label">Play to</span>
-          <div class="np-outs" id="st-sinks" role="group" aria-label="Where new streams play"></div></div>
+          <div class="np-outs ld" id="st-sinks" role="group" aria-label="Where new streams play"></div></div>
         <div class="grid">
           <label id="st-codec-l" hidden>Codec <span id="st-codec" class="row wrap"></span></label>
         </div>
@@ -300,8 +300,8 @@
       </div>
 
       <h2>Running</h2>
-      <div id="st-list" class="rows-cards"></div>
-      <div id="st-empty" class="small muted">Nothing is playing. Start a test signal, a device's audio or a station below.</div>
+      <div id="st-list" class="rows-cards ld"></div>
+      <div id="st-empty" class="small muted" hidden>Nothing is playing. Start a test signal, a device's audio or a station below.</div>
 
       <div class="cols">
         <div class="card" id="st-new">
@@ -357,7 +357,7 @@
 
         <div class="card">
           <div class="card-head"><h3>Internet radio and URLs</h3><button class="small-btn" id="rd-edit">Edit stations</button></div>
-          <div id="rd-list" class="small"></div>
+          <div id="rd-list" class="small ld"></div>
           <div id="rd-editor" hidden>
             <textarea id="rd-text" class="mono" rows="8" placeholder="Name | https://url"></textarea>
             <div class="form-acts"><span class="small muted">One station a line: <span class="mono">name | url</span></span>
@@ -373,9 +373,9 @@
 
     <!-- PipeWire: the audio server itself. -->
     <div class="pane" data-pane="stack">
-      <div class="card">
+      <div class="card pending" id="au-card">
         <div class="card-head">
-          <h3>PipeWire <span id="au-services"></span></h3>
+          <h3>PipeWire <span id="au-services" class="ld"></span></h3>
           <div class="acts">
             <label class="switch inline" title="Kept across reboots"><input type="checkbox" id="au-on"><i></i> Audio on</label>
             <button id="au-restart">Restart</button>
@@ -396,15 +396,15 @@
 
   <!-- ======================================================== OBEX -->
   <section id="obex" class="panel">
-    <div class="card toolbar" id="ob-bar">
+    <div class="card toolbar pending" id="ob-bar">
       <div class="tb-main">
-        <div class="tb-id"><b>obexd</b> <span id="ob-state" class="pill">…</span></div>
+        <div class="tb-id"><b>obexd</b> <span id="ob-state" class="pill ld"></span></div>
         <label class="small inline-label">Incoming files
           <select id="ob-policy"><option value="auto">accept into in/</option><option value="ask">ask me here</option><option value="reject">reject</option></select></label>
         <span id="ob-msg" class="small"></span>
         <button id="ob-toggle">Start</button>
       </div>
-      <div id="ob-info" class="small muted"></div>
+      <div id="ob-info" class="small muted ld"></div>
       <div id="ob-request" class="ob-request" hidden></div>
     </div>
 
@@ -420,11 +420,11 @@
           </label>
           <div id="sh-picked" class="sh-picked"></div>
           <h4 class="sh-h">To</h4>
-          <div id="sh-devs" class="sh-devs"></div>
+          <div id="sh-devs" class="sh-devs ld"></div>
           <div class="form-acts"><span id="sh-msg" class="small muted"></span><button class="primary" id="sh-send" disabled>Send</button></div>
           <div id="sh-jobs" class="sh-jobs"></div>
         </div>
-        <div class="card sh-recv">
+        <div class="card sh-recv pending" id="sh-recv-card">
           <div class="card-head">
             <h3>Received</h3>
             <label class="switch inline small" title="Other devices can send files to the board while this is on (obexd)"><input type="checkbox" id="sh-on"><i></i> Receive files</label>
@@ -434,7 +434,7 @@
             <label class="inline-label">Incoming <select id="sh-policy"><option value="auto">save automatically</option><option value="ask">ask me first</option><option value="reject">refuse</option></select></label>
           </div>
           <div id="sh-incoming"></div>
-          <div id="sh-recv" class="sh-grid"></div>
+          <div id="sh-recv" class="sh-grid ld"></div>
         </div>
       </div>
     </div>
@@ -456,16 +456,16 @@
       </div>
       <div id="ob-sessions" class="rows-cards"></div>
       <h2>Transfers</h2>
-      <div class="card flush"><div class="scroll-x"><table id="ob-transfers" class="tbl"></table></div></div>
+      <div class="card flush"><div class="scroll-x"><table id="ob-transfers" class="tbl ld"></table></div></div>
     </div>
 
     <div class="pane" data-pane="files">
       <div class="cols three">
         <div class="card"><div class="card-head"><h3>out/ <span class="small muted">to send</span></h3>
-          <label class="small-btn upload">Upload<input type="file" id="ob-up-out" multiple hidden></label></div><div id="ob-f-out" class="small"></div></div>
-        <div class="card"><div class="card-head"><h3>in/ <span class="small muted">received and pulled</span></h3></div><div id="ob-f-in" class="small"></div></div>
+          <label class="small-btn upload">Upload<input type="file" id="ob-up-out" multiple hidden></label></div><div id="ob-f-out" class="small ld"></div></div>
+        <div class="card"><div class="card-head"><h3>in/ <span class="small muted">received and pulled</span></h3></div><div id="ob-f-in" class="small ld"></div></div>
         <div class="card"><div class="card-head"><h3>shared/ <span class="small muted">offered over FTP</span></h3>
-          <label class="small-btn upload">Upload<input type="file" id="ob-up-shared" multiple hidden></label></div><div id="ob-f-shared" class="small"></div></div>
+          <label class="small-btn upload">Upload<input type="file" id="ob-up-shared" multiple hidden></label></div><div id="ob-f-shared" class="small ld"></div></div>
       </div>
     </div>
   </section>
@@ -475,7 +475,7 @@
     <div id="mon-msg" class="small bad-text"></div>
     <div class="card flush">
       <div class="card-head pad"><h3>Connections</h3><span id="mon-source" class="small muted"></span></div>
-      <div class="scroll-x"><table id="mon-conns" class="tbl"></table></div>
+      <div class="scroll-x"><table id="mon-conns" class="tbl ld"></table></div>
       <div id="mon-adapters" class="small muted pad"></div>
     </div>
     <div class="card" id="mon-detail" data-full hidden>
@@ -567,7 +567,7 @@
         </div>
         <label class="check small" title="btbenchd re-reads BlueZ's object tree every few seconds (GetManagedObjects); hidden unless asked for"><input type="checkbox" id="db-poll"> show polling</label>
       </div>
-      <div id="db-view" class="lg-view wrap db-view" tabindex="0" aria-label="D-Bus messages"></div>
+      <div id="db-view" class="lg-view wrap db-view ld" tabindex="0" aria-label="D-Bus messages"></div>
       <p class="hint">Everything to and from BlueZ (<span class="mono">org.bluez</span>) and obexd on the system bus: calls with their arguments, replies with the call they answer and how long it took, errors, signals. Click a message for its arguments in full.</p>
     </div>
   </section>
@@ -585,20 +585,20 @@
       </div>
       <div id="gr-legend" class="small gr-legend"></div>
     </div>
-    <div id="gr-charts"></div>
+    <div id="gr-charts" class="ld"></div>
   </section>
 
   <!-- ======================================================== Traffic: captures -->
   <section id="capture" class="panel">
     <div class="card toolbar">
       <div class="tb-main">
-        <div class="tb-id"><b>Recording</b> <span id="cap-state" class="pill">…</span></div>
+        <div class="tb-id"><b>Recording</b> <span id="cap-state" class="pill ld"></span></div>
         <span id="cap-dir" class="small muted mono grow"></span>
-        <button id="cap-toggle">…</button>
+        <button id="cap-toggle" disabled>Start recording</button>
       </div>
       <div id="cap-msg" class="small bad-text"></div>
     </div>
-    <div class="card flush"><div class="scroll-x"><table id="cap-files" class="tbl"></table></div></div>
+    <div class="card flush"><div class="scroll-x"><table id="cap-files" class="tbl ld"></table></div></div>
     <div class="card" id="cap-analyze" hidden>
       <div class="card-head"><h3 id="cap-an-title"></h3><button class="small-btn" id="cap-an-close">Close</button></div>
       <pre id="cap-an-text" class="log tall"></pre>
@@ -674,12 +674,12 @@
   <section id="system" class="panel">
     <div class="pane" data-pane="overview">
       <div class="cols">
-        <div class="card"><h3>Health</h3><div id="sys-health"></div></div>
-        <div class="card"><h3>Versions</h3><div id="sys-versions"></div></div>
+        <div class="card"><h3>Health</h3><div id="sys-health" class="ld"></div></div>
+        <div class="card"><h3>Versions</h3><div id="sys-versions" class="ld"></div></div>
       </div>
       <div class="card">
         <h3>Services</h3>
-        <div id="sys-services"></div>
+        <div id="sys-services" class="ld"></div>
         <details class="more-fields">
           <summary>bluetoothd arguments</summary>
           <div class="row wrap">
@@ -693,7 +693,7 @@
       <div class="card">
         <div class="card-head"><h3>Log files</h3><span id="lf-dir" class="small muted mono"></span></div>
         <p class="hint">Each program's log in its own format (btbench-logd), for clog: <span class="mono">clog -t /tmp/logs/bluez.log</span> on the board, or download one here.</p>
-        <div id="lf-list" class="lf-list"></div>
+        <div id="lf-list" class="lf-list ld"></div>
       </div>
       <div class="card danger-zone">
         <div class="card-head"><div><h3>Power</h3><p class="hint">The console reconnects by itself when the board is back.</p></div>
@@ -733,14 +733,14 @@
           <label class="check small"><input type="checkbox" id="lg-wrap" checked> wrap</label>
         </div>
         <div class="small muted lg-status"><span id="lg-count"></span> <span id="lg-err" class="bad-text"></span></div>
-        <div id="lg-view" class="lg-view wrap" tabindex="0" aria-label="Log lines"></div>
+        <div id="lg-view" class="lg-view wrap ld" tabindex="0" aria-label="Log lines"></div>
       </div>
     </div>
 
     <div class="pane" data-pane="tools">
       <div class="card">
         <div class="card-head"><h3>Run a tool</h3></div>
-        <div class="row wrap">
+        <div class="row wrap pending" id="job-bar">
           <select id="job-cmd" aria-label="Tool"></select>
           <input id="job-args" class="mono grow" placeholder="arguments, e.g. -c 5 AA:BB:CC:DD:EE:FF" aria-label="Arguments">
           <button id="job-start" class="primary">Run</button>
@@ -754,10 +754,10 @@
   <!-- ======================================================== Setup -->
   <section id="setup" class="panel">
     <p class="hint" id="su-note"></p>
-    <div class="pane" data-pane="profiles" id="su-profiles"></div>
-    <div class="pane" data-pane="bluetooth"><p class="hint">BlueZ's main.conf, as btbenchd writes it for bluetoothd. Default leaves a key as the image has it.</p><div id="su-bluetooth"></div></div>
-    <div class="pane" data-pane="audio"><p class="hint">WirePlumber's Bluetooth settings (PipeWire). Default leaves a setting as the image has it.</p><div id="su-audio"></div></div>
-    <div class="pane" data-pane="plugins" id="su-plugins"></div>
+    <div class="pane ld" data-pane="profiles" id="su-profiles"></div>
+    <div class="pane" data-pane="bluetooth"><p class="hint">BlueZ's main.conf, as btbenchd writes it for bluetoothd. Default leaves a key as the image has it.</p><div id="su-bluetooth" class="ld"></div></div>
+    <div class="pane" data-pane="audio"><p class="hint">WirePlumber's Bluetooth settings (PipeWire). Default leaves a setting as the image has it.</p><div id="su-audio" class="ld"></div></div>
+    <div class="pane ld" data-pane="plugins" id="su-plugins"></div>
     <div class="apply-bar" id="su-bar" hidden>
       <span id="su-bar-text" class="small"></span>
       <button id="su-discard" class="ghost">Discard</button>
@@ -772,16 +772,16 @@
 
   <!-- ======================================================== Kernel -->
   <section id="kernel" class="panel">
-    <div class="card" id="k-card"></div>
+    <div class="card" id="k-card"><h3>Kernel</h3><div class="ld"></div></div>
     <div class="card">
       <div class="form-acts start">
-        <button id="k-try" class="primary">Try the test kernel (reboots)</button>
-        <button id="k-commit">Keep the test kernel</button>
-        <button id="k-rollback" class="danger">Roll back</button>
+        <button id="k-try" class="primary" disabled>Try the test kernel (reboots)</button>
+        <button id="k-commit" disabled>Keep the test kernel</button>
+        <button id="k-rollback" class="danger" disabled>Roll back</button>
       </div>
       <div id="k-msg" class="small muted"></div>
     </div>
-    <div class="card">
+    <div class="card pending" id="kd-card">
       <div class="card-head">
         <h3>Kernel Bluetooth logs</h3>
         <div class="acts">
@@ -790,7 +790,7 @@
         </div>
       </div>
       <p class="hint">The kernel's own debug messages (BT_DBG) by area, through dynamic debug. They are chatty: a streaming link logs thousands of lines a second and the logging changes the timing, so switch on only what you are looking at.</p>
-      <div id="kd-areas" class="kd-areas"></div>
+      <div id="kd-areas" class="kd-areas ld"></div>
       <label class="switch inline small"><input type="checkbox" id="kd-keep"><i></i> Keep the areas on from boot</label>
       <div id="kd-msg" class="small muted"></div>
     </div>

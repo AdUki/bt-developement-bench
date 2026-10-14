@@ -14,6 +14,7 @@ const obFolder = (name, files, del) => files.length ? files.map(f => `<div class
 
 function renderObex(s) {
   ob.state = s;
+  loaded($('ob-bar'));
   setText($('ob-state'), s.running ? 'running' : 'stopped');
   $('ob-state').title = s.running ? (s.managed ? 'Started by btbenchd' : 'Started by something else') : '';
   setClass($('ob-state'), 'pill ' + (s.running ? 'good' : ''));
@@ -59,7 +60,15 @@ function renderObex(s) {
   renderShare();
 }
 
-const refreshObex = () => api('/obex').then(renderObex).catch(e => setText($('ob-msg'), e.message));
+const refreshObex = () => api('/obex').then(renderObex).catch(e => {
+  setText($('ob-msg'), e.message);
+  if ($('ob-state').classList.contains('ld')) {
+    setText($('ob-state'), 'error');
+    setClass($('ob-state'), 'pill bad');
+  }
+  loaded($('ob-info'));
+  ldFail(e, $('sh-recv'), $('ob-transfers'), $('ob-f-out'), $('ob-f-in'), $('ob-f-shared'));
+});
 
 // ---------------------------------------------------------------- session cards
 
@@ -287,7 +296,8 @@ const shCanTake = d => d.uuids.some(u => u.uuid === '1105');
 
 function renderShareDevices() {
   const b = btState;
-  const devs = b ? b.devices.filter(d => d.paired) : [];
+  if (!b) return;  // still on the way: not "no paired device"
+  const devs = b.devices.filter(d => d.paired);
   if (!devs.some(d => d.address === sh.dev && shCanTake(d))) sh.dev = (devs.find(d => d.connected && shCanTake(d)) || devs.find(shCanTake) || {}).address || '';
   setHTML($('sh-devs'), devs.length ? devs.map(d => {
     const ok = shCanTake(d);
@@ -327,6 +337,7 @@ function renderShareJobs() {
 }
 
 function renderShareRecv(s) {
+  loaded($('sh-recv-card'));
   $('sh-on').checked = !!s.running;
   if (idle($('sh-policy'))) $('sh-policy').value = s.agent.policy;
   const name = btState && btState.adapter ? btState.adapter.alias : 'the board';
@@ -473,7 +484,7 @@ registerTab('obex', {
   show() {
     refreshObex();
     obDevices();
-    api('/bluetooth').then(b => { btState = b; renderShare(); }).catch(() => {});
+    api('/bluetooth').then(b => { btState = b; renderShare(); }).catch(e => ldFail(e, $('sh-devs')));
   },
   onMessage(topic, data) {
     if (currentTab !== 'obex') return;

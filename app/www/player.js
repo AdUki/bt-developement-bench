@@ -14,8 +14,10 @@
 
 const pl = {
   media: null,         // the "media" topic: players, transports
+  mediaFailed: false,  // its first read failed: nothing is on the way any more
   streams: [],         // the "audio.streams" topic
   endpoints: null,     // the board's outputs
+  endpointsFailed: false,
   src: lsGet('btbench.pl.src') || '',   // 'stream:<id>' or a player's path; '' = whichever plays
   boardId: null,       // the stream this view started last
   lib: lsGet('btbench.pl.lib') || '',  // queue | phone | radio | upnp | signals; '' = the phone's when there is one
@@ -226,9 +228,12 @@ function renderNowPlaying() {
     art = svg(ph, 'ph') + `<img alt="" src="${esc(artSrc)}" onload="npArtDone(this, true)" onerror="npArtDone(this, false)"${pl.artDone[artSrc] === true ? '' : ' hidden'}>`;
     artLoading = pl.artDone[artSrc] === undefined;
   }
+  // Until /media answers, "Nothing playing" would be a guess: the cover and the title wait instead.
+  const waiting = c.kind === 'none' && !pl.media && !pl.mediaFailed;
   setHTML($('np-art'), art);
-  $('np-art').classList.toggle('loading', artLoading);
-  setText($('np-title'), title);
+  $('np-art').classList.toggle('loading', artLoading || waiting);
+  $('np-title').classList.toggle('wait', waiting);
+  setText($('np-title'), waiting ? '' : title);
   setText($('np-sub'), sub);
   setText($('np-sub2'), sub2);
   $('np').classList.toggle('idle', c.kind === 'none');
@@ -502,7 +507,7 @@ function renderQueue(c) {
   }
   setText($('np-q-note'), note);
   const waiting = c.kind === 'phone' && c.p.browsable && pl.queueBusy && !pl.queueItems.length;
-  setHTML($('np-queue'), rows || (waiting ? '<div class="empty-line loading-line"><span class="spin"></span>Getting the phone’s list…</div>'
+  setHTML($('np-queue'), rows || (waiting ? '<div class="empty-line loading-line"><span class="dots"></span>Getting the phone’s list…</div>'
     : `<div class="empty-line">${c.kind === 'none' ? 'Nothing playing: pick something from Radio, Media servers or Test signals.' : 'Nothing queued.'}</div>`));
 }
 
@@ -637,7 +642,7 @@ function libDropBack(from) {
 function upnpServers(search) {
   pl.libMore = null;
   setHTML($('np-crumbs'), '');
-  setHTML($('np-lib'), `<div class="empty-line loading-line"><span class="spin"></span>${search ? 'Searching the network…' : 'Loading…'}</div>`);
+  setHTML($('np-lib'), `<div class="empty-line loading-line"><span class="dots"></span>${search ? 'Searching the network…' : 'Loading…'}</div>`);
   api('/audio/upnp/servers' + (search ? '?search=1' : '')).then(r => {
     // None known yet (the board only remembers what a search found): search now.
     if (!search && !r.servers.length) return upnpServers(true);
@@ -676,7 +681,7 @@ function upnpFolder(server, id, title, push, meta) {
   const here = pl.libPath[pl.libPath.length - 1];
   const folderArt = here && here.meta ? here.meta.art : '';
   renderCrumbs();
-  setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
+  setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="dots"></span>Loading…</div>');
   pl.libMore = null;
   upnpPage(server, id, 0, folderArt, seq);
 }
@@ -718,7 +723,7 @@ function libMoreLine() {
   const of = m.total ? ` of ${m.total.toLocaleString()}` : '';
   lib.insertAdjacentHTML('beforeend', m.failed
     ? `<div class="empty-line lib-more"><span class="bad-text">${esc(m.failed)}</span> <button class="small-btn" data-lib-more="1">Try again</button></div>`
-    : `<div class="empty-line loading-line lib-more"><span class="spin"></span>${pl.libItems.length.toLocaleString()}${of} shown, loading more…</div>`);
+    : `<div class="empty-line loading-line lib-more"><span class="dots"></span>${pl.libItems.length.toLocaleString()}${of} shown, loading more…</div>`);
   if (m.failed || !('IntersectionObserver' in window)) return;
   libMoreSeen = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) libMoreLoad(); }, {rootMargin: '600px'});
   libMoreSeen.observe(lib.querySelector('.lib-more'));
@@ -750,7 +755,7 @@ const phoneRow = (i, player) => ({kind: i.type === 'folder' ? 'pfolder' : 'ptrac
 function phoneFolder(p, folder, title, push) {
   if (push !== false) libDescend({id: folder, title}, pl.libPath.length > 0);
   renderCrumbs();
-  setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="spin"></span>Loading…</div>');
+  setHTML($('np-lib'), '<div class="empty-line loading-line"><span class="dots"></span>Loading…</div>');
   // Only the last folder asked for is shown: browsing waits its turn on the board, and an earlier
   // answer arriving late must not replace the one opened since.
   const seq = ++pl.libSeq;
@@ -1078,7 +1083,7 @@ function outButtonsHTML(opts, cur, sw, o = pl) {
     const on = !busy && !bad && (x.value === 'none' ? !cur.length : cur.includes(x.value));
     const cls = 'np-o' + (on ? ' on' : '') + (busy ? ' busy' : '') + (bad ? ' bad' : '') + (x.gone ? ' gone' : '');
     return `<button class="${cls}" data-out="${esc(x.value)}" aria-pressed="${on}">` +
-      (busy ? '<span class="spin"></span>' : svg(x.icon)) + `<b>${esc(x.name)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`;
+      (busy ? '<span class="dots"></span>' : svg(x.icon)) + `<b>${esc(x.name)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`;
   }).join('');
 }
 
@@ -1090,10 +1095,12 @@ function curOuts(c, b) {
 }
 
 function renderOuts() {
+  loaded($('np-listen-l'));
   const c = current();
   const b = outStream(c), phone = c.kind === 'phone';
   swAdvance(pl.sw, b);
-  setHTML($('np-outs'), outButtonsHTML(outOptions(phone), curOuts(c, b), pl.sw));
+  // Not before the board's outputs are known: the buttons would show the page's defaults lit.
+  if (pl.endpoints || pl.endpointsFailed) setHTML($('np-outs'), outButtonsHTML(outOptions(phone), curOuts(c, b), pl.sw));
   // Always set (a tick is one change, never half-typed): focus stays on it after a click.
   const box = $('np-listen');
   box.checked = b ? pl.hearId === b.id : phone ? !!pl.hearBusy : pl.listen;
@@ -1115,7 +1122,7 @@ const OUT_STATUS_MS = 5000;
 // A status line ({cls, html}) into its element: a dot in the state's colour, or a spinner.
 function outStatusHTML(el, st) {
   setClass(el, el.className.replace(/\s*\b(good|warn|bad|busy)\b/g, '') + (st.cls ? ' ' + st.cls : ''));
-  setHTML(el, (st.cls === 'busy' ? '<span class="spin"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
+  setHTML(el, (st.cls === 'busy' ? '<span class="dots"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
 }
 
 const andList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
@@ -1436,9 +1443,9 @@ registerTab('player', {
     const kept = () => pl.libPath.length && pl.libItems.length && (pl.libPath[0].parent || {}).lib === pl.lib &&
       (pl.lib !== 'phone' || phones().some(x => x.browsable));
     api('/media').then(m => { pl.media = m; pl.linksKey = (m.transports || []).map(t => t.path).sort().join(','); notePlayers(m.players); renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); })
-      .catch(() => { renderLibTabs(); if (!kept()) openLib(pl.lib); });
+      .catch(() => { pl.mediaFailed = true; renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); });
     api('/bluetooth').then(b => { btState = b; renderNowPlaying(); }).catch(() => {});
-    api('/audio/endpoints').then(renderOutputs).catch(() => {});
+    api('/audio/endpoints').then(renderOutputs).catch(() => { pl.endpointsFailed = true; renderOuts(); });
     refreshPlayerStreams();
     clearInterval(pl.tick);
     // The progress bar moves between the phone's updates.

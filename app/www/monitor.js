@@ -538,7 +538,7 @@ const livePkts = (() => {
 registerTab('monitor', {
   topics: () => ['hci.stats', 'hci.event'],
   show() {
-    api('/hci/stats').then(renderStats).catch(e => setText($('mon-msg'), e.message));
+    api('/hci/stats').then(renderStats).catch(e => { loaded($('mon-conns')); setText($('mon-msg'), e.message); });
     loadEvents();
     clearInterval(mon.poll);
     clearInterval(mon.latPoll);

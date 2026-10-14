@@ -14,6 +14,7 @@ const au = {adOpen: {}, browse: {}, endpoints: null, media: null, streams: [], c
   tick: null, radio: []};
 
 function renderAudio(s) {
+  loaded($('au-card'));
   setHTML($('au-services'), Object.entries(s.services || {}).map(([k, v]) =>
     pill(k.replace(/\.service$/, ''), v === 'active' ? 'good' : v === 'failed' ? 'bad' : '')).join(' '));
   const on = s.enabled !== false;
@@ -24,6 +25,8 @@ function renderAudio(s) {
 
 function refreshAudio() {
   return api('/audio').then(s => { renderAudio(s); setText($('au-msg'), ''); }).catch(e => {
+    loaded($('au-card'));
+    loaded($('au-services'));
     $('au-restart').disabled = e.status === 503;
     // On a PC the target scripts are not installed; say so plainly rather than as an error.
     setText($('au-msg'), e.status === 503 ? 'Restarting PipeWire works on the board only (btbench-audio is not installed on this machine).' : e.message);
@@ -112,7 +115,7 @@ function pickStreamOut(id, v) {
 
 function refreshEndpoints(fresh) {
   return api('/audio/endpoints' + (fresh ? '?fresh=1' : '')).then(renderEndpoints)
-    .catch(e => setText($('st-backend'), e.message));
+    .catch(e => { ldFail(e, $('st-sinks')); setText($('st-backend'), e.message); });
 }
 
 // The codecs of the chosen outputs that are Bluetooth devices: the same picker as in Players, so
@@ -287,10 +290,11 @@ function renderStreams(list) {
   }
   // Oldest first into prepend(): newest ends on top.
   list.streams.slice().reverse().forEach(upsertStream);
+  loaded($('st-list'));
   $('st-empty').hidden = list.streams.length > 0;
 }
 
-const refreshStreams = () => api('/audio/streams').then(renderStreams).catch(fail);
+const refreshStreams = () => api('/audio/streams').then(renderStreams).catch(e => { ldFail(e, $('st-list')); fail(e); });
 
 // ---------------------------------------------------------------- listening (Web Audio)
 
@@ -858,7 +862,8 @@ function audioDeviceCard(x) {
 
 function renderAudioDevices() {
   const el = $('ad-list');
-  if (!el) return;
+  // Which links a device has comes with /media: without it, every device would look idle.
+  if (!el || !au.media) return;
   // Not while a picker is open or a slider held: the rebuild would take it from under the pointer.
   const ae = document.activeElement;
   if (ae && el.contains(ae) && (ae.tagName === 'SELECT' || ae.type === 'range')) return;
@@ -886,7 +891,7 @@ function avdtpDevices() {
     .map(d => ({value: d.address, label: `${d.alias} (${d.address})${d.connected ? ' — connected' : ''}`})))).catch(() => {});
 }
 
-function refreshMedia() { return api('/media').then(renderMedia).catch(fail); }
+function refreshMedia() { return api('/media').then(renderMedia).catch(e => { ldFail(e, $('ad-list'), $('au-players')); fail(e); }); }
 
 // ---------------------------------------------------------------- radio
 
@@ -1179,7 +1184,7 @@ registerTab('audio', {
     refreshCodecs();
     avdtpDevices();
     refreshStreams();
-    api('/audio/radio').then(renderRadio).catch(() => {});
+    api('/audio/radio').then(renderRadio).catch(e => ldFail(e, $('rd-list')));
     clearInterval(au.tick);
     au.tick = setInterval(tickPlayers, 500);
     // The board's player has no topic: asked every two seconds while the players are shown.

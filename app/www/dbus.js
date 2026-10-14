@@ -90,7 +90,7 @@ function dbRender() {
   // The newest 1500 drawn: the page stays quick on a phone, and the log file has the rest.
   const draw = shown.slice(-1500);
   setHTML($('db-view'), draw.map(dbRow).join('') ||
-    `<div class="lg-note">${db.loaded ? (db.entries.length ? 'Nothing matches.' : 'No messages yet: they appear here as BlueZ is used.') : 'Loading…'}</div>`);
+    `<div class="lg-note">${db.loaded ? (db.entries.length ? 'Nothing matches.' : 'No messages yet: they appear here as BlueZ is used.') : '<span class="dots"></span>Loading…'}</div>`);
   dbScroll();
   dbStatus(shown.length);
 }
@@ -126,7 +126,7 @@ function dbLoad() {
     if (!r.running && r.error) setText($('db-status'), 'Not watching: ' + r.error);
     dbAdd(r.entries || []);
     dbRender();
-  }).catch(e => { db.loaded = true; setText($('db-status'), 'D-Bus log: ' + e.message); });
+  }).catch(e => { db.loaded = true; ldFail(e, $('db-view')); setText($('db-status'), 'D-Bus log: ' + e.message); });
 }
 
 function setupDbus() {
