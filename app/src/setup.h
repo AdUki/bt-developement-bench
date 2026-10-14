@@ -61,7 +61,8 @@ struct SetupState {
   std::set<std::string> plugins_off = {"hfp"};  // BlueZ's own HFP would fight PipeWire's
   // WirePlumber's bluez5.roles that are on: the image's set until changed. Kept as the roles on
   // (not off), so a role added to the table later starts off, as the image has it.
-  std::set<std::string> roles_on = {"a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "hfp_hf", "hfp_ag"};
+  std::set<std::string> roles_on = {"a2dp_sink", "a2dp_source", "bap_sink",       "bap_source",
+                                    "bap_bcast_sink", "bap_bcast_source", "asha_sink", "hfp_hf", "hfp_ag"};
   std::set<std::string> obex_off;               // obexd plugins
   std::map<std::string, nlohmann::json> settings;  // "LE.MinConnectionInterval" → 7.5 (in the API's unit)
 };

@@ -122,7 +122,7 @@ The drop-in is `/etc/wireplumber/wireplumber.conf.d/50-btbench.conf`:
 | setting | value | why |
 |---|---|---|
 | `support.logind`, `monitor.bluez.seat-monitoring` | `disabled` (profiles `main` and `main-systemwide`) | no logind seat on a headless board. Seat monitoring would keep the BlueZ monitor waiting for one forever |
-| `bluez5.roles` | `[ a2dp_sink a2dp_source bap_sink bap_source hfp_hf hfp_ag ]` | every role except HSP, as upstream does |
+| `override.bluez5.roles` | `[ a2dp_sink a2dp_source bap_sink bap_source bap_bcast_sink bap_bcast_source asha_sink hfp_hf hfp_ag ]` | every role except HSP (left out as upstream does): A2DP, LE Audio unicast and broadcast, each both ways, and ASHA. Setup turns roles off |
 | `bluez5.codecs` | every codec name PipeWire 1.6 knows | names that were not built are ignored. Trim the list to force a codec |
 | `bluez5.hfphsp-backend` | `native` | PipeWire's own HFP; no oFono or hsphfpd on the image |
 | `bluetooth.autoswitch-to-headset-profile` | `false` | upstream switches a device to HFP when anything records from it; on the bench every recorder is a measurement, and the switch would drop the A2DP stream being captured. Profiles (codecs) are chosen on purpose: the console's codec picker, `bench codec`, `wpctl set-profile` |

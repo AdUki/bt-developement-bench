@@ -56,8 +56,8 @@ bool put_file(const std::string& path, const std::string& text, std::string* err
 
 struct Setting {
   // Section.Key in main.conf; for WirePlumber, Monitor.<prop> (monitor.bluez.properties),
-  // Device.<prop> (a monitor.bluez.rules update for every Bluetooth device) or Settings.<name>
-  // (wireplumber.settings).
+  // Device.<prop> (a monitor.bluez.rules update for every Bluetooth device), Node.<prop> (one for
+  // every Bluetooth node) or Settings.<name> (wireplumber.settings).
   const char* key;
   const char* label;
   const char* help;
@@ -117,8 +117,20 @@ const std::vector<Setting>& settings_table() {
       {"Device.bluez5.a2dp.ldac.quality", "LDAC quality", "LDAC's bitrate: adaptive, or fixed high (990), standard (660), mobile (330 kbit/s).",
        "enum", {{"auto", "Adaptive"}, {"hq", "High"}, {"sq", "Standard"}, {"mq", "Mobile"}}},
       {"Device.bluez5.a2dp.aac.bitratemode", "AAC bitrate mode", "0: constant bitrate; 1..5: variable, from lowest to highest quality.", "number", {}, 0, 5, "", 1},
+      {"Device.bluez5.auto-connect", "Profiles PipeWire connects", "When a device connects with only some of its audio profiles, PipeWire connects these as well. PipeWire's default: none (BlueZ's own connect decides).",
+       "list", {{"a2dp_sink", "A2DP sink"}, {"a2dp_source", "A2DP source"}, {"hfp_hf", "HFP HF"}, {"hfp_ag", "HFP AG"}, {"hsp_hs", "HSP HS"},
+                {"hsp_ag", "HSP AG"}, {"bap_sink", "LE Audio sink"}, {"bap_source", "LE Audio source"}}},
+      {"Device.bluez5.hw-volume", "Hardware volume profiles", "The profiles on which the device's own volume is used (AVRCP absolute volume, HFP gain). PipeWire's default: all of them.",
+       "list", {{"a2dp_sink", "A2DP sink"}, {"a2dp_source", "A2DP source"}, {"hfp_hf", "HFP HF"}, {"hfp_ag", "HFP AG"}, {"hsp_hs", "HSP HS"},
+                {"hsp_ag", "HSP AG"}, {"bap_sink", "LE Audio sink"}, {"bap_source", "LE Audio source"}}},
+      {"Node.bluez5.media-source-role", "Received audio", "What audio the board receives (A2DP sink, LE Audio sink) is: a stream played to the default output, or a source to record from.",
+       "enum", {{"playback", "Played (PipeWire's default)"}, {"input", "A source to record"}}},
+      {"Node.bluez5.decode-buffer.latency", "Receive buffer", "Samples buffered after the decoder of received audio: more rides out longer radio gaps, at that much latency. 0: PipeWire sizes it from the link's jitter.",
+       "number", {}, 0, 96000, "samples", 1},
+      {"Monitor.bluez5.dummy-avrcp-player", "Dummy AVRCP player", "Register an AVRCP player with no media, for devices whose volume or playback buttons only work with one.", "bool", {}},
       {"Settings.bluetooth.autoswitch-to-headset-profile", "Switch to headset when recording", "A desktop's behaviour: recording from a Bluetooth source turns the device to HFP. Off on the bench (it would break A2DP measurements).", "bool", {}},
       {"Settings.bluetooth.use-persistent-storage", "Remember profiles", "Keep each device's last profile (codec) across reconnects.", "bool", {}},
+      {"Settings.device.restore-profile", "Restore profiles", "Put a device back in the profile it last had when it reconnects, instead of choosing one afresh.", "bool", {}},
   };
   return t;
 }
@@ -162,10 +174,10 @@ const std::vector<Plugin>& plugins_table() {
 }
 
 // Every Bluetooth role PipeWire's bluez5 monitor implements (bluez5.roles); the image turns on all
-// but HSP and the LE Audio broadcast roles (wireplumber 50-btbench.conf).
+// but HSP (wireplumber 50-btbench.conf).
 const std::vector<std::string>& roles_table() {
   static const std::vector<std::string> t = {"a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "bap_bcast_sink",
-                                             "bap_bcast_source", "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"};
+                                             "bap_bcast_source", "asha_sink", "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"};
   return t;
 }
 // The roles setup.json files written before it kept roles_on knew (they kept the roles off).
@@ -192,6 +204,7 @@ const std::vector<Profile>& profiles_table() {
       {"bap_source", "LE Audio unicast source", "LE Audio", "Send LE Audio to earbuds (BAP unicast client, source).", {}, {"bap_source"}, {}},
       {"bap_bcast_sink", "LE Audio broadcast sink", "LE Audio", "Listen to Auracast broadcasts (BAP broadcast sink). Needs ISO: a controller with LE Audio.", {}, {"bap_bcast_sink"}, {}},
       {"bap_bcast_source", "LE Audio broadcast source", "LE Audio", "Broadcast audio for anyone to hear (BAP broadcast source). Needs ISO.", {}, {"bap_bcast_source"}, {}},
+      {"asha_sink", "ASHA source", "Audio", "Stream to hearing aids over ASHA (Android's hearing aid protocol, LE): PipeWire's role and BlueZ's asha plugin.", {"asha"}, {"asha_sink"}, {}},
       {"avrcp", "AVRCP", "Control", "Players, track info, absolute volume and cover art.", {"avrcp"}, {}, {}},
       {"hid_host", "HID host (classic)", "Input", "Use classic keyboards, mice and game pads.", {"input"}, {}, {}},
       {"hog_host", "HID over GATT host", "Input", "Use BLE keyboards, mice and remotes.", {"hog", "scanparam"}, {}, {}},
@@ -208,7 +221,7 @@ const std::vector<Profile>& profiles_table() {
 }
 
 bool for_wireplumber(const std::string& key) {
-  return starts_with(key, "Monitor.") || starts_with(key, "Device.") || starts_with(key, "Settings.");
+  return starts_with(key, "Monitor.") || starts_with(key, "Device.") || starts_with(key, "Node.") || starts_with(key, "Settings.");
 }
 
 std::string format_number(double v) {
@@ -515,11 +528,13 @@ void add_wireplumber(json* schema, const SetupSources& src, const std::string& o
     // Named: items() of a temporary in a range-for would iterate a destroyed object.
     const json wp_schema = doc.value("wireplumber.settings.schema", json::object());
     for (const auto& [k, d] : wp_schema.items()) {
-      if (!starts_with(k, "bluetooth.") || !d.is_object()) continue;
+      if (!d.is_object()) continue;
       const std::string full = "Settings." + k, type = d.value("type", "");
       json* s = nullptr;
       for (json& x : settings)
         if (x["key"] == full) s = &x;
+      // Every Bluetooth setting, and the others the table names (device.restore-profile).
+      if (!s && !starts_with(k, "bluetooth.")) continue;
       if (!s) {
         json n{{"key", full}, {"label", d.value("name", k)}, {"help", d.value("description", "")}, {"file", "wireplumber"}};
         if (type == "bool") n["type"] = "bool";
@@ -831,13 +846,14 @@ std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const 
   std::string roles;
   for (const std::string& r : roles_table())
     if (roles_on.count(r)) roles += r + " ";
-  std::string monitor, device, wps;
+  std::string monitor, device, node, wps;
   for (const auto& [k, v] : settings) {
     if (v.is_null()) continue;
     const std::string prop = k.substr(k.find('.') + 1);
     // A list replaces the image's (fragments would otherwise add to it).
     if (starts_with(k, "Monitor.")) monitor += "  " + std::string(v.is_array() ? "override." : "") + prop + " = " + spa_value(v) + "\n";
     else if (starts_with(k, "Device.")) device += "        " + prop + " = " + spa_value(v) + "\n";
+    else if (starts_with(k, "Node.")) node += "        " + prop + " = " + spa_value(v) + "\n";
     else if (starts_with(k, "Settings.")) wps += "  " + prop + " = " + spa_value(v) + "\n";
   }
   // "override." replaces the roles list instead of adding to the image's.
@@ -845,9 +861,14 @@ std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const 
                     "# changed from the image's 50-btbench.conf. Edits here are replaced.\n"
                     "monitor.bluez.properties = {\n"
                     "  override.bluez5.roles = [ " + roles + "]\n" + monitor + "}\n";
+  std::string rules;
   if (!device.empty())
-    out += "monitor.bluez.rules = [\n  {\n    matches = [ { device.name = \"~bluez_card.*\" } ]\n"
-           "    actions = {\n      update-props = {\n" + device + "      }\n    }\n  }\n]\n";
+    rules += "  {\n    matches = [ { device.name = \"~bluez_card.*\" } ]\n"
+             "    actions = {\n      update-props = {\n" + device + "      }\n    }\n  }\n";
+  if (!node.empty())
+    rules += "  {\n    matches = [ { node.name = \"~bluez_input.*\" } { node.name = \"~bluez_output.*\" } ]\n"
+             "    actions = {\n      update-props = {\n" + node + "      }\n    }\n  }\n";
+  if (!rules.empty()) out += "monitor.bluez.rules = [\n" + rules + "]\n";
   if (!wps.empty()) out += "wireplumber.settings = {\n" + wps + "}\n";
   return out;
 }

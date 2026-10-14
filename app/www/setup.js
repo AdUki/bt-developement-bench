@@ -17,7 +17,7 @@ function draftRestarts() {
     (p ? p.layers : []).forEach(l => r.add({bluetoothd: 'bluetooth', pipewire: 'WirePlumber', obexd: 'obexd', btbenchd: ''}[l]));
   }
   if (Object.keys(su.draft.plugins).length) r.add('bluetooth');
-  for (const k of Object.keys(su.draft.settings)) r.add(/^(Monitor|Device|Settings)\./.test(k) ? 'WirePlumber' : 'bluetooth');
+  for (const k of Object.keys(su.draft.settings)) r.add(/^(Monitor|Device|Node|Settings)\./.test(k) ? 'WirePlumber' : 'bluetooth');
   r.delete('');
   return [...r];
 }
@@ -85,7 +85,7 @@ function renderSetup() {
   const section = k => k.split('.')[0];
   const SECT = {General: 'General', BR: 'Classic (BR/EDR)', LE: 'Low Energy', GATT: 'GATT', Policy: 'Policy plugin',
     ChannelSounding: 'Channel Sounding', CSIS: 'Coordinated sets (CSIS)', AVDTP: 'AVDTP', AVRCP: 'AVRCP', AdvMon: 'Advertisement monitor',
-    Monitor: 'Bluetooth in PipeWire', Device: 'Every Bluetooth device', Settings: 'WirePlumber'};
+    Monitor: 'Bluetooth in PipeWire', Device: 'Every Bluetooth device', Node: 'Every Bluetooth stream', Settings: 'WirePlumber'};
   // A setting for a part this machine lacks (a codec plugin) shows only while it is set.
   const shown = st => st.available !== false || st.value != null || st.key in su.draft.settings;
   const settingsView = file => {

@@ -81,6 +81,16 @@ void test_args_and_wireplumber() {
   CHECK(has(wp, "bluez5.a2dp.ldac.quality = \"hq\""));
   CHECK(has(wp, "wireplumber.settings = {\n  bluetooth.autoswitch-to-headset-profile = false\n}"));
   CHECK(!has(wp, "ConnectionLatency"));
+  CHECK(!has(wp, "bluez_input"));  // no node rule without a Node.* setting
+  // Node.* settings: a rule for every Bluetooth node, after the device one in the same list.
+  const std::string wn = wireplumber_roles_conf({"a2dp_sink"},
+      {{"Node.bluez5.media-source-role", "input"}, {"Node.bluez5.decode-buffer.latency", 4096},
+       {"Device.bluez5.auto-connect", json::array({"a2dp_sink", "hfp_hf"})}});
+  CHECK(has(wn, "matches = [ { node.name = \"~bluez_input.*\" } { node.name = \"~bluez_output.*\" } ]"));
+  CHECK(has(wn, "bluez5.media-source-role = \"input\"\n"));
+  CHECK(has(wn, "bluez5.decode-buffer.latency = 4096\n"));
+  CHECK(has(wn, "bluez5.auto-connect = [ a2dp_sink hfp_hf ]\n"));
+  CHECK_EQ(wn.find("monitor.bluez.rules"), wn.rfind("monitor.bluez.rules"));
   CHECK_EQ(obexd_noplugin({"ftp", "pcsuite"}), std::string("ftp,pcsuite"));
 }
 
@@ -93,6 +103,10 @@ void test_validation() {
   CHECK(!setup_setting_ok(sc, "LE.MinConnectionInterval", 5, &err));
   CHECK(!setup_setting_ok(sc, "LE.MinConnectionInterval", "7.5", &err));
   CHECK(setup_setting_ok(sc, "GATT.Cache", nullptr, &err));  // back to BlueZ's default
+  CHECK(setup_setting_ok(sc, "Node.bluez5.media-source-role", "input", &err));
+  CHECK(!setup_setting_ok(sc, "Node.bluez5.media-source-role", "speaker", &err));
+  CHECK(setup_setting_ok(sc, "Device.bluez5.auto-connect", json::array({"a2dp_sink"}), &err));
+  CHECK(!setup_setting_ok(sc, "Device.bluez5.auto-connect", json::array({"a2dp_speaker"}), &err));
   CHECK(!setup_setting_ok(sc, "General.Nonsense", true, &err));
   CHECK(setup_setting_ok(sc, "Monitor.bluez5.codecs", json::array({"sbc", "aac"}), &err));
   CHECK(!setup_setting_ok(sc, "Monitor.bluez5.codecs", json::array({"mp3"}), &err));
@@ -297,14 +311,13 @@ void test_setup() {
     Setup s(o, [&] { return remote; }, [&](bool on, std::string*) { remote = on; return true; },
             [&](const std::string& np) { obex_got = np; });
     json st = s.state();
-    // The default: everything on but BlueZ's own HFP.
-    // The default: everything on but BlueZ's own HFP, HSP, the broadcast roles and the remote.
-    const std::set<std::string> off = {"bluez_hfp", "hid_remote", "hsp_hs", "hsp_ag", "bap_bcast_sink", "bap_bcast_source"};
+    // The default: everything on but BlueZ's own HFP, HSP and the remote.
+    const std::set<std::string> off = {"bluez_hfp", "hid_remote", "hsp_hs", "hsp_ag"};
     for (const json& p : st["profiles"]) CHECK_EQ(p["on"].get<bool>(), !off.count(p["id"].get<std::string>()));
     json out;
     std::string err;
     int status = 0;
-    CHECK(s.change(json::parse(R"({"profiles": {"a2dp_source": false, "obex_ftp": false, "bap_sink": false, "bap_source": false, "bap_bcast_sink": true, "hid_remote": true},
+    CHECK(s.change(json::parse(R"({"profiles": {"a2dp_source": false, "obex_ftp": false, "bap_sink": false, "bap_source": false, "bap_bcast_source": false, "hid_remote": true},
         "plugins": {"policy": false, "bap": false, "bass": false, "vcp": false, "micp": false, "mcp": false, "ccp": false, "csip": false, "tmap": false, "gmap": false}, "settings": {"General.ControllerMode": "le", "Monitor.bluez5.enable-msbc": false}})"), &out, &err, &status));
     CHECK(err.empty());
     CHECK(remote);
@@ -315,10 +328,10 @@ void test_setup() {
     CHECK(has(env, "--noplugin=bap,bass,ccp,csip,gmap,hfp,mcp,micp,policy,tmap,vcp"));
     CHECK(has(env, "--configfile=" + (dir / "main.conf").string()));
     CHECK(has(slurp(dir / "main.conf"), "ControllerMode = le"));
-    CHECK(has(slurp(dir / "wp.conf"), "override.bluez5.roles = [ a2dp_sink bap_bcast_sink hfp_hf hfp_ag ]"));
+    CHECK(has(slurp(dir / "wp.conf"), "override.bluez5.roles = [ a2dp_sink bap_bcast_sink asha_sink hfp_hf hfp_ag ]"));
     CHECK(has(slurp(dir / "wp.conf"), "bluez5.enable-msbc = false"));
     for (const json& p : out["profiles"]) {
-      if (p["id"] == "a2dp_source" || p["id"] == "bap_sink") CHECK_EQ(p["on"].get<bool>(), false);
+      if (p["id"] == "a2dp_source" || p["id"] == "bap_sink" || p["id"] == "bap_bcast_source") CHECK_EQ(p["on"].get<bool>(), false);
       if (p["id"] == "a2dp_sink" || p["id"] == "hid_remote" || p["id"] == "bap_bcast_sink") CHECK_EQ(p["on"].get<bool>(), true);
     }
     // Refused as a whole: nothing changes.

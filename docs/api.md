@@ -584,7 +584,14 @@ snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to captur
 PipeWire picks a Bluetooth device's codec with its profile: `a2dp-sink-sbc_xq` sends A2DP with
 SBC-XQ, `a2dp-duplex-opus_05` runs Opus both ways, `audio-gateway` receives the device's A2DP (and
 is its HFP gateway), `headset-head-unit` is HFP with mSBC. Choosing a profile is choosing the
-codec (as in a desktop's Bluetooth sound settings).
+codec (as in a desktop's Bluetooth sound settings). PipeWire switches the codec only while the
+device does not also send to the board: on a duplex link (`a2dp-duplex-*`, two boards that both
+have the A2DP sink and source roles on) picking a profile tears the nodes down and switches
+nothing. For two boards, turn the A2DP source role off on the one that receives (Setup → Profiles,
+WirePlumber's `bluez5.roles`) and pair them again: the link is then one way, and its codec
+switches. A stream playing to the device carries on across the switch: its sink is `reconnecting`
+for the second or so the node is gone, and a capture of the device's audio is opened again the
+same way.
 
 `GET /api/audio/devices` — `{"backend": "pipewire", "error": "", "devices": [{"id": 38, "name":
 "bluez_card.A4_B1_C1_0B_28_E4", "label": "SMI-PC", "address": "A4:B1:C1:0B:28:E4", "active":
@@ -792,14 +799,14 @@ are narrowed and extended by what the machine says about itself, read on every `
  "kernel_experimental": [{"uuid": "6fbaf188-05e0-496a-9885-d6ddfdb4e03e", "flags": 1}],
  "sources": {"controllers": "mgmt", "bluez_plugins": "...", "codecs": "...", "wireplumber_schema": "..."},
  "roles": ["a2dp_sink", "a2dp_source", "bap_sink", "bap_source", "bap_bcast_sink", "bap_bcast_source",
-           "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"],
+           "asha_sink", "hfp_hf", "hfp_ag", "hsp_hs", "hsp_ag"],
  "apply": true, "files": {"main_conf": null, "bluetoothd_env": "...", "wireplumber": "..."}}
 ```
 
 Profiles: A2DP sink/source, HFP HF/AG, HSP HS/AG, LE Audio unicast sink/source and broadcast
-sink/source (WirePlumber roles), BlueZ's own HFP, AVRCP, HID host (classic), HID over GATT host,
+sink/source, ASHA (WirePlumber roles; ASHA with BlueZ's asha plugin), BlueZ's own HFP, AVRCP, HID host (classic), HID over GATT host,
 PAN, battery levels (BlueZ plugins), the OBEX servers (Object Push, File Transfer, Phonebook,
-Message Access) and the HID remote. By default all are on except HSP, the broadcast roles,
+Message Access) and the HID remote. By default all are on except HSP,
 BlueZ's HFP and the remote, as the image has them.
 
 Settings (`value` null: BlueZ's or the image's default): `General.ControllerMode`
@@ -813,8 +820,11 @@ and `BR.LinkSupervisionTimeout` (ms), `LE.MinConnectionInterval` / `LE.MaxConnec
 `GATT.Channels` (EATT), `GATT.Client`, `Policy.ReconnectAttempts`, `Policy.AutoEnable`,
 `Policy.ResumeDelay`; and WirePlumber's: `Monitor.bluez5.codecs` (a list), `Monitor.bluez5.enable-sbc-xq`,
 `Monitor.bluez5.enable-msbc`, `Monitor.bluez5.enable-hw-volume`, `Monitor.bluez5.hfphsp-backend`,
-`Monitor.bluez5.default.rate`, `Device.bluez5.a2dp.ldac.quality`, `Device.bluez5.a2dp.aac.bitratemode`,
-`Settings.bluetooth.autoswitch-to-headset-profile`, `Settings.bluetooth.use-persistent-storage`; and
+`Monitor.bluez5.default.rate`, `Monitor.bluez5.dummy-avrcp-player`, `Device.bluez5.a2dp.ldac.quality`,
+`Device.bluez5.a2dp.aac.bitratemode`, `Device.bluez5.auto-connect` and `Device.bluez5.hw-volume` (lists
+of roles), `Node.bluez5.media-source-role` `playback|input`, `Node.bluez5.decode-buffer.latency`
+(samples, 0: PipeWire's own), `Settings.bluetooth.autoswitch-to-headset-profile`,
+`Settings.bluetooth.use-persistent-storage`, `Settings.device.restore-profile`; and
 those the sources above add (main.conf's other keys, WirePlumber's other `bluetooth.*` settings).
 Times are given in ms and written in BlueZ's units (1.25 ms, 10 ms, 0.625 ms slots).
 
