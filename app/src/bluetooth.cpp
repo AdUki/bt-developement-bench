@@ -699,6 +699,17 @@ void BtManager::on_signal(sd_bus_message* m) {
         if (changed.size() == 1) return;
       }
       if (strcmp(iface, kDeviceIface) == 0) {
+        // Connected after all (the device paged the board itself): what a Connect that failed
+        // said is past, and "page timeout" next to a connected device reads as if it were not.
+        const char* path = sd_bus_message_get_path(m);
+        if (path && changed.contains("Connected") && changed["Connected"] == true) {
+          std::lock_guard<std::mutex> lk(m_);
+          const auto it = dev_state_.find(path);
+          if (it != dev_state_.end() && it->second.busy.empty() && it->second.error.compare(0, 8, "Connect:") == 0) {
+            it->second.error.clear();
+            it->second.error_on.clear();
+          }
+        }
         bool chatter = true;
         for (auto it = changed.begin(); it != changed.end(); ++it) {
           const std::string& k = it.key();
