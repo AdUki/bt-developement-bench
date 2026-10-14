@@ -148,6 +148,10 @@ void test_stream_to_bluetooth() {
   CHECK(!stream_to_bluetooth(json{{"sink", {{"type", "pipewire"}, {"target", "alsa_output.x"}}}}, "y"));
   CHECK(!stream_to_bluetooth(json{{"sink", nullptr}}, "y"));
   CHECK(!stream_to_bluetooth(json{{"sink", {{"type", "alsa"}, {"target", ""}}}}, "y"));
+  // Any of several sinks: the loopback card and a speaker.
+  CHECK(stream_to_bluetooth(json::parse(R"({"sinks": [{"type": "pipewire", "target": "alsa_output.x"},
+      {"type": "pipewire", "target": "bluez_output.50_1E.1"}], "sink": {"type": "pipewire", "target": "alsa_output.x"}})"), ""));
+  CHECK(!stream_to_bluetooth(json::parse(R"({"sinks": [], "sink": null})"), "y"));
 }
 
 }  // namespace

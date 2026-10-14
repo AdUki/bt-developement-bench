@@ -439,7 +439,9 @@ board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPl
 `Title` is its ICY title once the station sends one); `queue` is the now playing list, and
 `position` where in it the track is. `stream` is the audio stream that plays it
 (`/api/audio/streams/{id}`), `sink` the endpoint it plays into: the Bluetooth sink (PipeWire's
-default sink if that is one, else the first), or PipeWire's default sink when there is none.
+default sink if that is one, else the first), or PipeWire's default sink when there is none. It
+is a local stream (Audio streams): playing takes the place of what the board plays of its own,
+and a test signal or URL started elsewhere ends the player's (it is then stopped).
 `registered` lists the adapters BlueZ took it on; `error` says why the last play or registration
 failed. `library` is the whole tree, ids are stable while btbenchd runs. `position_ms` is how far
 into the track it is (paused time not counted); `repeat` (`off`, `track`, `all`) and `shuffle` are
@@ -452,7 +454,7 @@ than 1.5 s from that count (a stream joined midway, a pause the count missed), a
 `Duration` (`mpris:length`) when it has one, which the remote needs for a progress bar.
 
 While the player plays nothing itself, it tells remotes what another stream plays to a Bluetooth
-sink (to one, or to PipeWire's default sink when that is a Bluetooth one; the newest if several):
+sink (one of its sinks, or PipeWire's default sink when that is a Bluetooth one; the newest if several):
 `mirror` is that stream's id, `track` its title — a radio's ICY title (split into `Artist` and
 `Title` at its " - ") with the station as `Album`; a playlist's item with the `Artist`, `Album` and
 `Duration` its playlist entry carries, and `Number`/`NumberOfTracks`; a test signal by name — and
@@ -489,18 +491,24 @@ while A2DP is up the probe is refused (409) and `GET /api/media`'s endpoints are
 
 ## Audio streams
 
-A stream plays a **source** into a **sink** and/or to listeners: a test signal, an internet radio
-or UPnP URL, or one device's audio, into a Bluetooth speaker (or the loopback card), heard in a
+A stream plays a **source** into **sinks** and/or to listeners: a test signal, an internet radio
+or UPnP URL, or one device's audio, into Bluetooth speakers (or the loopback card), heard in a
 browser, or both. Each stream is one pump thread in btbenchd and the stack's own tools as child
-processes (`pw-cat` in PipeWire mode, `aplay`/`arecord` for plain ALSA devices such as the
-loopback card, `mpg123` or `ffmpeg` for URLs). With PipeWire stopped only the ALSA devices are
-there to play into or capture from. At most 4 run at once.
+processes (`pw-cat` in PipeWire mode, one per sink; `aplay`/`arecord` for plain ALSA devices such
+as the loopback card; `mpg123` or `ffmpeg` for URLs). With PipeWire stopped only the ALSA devices
+are there to play into or capture from. At most 4 run at once.
+
+One **local** stream plays at a time: a test signal or a URL (what the board plays of its own). A
+new one takes the place of the one playing, which is stopped and forgotten as `DELETE` would; it
+does not inherit its sinks, the request names them. Captures (what devices send the board, two
+phones at once say) are not local: any number of them run beside it.
 
 `POST /api/audio/streams` (201):
 
 ```json
 {"source": {"type": "tone", "freq": 1000, "freq_right": null, "level_db": -12},
- "sink": {"type": "pipewire", "target": "bluez_output.F8_DF_15_0A_11_3C.1"},
+ "sinks": [{"type": "pipewire", "target": "bluez_output.F8_DF_15_0A_11_3C.1"},
+           {"type": "pipewire", "target": "bluez_output.54_27_1E_EE_E9_8A.1"}],
  "rate": 48000, "channels": 2, "gain_db": 0, "latency_ms": 60, "label": ""}
 ```
 
@@ -513,17 +521,29 @@ there to play into or capture from. At most 4 run at once.
 | `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest — AAC, Ogg, FLAC; a URL whose extension does not say is told by its first bytes, docs/audio.md), `title` (a name for the label), `playlist`: `[{url, title, artist, album, duration_ms}, ...]` (up to 500; all but `url` optional, what a media server said about the track, for the board's player to tell remotes) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]`; `repeat` `off\|track\|all` (default off) and `shuffle` (each track once in a random order, the first first) |
 | `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
 
-`sink` is `null` (listeners only), or `{"type": "pipewire", "target": ""}` (a node name, "" the
-default sink) or `{"type": "alsa", "target": "hw:Loopback,0,0"}` (an ALSA device string,
-`hw:`/`plughw:`): the ids of `GET /api/audio/endpoints`. A *tunnel* from one device to
-another is a `capture` of the first into a sink of the second. `rate` is one of 8000 … 96000;
+`sinks` is a list of up to 4 sinks, each played the same audio: `[]` (listeners only),
+`{"type": "pipewire", "target": ""}` (a node name, "" the default sink) or `{"type": "alsa",
+"target": "hw:Loopback,0,0"}` (an ALSA device string, `hw:`/`plughw:`): the ids of `GET
+/api/audio/endpoints`. Each is played once (a repeat is dropped). `"sink": {...} | null` instead
+names one, as before there were several. A *tunnel* from one device to others is a `capture` of
+the first into sinks of the others.
+
+The sink that takes each chunk first is the stream's clock. A sink behind the others (still
+opening, a Bluetooth link that stopped streaming, one that takes its audio in bigger periods) is
+given what it has room for, up to 200 ms waiting beyond its pipe once it plays, and loses the rest:
+it never holds the others or the listeners. Each sink adds its own latency, so two speakers are
+not sample-aligned. `rate` is one of 8000 … 96000;
 frequencies are clamped to the rate's Nyquist, `gain_db` to -60..+20.
 
 The answer, and each entry of `GET /api/audio/streams` (`{"streams": [...], "max": 4}`, newest
 first), is the spec as normalised plus:
 
 ```json
-{"id": 3, "label": "tone 1 kHz → bluez_output.F8_DF_15_0A_11_3C.1", "node": "btbench-stream-3",
+{"id": 3, "label": "tone 1 kHz → bluez_output.F8_DF_15_0A_11_3C.1 + bluez_output.54_27_1E_EE_E9_8A.1",
+ "node": "btbench-stream-3", "sink": {"type": "pipewire", "target": "bluez_output.F8_DF_15_0A_11_3C.1"},
+ "sink_req": 0, "sink_seq": 0,
+ "sinks_status": [{"type": "pipewire", "target": "bluez_output.F8_DF_15_0A_11_3C.1", "state": "playing",
+                   "error": "", "since_ms": 1791557330240}, {...}],
  "state": "running", "error": "", "started_ms": 1791557330192, "ended_ms": null, "seconds": 12.3,
  "listeners": 1, "level": {"peak_db": [-12.0, -12.0], "rms_db": [-15.0, -15.0], "clipped": 0},
  "meta": {"name": "Groove Salad: ...", "title": "Artist - Song", "url": "<the URL played>",
@@ -534,19 +554,25 @@ first), is the spec as normalised plus:
 `state`: `starting`, `running`, `ended` (a file or sweep finished; a stream that plays nowhere and
 was not listened to for 30 s ends too, saying so in `error`), `failed` (`error` has the tool's
 last words: a refused URL, the sink it started with gone and nobody listening), `stopped`. `level`
-is the last 250 ms after the gain. `sink_status` is the sink as the pump has it: `{state, target,
-error, since_ms, seq}`, `state` one of `none`, `starting` (open, not yet taking audio), `playing`
-(has taken half a second), `stalled` (has taken nothing for 2 s: a Bluetooth link that stopped
-streaming), `reconnecting` (a PipeWire sink that went away, opened again every 300 ms for up to
-10 s: a codec change makes a Bluetooth sink's node anew under the same name; the pump keeps time
-meanwhile), `failed` (it would not open, or stopped, or did not come back: `error`, of `target`; a
-stream switched to it, or with listeners, goes on without a sink). A named PipeWire sink is that one only
+is the last 250 ms after the gain. `sink` is the first of `sinks` (`null` with none), for
+clients that read one. `sinks_status` is each sink as the pump has it, in the order of `sinks`, then
+the ones lost since the last `PUT {"sinks"}`: `{type, target, state, error, since_ms}`, `state` one
+of `starting` (open, not yet taking audio), `playing` (has taken half a second), `stalled` (has
+taken nothing for 2 s: a Bluetooth link that stopped streaming; the stream plays on without it, on
+the other sinks or its own clock, and it plays again when it takes audio), `failed` (it would not
+open, or its pw-cat ended — a speaker gone, a codec change that made its node anew: `error` is what
+pw-cat said; it leaves `sinks`, and the stream goes on with the others, or without one if it had
+listeners or its sinks were changed — a stream whose only starting sink is lost, and with nobody
+listening, fails). Nothing is opened again by itself: a sink lost is added again by hand (`PUT
+{"sinks"}`), and a capture whose source went away ends the stream. `sink_status` is the
+first of `sinks_status` with `seq` (`state` `none` with no sink), as before there were several. A named PipeWire sink is that one only
 (`node.dont-fallback`, `node.dont-reconnect`): never the default output instead. `meta` carries an ICY stream's station name and current title (from the decoder, or —
 when it reports none, as ffmpeg does not — asked of the server every 15 s); `meta.url` is the stream a playlist pointed to.
 `meta.art` is the cover the station sends with its title (ICY `StreamUrl`: an image, or a
 now-playing JSON such as Bauer's eventdata, whose image is looked up), often its logo, `""` for
 none; `meta.description` its `icy-description` header. `node` is
-the PipeWire stream's name (`wpctl status`, `pw-top`). A URL stream's `track` is its position in
+the PipeWire stream's name (`wpctl status`, `pw-top`): the first sink's; each other sink's has a
+number after it (`btbench-stream-3-2`). A URL stream's `track` is its position in
 `source.playlist` (`meta.title` is that item's title), `track_seconds` how much of it has played
 (paused time not counted); the stream ends after the last track, unless it repeats. With repeat
 `track` a track that ends plays again (next still moves on); with `all` the last is followed by the
@@ -555,7 +581,7 @@ first (shuffled: by a new order) and previous on the first goes to the last.
 | route | what |
 |---|---|
 | `GET /api/audio/streams/{id}` | one stream |
-| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; shuffled, at random places after the current track), `{"repeat": "all"}`, `{"shuffle": true}` (a new order from the current track), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sink": {...} \| null}` moves it to another sink, or to its listeners only, without stopping the source; the answer's `sink_req` numbers the request, and `sink_status.seq` says which one the sink's state answers |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; shuffled, at random places after the current track), `{"repeat": "all"}`, `{"shuffle": true}` (a new order from the current track), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sinks": [...]}` (or one `{"sink": {...} \| null}`) changes its sinks without stopping the source: the ones kept play on untouched, new ones open, the others close; `[]` leaves its listeners only. The answer's `sink_req` numbers the request, and `sink_seq` says which one `sinks_status` answers |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
 
@@ -589,9 +615,9 @@ device does not also send to the board: on a duplex link (`a2dp-duplex-*`, two b
 have the A2DP sink and source roles on) picking a profile tears the nodes down and switches
 nothing. For two boards, turn the A2DP source role off on the one that receives (Setup → Profiles,
 WirePlumber's `bluez5.roles`) and pair them again: the link is then one way, and its codec
-switches. A stream playing to the device carries on across the switch: its sink is `reconnecting`
-for the second or so the node is gone, and a capture of the device's audio is opened again the
-same way.
+switches. The switch makes the device's nodes anew: a stream playing to the device loses that
+sink (`failed`, "defined target not found") and plays on its others, and a capture of the device's
+audio ends; add the sink again, or start the capture again, once the new node is there.
 
 `GET /api/audio/devices` — `{"backend": "pipewire", "error": "", "devices": [{"id": 38, "name":
 "bluez_card.A4_B1_C1_0B_28_E4", "label": "SMI-PC", "address": "A4:B1:C1:0B:28:E4", "active":

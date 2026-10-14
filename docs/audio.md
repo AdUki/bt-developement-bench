@@ -157,7 +157,9 @@ pw-play --target bluez_output.AA_BB_CC_DD_EE_FF.1 test.wav     # or: wpctl statu
 
 btbenchd plays and captures audio itself (`/api/audio/streams`, the console's Audio → Play and
 listen, `bench play`): a test signal, an internet radio or UPnP URL, or what one device sends, into any
-sink the stack has, and/or to a browser that listens in. It uses the stack's own tools. In mode
+sinks the stack has (two Bluetooth speakers at once: `bench play tone 440 A+B`), and/or to a
+browser that listens in. One test signal or URL plays at a time, a new one in its place; what
+devices send the board can be captured beside it, several at once. It uses the stack's own tools. In mode
 `none` there is no Bluetooth audio to reach, but plain ALSA still works, so the loopback card is
 there to play into and capture from:
 
@@ -168,10 +170,12 @@ there to play into and capture from:
 | decode a URL | `mpg123 -s` (MP3, ICY titles; https through its curl helper), else `ffmpeg` | the same |
 
 Each stream runs one pump thread in btbenchd that moves 20 ms chunks from the source through the
-gain and the level meter to the sink's stdin (a 16 KiB pipe: a gain or frequency change is heard
-within ~100 ms) and to the listeners. What paces it is whatever is real-time in it: the sink
-consuming, a capture producing, or, when it plays nowhere, a clock. In PipeWire the streams show
-as `btbench-stream-<id>` in `wpctl status` and `pw-top`.
+gain and the level meter to each sink's stdin (a 16 KiB pipe each: a gain or frequency change is
+heard within ~100 ms) and to the listeners. What paces it is whatever is real-time in it: the sink
+that takes the chunk first, a capture producing, or, when it plays nowhere (or every sink has
+stalled), a clock. A sink behind the others gets what fits and loses the rest, so a speaker that
+stops taking audio does not stop the others. In PipeWire the streams show as `btbench-stream-<id>`
+in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
 
 - **Tunnel.** A capture of one device into a sink of another: a phone playing to the board
   (A2DP sink) relayed to a speaker (the board as A2DP source). In PipeWire the phone's stream is

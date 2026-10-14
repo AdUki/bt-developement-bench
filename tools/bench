@@ -516,6 +516,14 @@ sink_json() {
   esac
 }
 
+# The sinks TARGETs name, joined by + (two speakers: A+B; an ALSA device has commas): a JSON array.
+sinks_json() {
+  local t out=() IFS=+
+  [ -n "${1-}" ] || { echo "[$(sink_json "")]"; return; }
+  for t in $1; do out+=("$(sink_json "$t")"); done
+  printf '%s\n' "${out[@]}" | jq -sc 'map(select(. != null))'
+}
+
 show_stream() {
   show '"stream " + (.id | tostring) + "  " + .state + "  " + .label + (if .error != "" then "  (" + .error + ")" else "" end)'
 }
@@ -534,7 +542,7 @@ cmd_play() {
         *) src=$(jq -nc --arg t "$1" '{type:"capture", target:$t}') ;; esac; shift ;;
     *) die "usage: bench play tone [HZ]|sweep|noise [white|pink|brown]|silence|url URL|capture SOURCE [TARGET]" ;;
   esac
-  post /api/audio/streams "$(jq -nc --argjson s "$src" --argjson k "$(sink_json "${1-}")" '{source:$s, sink:$k}')" | show_stream
+  post /api/audio/streams "$(jq -nc --argjson s "$src" --argjson k "$(sinks_json "${1-}")" '{source:$s, sinks:$k}')" | show_stream
 }
 
 cmd_streams() {
@@ -954,7 +962,8 @@ ${bold}Audio${off}
   obex [status] | push ADDR FILE | ls ADDR [FOLDER]   the OBEX tester (OPP push, FTP listing)
   codec [ADDR [PROFILE]]          a device's codecs (PipeWire profiles), or switch: a2dp-sink-sbc_xq
   play tone [HZ]|sweep|noise [COLOUR]|silence|url URL|capture SOURCE [TARGET]
-                                  start a stream into TARGET (default sink; - = listen only)
+                                  start a stream into TARGET (default sink; - = listen only;
+                                  A+B = both): a tone, sweep, noise or URL replaces the one playing
   radio [NAME [TARGET]]           the station list, or play one
   streams | stop ID|all           the running streams (levels, titles) / stop them
   listen ID                       hear a stream here (curl | pw-play)

@@ -48,7 +48,7 @@
           <div class="np-out" id="np-out-row">
             <div class="np-out-head"><span class="np-out-label">Play to</span>
               <label class="np-listen"><input type="checkbox" id="np-listen"> Listen in this browser</label></div>
-            <div class="np-outs" id="np-outs" role="radiogroup" aria-label="The board's output"></div>
+            <div class="np-outs" id="np-outs" role="group" aria-label="The board's outputs"></div>
             <div class="np-out-status" id="np-out-status" role="status" aria-live="polite"></div>
           </div>
         </div>
@@ -283,15 +283,16 @@
           <h3>Output for new streams</h3>
           <button id="st-refresh" class="small-btn" title="Read PipeWire's nodes again">Refresh</button>
         </div>
+        <div class="st-play-to"><span class="np-out-label">Play to</span>
+          <div class="np-outs" id="st-sinks" role="group" aria-label="Where new streams play"></div></div>
         <div class="grid">
-          <label>Play to <select id="st-sink"></select></label>
-          <label id="st-codec-l" hidden>Codec <span id="st-codec"></span></label>
+          <label id="st-codec-l" hidden>Codec <span id="st-codec" class="row wrap"></span></label>
         </div>
         <div class="form-acts">
           <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
           <span id="st-backend" class="small muted"></span>
         </div>
-        <p class="hint">Every stream started on this page starts here; each running stream has its own output ("to"), so two streams can play to two devices. A speaker or car shows what plays on its display, and its buttons pause and skip it. Music from media servers is in Listen → Library.</p>
+        <p class="hint">Every stream started on this page starts on the outputs lit here, as many as you like: one stream plays to two Bluetooth speakers at once. Each running stream has its own outputs, tapped on or off while it plays. The board plays one stream of its own at a time (a test signal or a station): a new one takes the place of the one playing. Audio from devices (a phone's A2DP, a microphone) plays beside it, each a stream of its own. A speaker or car shows what plays on its display, and its buttons pause and skip it. Music from media servers is in Listen → Library.</p>
       </div>
 
       <h2>Running</h2>

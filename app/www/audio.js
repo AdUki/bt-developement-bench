@@ -42,12 +42,13 @@ function renderEndpoints(ep) {
   // Without PipeWire the only endpoints are the loopback card's, played to with aplay.
   setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'PipeWire is not running'}` +
     `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
-  const sinks = sinkOptions(ep, 'Nowhere: listen in this browser only');
-  // A first fill keeps the saved choice or takes the first option: the empty select's value is ""
-  // too, which would pick listening only.
-  const sel = $('st-sink'), saved = idle(sel) ? lsGet('btbench.au.sink') : null;
-  fillSelect(sel, sinks, saved != null ? saved : sel.options.length ? sel.value : sinks[0].value);
-  renderOutCodec();
+  // With nothing chosen before, the first connected speaker or car is where things play, else
+  // PipeWire's default.
+  if (!au.outs) {
+    const bt = ep.sinks.find(e => e.kind === 'bluetooth');
+    au.outs = bt ? [`${ep.backend === 'alsa' ? 'alsa' : 'pipewire'}:${bt.id}`] : ep.backend === 'pipewire' ? ['default'] : [];
+  }
+  renderNewOuts();
   const caps = ep.sources.map(e => ({value: `${e.backend}:${e.id}`, label: epLabel(e)}));
   if (ep.backend === 'pipewire') caps.unshift({value: 'pipewire:', label: 'the default source'});
   fillSelect($('st-capture'), caps);
@@ -55,33 +56,49 @@ function renderEndpoints(ep) {
   au.streams.forEach(upsertStream);  // each running stream's own output picker
 }
 
-// Where a stream can play, as select options ("<type>:<target>", "" for nowhere): Bluetooth sinks
-// first, by the device's name and codec — with nothing chosen before, the first connected speaker
-// or car is where things play — then PipeWire's default, the other sinks, and nowhere last.
-function sinkOptions(ep, nowhere) {
-  const sinkKind = ep.backend === 'alsa' ? 'alsa' : 'pipewire';
-  const sinks = [];
-  const name = e => `${e.label}${e.codec ? ' · ' + e.codec.toUpperCase().replace('_', '-') : ''}`;
-  ep.sinks.filter(e => e.kind === 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
-  const def = ep.sinks.find(e => e.default);
-  if (ep.backend === 'pipewire') sinks.push({value: 'pipewire:', label: `Default output${def ? ' (' + def.label + ')' : ''}`});
-  ep.sinks.filter(e => e.kind !== 'bluetooth').forEach(e => sinks.push({value: `${sinkKind}:${e.id}`, label: name(e)}));
-  sinks.push({value: '', label: nowhere});
-  return sinks;
+// The outputs new streams start on, as Listen's values (player.js outSink): from before there
+// were several, the one select's value ("" nowhere, "pipewire:" the default output). Null until
+// the endpoints are known, when the first Bluetooth sink is taken.
+au.outs = (() => {
+  try {
+    const v = JSON.parse(lsGet('btbench.au.outs') || 'null');
+    if (Array.isArray(v)) return v;
+  } catch (e) { /* the old choice */ }
+  const one = lsGet('btbench.au.sink');
+  return one == null ? null : one === '' ? [] : one === 'pipewire:' ? ['default'] : [one];
+})();
+
+// The form's outputs: Listen's buttons, each one on or off by itself.
+function renderNewOuts() {
+  setHTML($('st-sinks'), outButtonsHTML(outOptions(false, au), au.outs || [], null, au));
+  renderOutCodec();
 }
 
-// A stream's output picked in its card: moved there at once, the switch followed as Listen follows
-// its own (au.sw by stream, player.js swAdvance) until the output takes the audio or fails.
+function pickNewOut(v) {
+  const next = nextOuts(au.outs || [], v);
+  if (next.length > MAX_OUTS) { toast(`A stream plays to at most ${MAX_OUTS} outputs.`); return; }
+  au.outs = next;
+  lsSet('btbench.au.outs', JSON.stringify(next));
+  renderNewOuts();
+}
+
+// An output tapped in a stream's card: added to it or taken off it at once, the switch followed as
+// Listen follows its own (au.sw by stream, player.js swAdvance) until the output takes the audio
+// or fails.
 function pickStreamOut(id, v) {
-  const s = sinkOf(v);
-  const sw = {value: s ? streamOut({sink: s}) : 'none', phase: 'asking', at: Date.now(), seq: null};
+  const s = au.streams.find(x => x.id === id);
+  if (!s) return;
+  const next = nextOuts(streamOuts(s), v);
+  if (next.length > MAX_OUTS) { toast(`A stream plays to at most ${MAX_OUTS} outputs.`); return; }
+  const add = next.includes(v);
+  const sw = {value: v, add, phase: 'asking', at: Date.now(), seq: null};
   au.sw[id] = sw;
   const redraw = () => { const x = au.streams.find(y => y.id === id); if (x) upsertStream(x); };
   redraw();
-  put(`/audio/streams/${id}`, {sink: s}).then(r => {
+  put(`/audio/streams/${id}`, {sinks: outSinks(next)}).then(r => {
     if (au.sw[id] !== sw) return;
     sw.seq = r.sink_req;
-    sw.phase = 'starting';
+    sw.phase = add ? 'starting' : 'removing';
     upsertStream(r);
   }).catch(e => {
     if (au.sw[id] !== sw) return;
@@ -93,29 +110,25 @@ function pickStreamOut(id, v) {
   [400, 1200, 2500, 5000, 9000].forEach(t => setTimeout(() => { if (au.sw[id] === sw && sw.phase !== 'done') refreshStreams(); }, t));
 }
 
-// A select's value as a stream's sink: null (listeners only), or {type, target}.
-const sinkOf = v => (v ? {type: v.slice(0, v.indexOf(':')), target: v.slice(v.indexOf(':') + 1)} : null);
-
 function refreshEndpoints(fresh) {
   return api('/audio/endpoints' + (fresh ? '?fresh=1' : '')).then(renderEndpoints)
     .catch(e => setText($('st-backend'), e.message));
 }
 
-// The codec of the chosen output when it is a Bluetooth device: the same picker as in Players, so
+// The codecs of the chosen outputs that are Bluetooth devices: the same picker as in Players, so
 // trying a codec does not mean leaving what plays.
 function renderOutCodec() {
-  const ep = au.endpoints, v = $('st-sink').value;
-  const e = ep && ep.sinks.find(k => v.endsWith(':' + k.id));
-  const d = e && e.address && au.devices && au.devices.devices.find(x => x.address === e.address);
-  $('st-codec-l').hidden = !d;
-  if (!d) return setHTML($('st-codec'), '');
+  const ep = au.endpoints;
+  const ds = (au.outs || []).map(v => ep && ep.sinks.find(k => v.endsWith(':' + k.id)))
+    .map(e => e && e.address && au.devices && au.devices.devices.find(x => x.address === e.address)).filter(Boolean);
+  $('st-codec-l').hidden = !ds.length;
   const ae = document.activeElement;
   if (ae && $('st-codec').contains(ae)) return;
-  setHTML($('st-codec'), codecSelect(d));
+  setHTML($('st-codec'), ds.map(d => `<span class="row">${ds.length > 1 ? esc(devName(d.address)) + ' ' : ''}${codecSelect(d)}</span>`).join(''));
 }
 
-// The sink chosen in the form, as a stream's sink: null (listen only), or {type, target}.
-const chosenSink = () => sinkOf($('st-sink').value);
+// The sinks chosen in the form, as a stream's: [] (listen only), or [{type, target}, ...].
+const chosenSinks = () => outSinks(au.outs || []);
 
 // ---------------------------------------------------------------- streams
 
@@ -143,8 +156,8 @@ function sourceFromForm() {
   }
 }
 
-function startStream(source, sink, listen, extra, ctxGiven) {
-  const body = Object.assign({source, sink, rate: parseInt($('st-rate').value, 10),
+function startStream(source, sinks, listen, extra, ctxGiven) {
+  const body = Object.assign({source, sinks: sinks || [], rate: parseInt($('st-rate').value, 10),
     channels: parseInt($('st-ch').value, 10), gain_db: parseFloat($('st-gain').value) || 0}, extra || {});
   // The AudioContext must come from the click itself, before any await (a caller that waits
   // first makes it in its click and passes it).
@@ -188,11 +201,11 @@ function streamCard(s) {
     <div class="small st-meta"></div>
     <div class="st-meters"></div>
     <div class="row wrap small">
-      <label class="row">to <select class="st-out" aria-label="Where this stream plays"></select></label>
       <label class="row">gain <input type="range" class="st-gain grow" min="-60" max="20" step="0.5"> <span class="mono st-gain-v"></span></label>
       ${s.source.type === 'tone' ? `<label class="row">Hz <input type="number" class="st-freq narrow" min="1"></label>` : ''}
       ${s.source.type === 'tone' || s.source.type === 'noise' ? `<label class="row">level <input type="number" class="st-level narrow" min="-96" max="0"> dB</label>` : ''}
     </div>
+    <div class="np-outs st-outs" role="group" aria-label="Where this stream plays"></div>
     <div class="np-out-status st-out-status small" role="status" aria-live="polite"></div>
     <div class="st-listening small" hidden>
       <div class="row wrap"><span class="st-buf mono"></span>
@@ -221,8 +234,7 @@ function upsertStream(s) {
   if (s.meta.name) meta.push(s.meta.name);
   meta.push(`${s.rate} Hz · ${s.channels === 1 ? 'mono' : 'stereo'} · ${fmtMs(s.seconds * 1000)}`);
   if (s.listeners) meta.push(`${s.listeners} listening`);
-  const ss = s.sink_status || {};
-  if (s.sink && ss.state && ss.state !== 'playing') meta.push(`output ${ss.state}`);
+  (s.sinks_status || []).forEach(k => { if (k.state !== 'playing') meta.push(`${outName(sinkOut(k), au)} ${k.state}`); });
   setText(q('.st-meta'), meta.join(' · '));
   setHTML(q('.st-meters'), s.state === 'running' ? meterHTML(s.level, s.channels) : '');
   setText(q('.st-err'), s.error || '');
@@ -234,20 +246,14 @@ function upsertStream(s) {
   const lv = q('.st-level');
   if (lv && idle(lv)) lv.value = s.source.level_db;
   const live = s.state === 'running' || s.state === 'starting';
-  // Its own output: moved there at once (the source carries on). One not there any more (a
-  // speaker gone) stays in the list, named, until another is picked.
-  const o = q('.st-out');
-  if (idle(o)) {
-    const cur = s.sink ? `${s.sink.type}:${s.sink.target}` : '';
-    const opts = au.endpoints ? sinkOptions(au.endpoints, 'Nowhere (listeners only)') : [];
-    if (!opts.some(x => x.value === cur)) opts.push({value: cur, label: s.sink ? `${s.sink.target || 'Default output'} (not there)` : 'Nowhere (listeners only)'});
-    fillSelect(o, opts, cur);
-  }
-  o.disabled = !live;
-  // What the board does about its output, in Listen's words (player.js outLine): a switch picked
-  // above followed until the output takes the audio (and a Bluetooth link streams), or why not.
+  // Its own outputs, Listen's buttons: each added or taken off at once (the source and the others
+  // carry on). One not there any more (a speaker gone) stays, greyed, until taken off.
+  // What the board does about them, in Listen's words (player.js outLine): a switch tapped
+  // followed until the output takes the audio (and a Bluetooth link streams), or why not.
   const sw = au.sw[s.id];
   swAdvance(sw, s, au);
+  q('.st-outs').hidden = !live;
+  if (live) setHTML(q('.st-outs'), outButtonsHTML(outOptions(false, au), streamOuts(s), sw, au));
   const line = outLine(s, sw && sw.phase !== 'done' ? sw : null, au) || {cls: s.listeners ? 'good' : 'warn',
     html: s.listeners ? `No board output: ${s.listeners} browser${s.listeners > 1 ? 's' : ''} listening.`
       : 'No board output and nobody listening: the board stops it in 30 s.'};
@@ -493,7 +499,7 @@ const CD_KINDS = [['a2dp', 'Send (A2DP)'], ['a2dp-duplex', 'Both ways (A2DP dupl
 
 function renderCodecs(r) {
   au.devices = r;
-  if ($('st-sink')) renderOutCodec();
+  if ($('st-sinks')) renderOutCodec();
   renderAudioDevices();
 }
 
@@ -747,8 +753,8 @@ function playerAction(path, action) {
 // `onStream`: the caller plays the stream itself (the Listen view's media element) instead of Web
 // Audio here. Resolves with the stream, or null when there was nothing to hear (said in a toast).
 // A capture of what the device at `address` sends the board: heard in this browser (Web Audio) or,
-// with `onStream`, handed to it instead; `sink` plays it on an output as well (a tunnel).
-function listenToDevice(address, onStream, sink) {
+// with `onStream`, handed to it instead; `sinks` plays it on outputs as well (a tunnel).
+function listenToDevice(address, onStream, sinks) {
   const same = a => !!a && a.toUpperCase() === address.toUpperCase();
   // The AudioContext comes from the click itself, before any wait.
   const ctx = onStream ? null : newAudioContext();
@@ -768,7 +774,7 @@ function listenToDevice(address, onStream, sink) {
     renderEndpoints(ep);
     const src = ep.sources.find(e => same(e.address));
     if (src) {
-      return startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, sink || null, !onStream,
+      return startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, sinks || [], !onStream,
         {rate: src.rate || 48000, channels: 2, gain_db: 0}, ctx);
     }
     if (!asked && player && player.status !== 'playing') {
@@ -896,7 +902,7 @@ function renderRadio(r) {
 // Format and gain: decoding to another rate makes the decoder resample, at three times the CPU.
 function playUrl(url, title, listen, rate) {
   const extra = $('st-rate').dataset.chosen ? {} : {rate: streamRate(rate)};
-  return startStream({type: 'url', url, title, decoder: $('st-decoder').value}, chosenSink(), listen, extra).catch(() => {});
+  return startStream({type: 'url', url, title, decoder: $('st-decoder').value}, chosenSinks(), listen, extra).catch(() => {});
 }
 
 // ---------------------------------------------------------------- setup
@@ -1045,19 +1051,22 @@ function setupAudio() {
   $('st-rate').onchange = () => { $('st-rate').dataset.chosen = '1'; };
   $('st-src').onchange = showSourceFields;
   showSourceFields();
-  $('st-sink').onchange = () => { lsSet('btbench.au.sink', $('st-sink').value); renderOutCodec(); };
+  $('st-sinks').onclick = e => {
+    const b = e.target.closest('[data-out]');
+    if (b) pickNewOut(b.dataset.out);
+  };
   $('st-refresh').onclick = () => refreshEndpoints(true);
   $('st-start').onclick = () => {
     const src = sourceFromForm();
-    const sink = chosenSink();
+    const sinks = chosenSinks();
     const listen = $('st-listen').checked;
-    if (!sink && !listen) { setText($('st-msg'), 'Choose an output in "Play to", or turn on "Also listen in this browser".'); return; }
-    startStream(src, sink, listen).catch(() => {});
+    if (!sinks.length && !listen) { setText($('st-msg'), 'Choose an output in "Play to", or turn on "Also listen in this browser".'); return; }
+    startStream(src, sinks, listen).catch(() => {});
   };
   const playTyped = () => {
     const url = $('st-url').value.trim();
     if (!url) return $('st-url').focus();
-    if (!chosenSink() && !$('st-listen').checked) { toast('Choose an output in "Play to" above, or turn on "Also listen in this browser".'); return; }
+    if (!chosenSinks().length && !$('st-listen').checked) { toast('Choose an output in "Play to" above, or turn on "Also listen in this browser".'); return; }
     playUrl(url, '', $('st-listen').checked);
   };
   $('st-url-play').onclick = playTyped;
@@ -1083,6 +1092,8 @@ function setupAudio() {
       put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
     } else if (e.target.closest('.st-listen')) {
       if (au.listeners[id]) stopListening(id); else startListening(id);
+    } else if (e.target.closest('[data-out]')) {
+      pickStreamOut(id, e.target.closest('[data-out]').dataset.out);
     }
   };
   list.oninput = e => {
@@ -1103,7 +1114,6 @@ function setupAudio() {
     if (e.target.classList.contains('st-gain')) body = {gain_db: parseFloat(e.target.value)};
     else if (e.target.classList.contains('st-freq')) body = {source: {freq: parseFloat(e.target.value)}};
     else if (e.target.classList.contains('st-level')) body = {source: {level_db: parseFloat(e.target.value)}};
-    else if (e.target.classList.contains('st-out')) return pickStreamOut(parseInt(id, 10), e.target.value);
     if (body) put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
   };
 
@@ -1113,7 +1123,7 @@ function setupAudio() {
     if (!b) return;
     const s = au.radio[parseInt(b.dataset.play != null ? b.dataset.play : b.dataset.hear, 10)];
     if (!s) return;
-    if (b.dataset.play != null && !chosenSink()) { toast('Choose an output in "Play to" above first, or use Listen.'); return; }
+    if (b.dataset.play != null && !chosenSinks().length) { toast('Choose an output in "Play to" above first, or use Listen.'); return; }
     playUrl(s.url, s.name, b.dataset.hear != null || $('st-listen').checked);
   };
   $('rd-edit').onclick = () => {

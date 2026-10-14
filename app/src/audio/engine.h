@@ -107,9 +107,11 @@ struct SinkSpec {
   std::string target;         // endpoint id; "" for PipeWire's default sink
 };
 
+// A stream plays to any number of sinks at once (two Bluetooth speakers, a speaker and the
+// loopback card), each a sink process of its own fed the same chunks: none is listeners only.
 struct StreamSpec {
   SourceSpec source;
-  SinkSpec sink;
+  std::vector<SinkSpec> sinks;
   int rate = 48000;
   int channels = 2;
   double gain_db = 0;
@@ -123,6 +125,9 @@ struct StreamSpec {
 bool stream_spec_from_json(const nlohmann::json& j, StreamSpec* out, std::string* err);
 nlohmann::json stream_spec_json(const StreamSpec& s);
 std::string default_label(const StreamSpec& s);
+// A local stream: what the board plays of its own (a test signal, a radio or UPnP URL), not a
+// capture of what a device sends it. One plays at a time; captures, any number (kMaxStreams).
+inline bool is_local(const SourceSpec& s) { return s.type != "capture"; }
 
 // The command lines (pure, tested). `node_name` names the PipeWire stream ("btbench-stream-3"), so
 // it can be told apart in wpctl / pw-top.
@@ -147,17 +152,20 @@ class AudioEngine {
   AudioEngine& operator=(const AudioEngine&) = delete;
 
   static constexpr size_t kMaxStreams = 4;
+  static constexpr size_t kMaxSinks = 4;  // per stream: each is a pw-cat (or aplay) of its own
   static constexpr size_t kKeepEnded = 6;
   static constexpr size_t kMaxListeners = 3;  // per stream; each holds an HTTP worker
 
-  // POST /api/audio/streams: 201 with the stream, or *status and *err.
+  // POST /api/audio/streams: 201 with the stream, or *status and *err. A local stream takes the
+  // place of the one playing (which is removed, as DELETE would).
   bool create(const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
   // {streams:[...], max}
   nlohmann::json list() const;
   nlohmann::json get(int id) const;  // null when there is no such stream
   // PUT: gain_db at any time; a tone's freq/freq_right/level_db and a noise's level_db live; for a
   // URL stream, its playlist: {"next": true}, {"previous": true}, {"track": n}, {"enqueue": [...]},
-  // {"repeat": "off|track|all"}, {"shuffle": bool}.
+  // {"repeat": "off|track|all"}, {"shuffle": bool}. Any stream: {"sinks": [...]} (or one "sink"),
+  // the outputs kept playing on, the new ones opened, the others closed.
   bool update(int id, const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
   bool remove(int id);  // stops it if it runs, and forgets it
   void stop_all();

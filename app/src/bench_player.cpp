@@ -237,13 +237,24 @@ json stream_track(const json& s) {
   return md;
 }
 
+namespace {
+
+// A stream's sinks: "sinks", or the one "sink" of a stream from before there were several.
+json stream_sinks(const json& s) {
+  if (s.contains("sinks") && s["sinks"].is_array()) return s["sinks"];
+  if (s.contains("sink") && s["sink"].is_object()) return json::array({s["sink"]});
+  return json::array();
+}
+
+}  // namespace
+
 bool stream_to_bluetooth(const json& s, const std::string& default_bt) {
-  if (!s.contains("sink") || !s["sink"].is_object()) return false;
-  const json& sink = s["sink"];
-  if (sink.value("type", std::string{}) != "pipewire") return false;
-  const std::string t = sink.value("target", std::string{});
-  if (t.empty()) return !default_bt.empty();
-  return t.compare(0, 13, "bluez_output.") == 0;
+  for (const json& sink : stream_sinks(s)) {
+    if (sink.value("type", std::string{}) != "pipewire") continue;
+    const std::string t = sink.value("target", std::string{});
+    if (t.empty() ? !default_bt.empty() : t.compare(0, 13, "bluez_output.") == 0) return true;
+  }
+  return false;
 }
 
 // ---- D-Bus trampolines ------------------------------------------------------------------------
@@ -1167,10 +1178,13 @@ void BenchPlayer::mirror_poll() {
     const std::string state = st.value("state", std::string{});
     if (state != "running" && state != "starting") continue;
     if (st.value("label", std::string{}).compare(0, 8, "player: ") == 0) continue;  // its own
-    const json& sink = st.contains("sink") && st["sink"].is_object() ? st["sink"] : json::object();
-    if (sink.value("type", std::string{}) != "pipewire") continue;
-    if (sink.value("target", std::string{}).empty() && !newest_default) newest_default = st.value("id", 0);
-    live.push_back(st);
+    bool pw = false;
+    for (const json& sink : stream_sinks(st)) {
+      if (sink.value("type", std::string{}) != "pipewire") continue;
+      pw = true;
+      if (sink.value("target", std::string{}).empty() && !newest_default) newest_default = st.value("id", 0);
+    }
+    if (pw) live.push_back(st);
   }
   // pw-dump is the costly part on a Zero W: asked when a new stream plays to the default sink, then
   // every 30 s while one does (in case the default moves).

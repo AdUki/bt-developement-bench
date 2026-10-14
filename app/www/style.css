@@ -742,6 +742,8 @@ td.acts > * { margin-right: 0.25rem; }
 .np-out-label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; }
 .np-listen { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
 .np-outs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.st-outs { margin-top: 0.5rem; }
+.st-play-to { display: grid; gap: 0.4rem; margin-bottom: 0.6rem; }
 .np-o {
   display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.7rem; border-radius: 8px;
   border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 0.82rem; text-align: left; min-width: 0; max-width: 100%;
@@ -756,6 +758,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-o.gone { opacity: 0.6; }
 .np-o .spin { width: 13px; height: 13px; }
 .np-out-status { display: flex; align-items: flex-start; gap: 0.45rem; margin-top: 0.5rem; min-height: 1.3em; color: var(--muted); }
+.np-out-status.quiet .dot { display: none; }
 .np-out-status .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 0.4em; background: var(--muted); }
 .np-out-status.good { color: var(--good); }
 .np-out-status.good .dot { background: var(--good); }

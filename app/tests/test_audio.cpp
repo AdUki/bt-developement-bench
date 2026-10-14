@@ -1,10 +1,20 @@
 // The audio streams' decisions: the generators' levels and continuity, the meter, the WAV
 // framing, what a stream body may say and the command lines it becomes, the endpoint lists made
-// from pw-dump and from BlueZ's transports, and the UPnP parsers. The pumping itself (processes,
-// pipes) is exercised with `make run` against the desktop's PipeWire and a radio stream.
+// from pw-dump and from BlueZ's transports, and the UPnP parsers. The pump's sinks are exercised
+// against fake aplay/arecord processes (test_engine_sinks); the rest of the pumping with `make run`
+// against the desktop's PipeWire and a radio stream.
+#include <unistd.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <csignal>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sys/stat.h>
+#include <thread>
 
 #include "audio/endpoints.h"
 #include "audio/engine.h"
@@ -201,7 +211,9 @@ void test_specs() {
   std::string err;
   CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"tone","freq":30000}})"), &s, &err));
   CHECK_EQ(s.source.freq, 24000.0);  // clamped to Nyquist
-  CHECK_EQ(s.sink.type, std::string("none"));
+  CHECK(s.sinks.empty());
+  CHECK(stream_spec_json(s)["sink"].is_null());
+  CHECK(stream_spec_json(s)["sinks"].empty());
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"rate":12345})"), &s, &err));
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"file:///etc/passwd"}})"), &s, &err));
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"url","url":"http://a b"}})"), &s, &err));
@@ -218,6 +230,28 @@ void test_specs() {
   const json back = stream_spec_json(s);
   CHECK_EQ(back["source"]["target"].get<std::string>(), std::string("bluez_input.5C_E9_1E_22_40_01.2"));
   CHECK_EQ(back["rate"].get<int>(), 44100);
+  CHECK_EQ(back["sink"]["target"].get<std::string>(), std::string("bluez_output.F8_DF_15_0A_11_3C.1"));
+
+  // Several sinks: each once, none left out; "sink" in the answer is the first.
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[
+      {"type":"pipewire","target":"bluez_output.A.1"},{"type":"none"},{"type":"pipewire","target":"bluez_output.B.1"},
+      {"type":"pipewire","target":"bluez_output.A.1"}]})"), &s, &err));
+  CHECK_EQ(s.sinks.size(), size_t(2));
+  CHECK_EQ(s.sinks[1].target, std::string("bluez_output.B.1"));
+  CHECK_EQ(default_label(s), std::string("tone 1 kHz → bluez_output.A.1 + bluez_output.B.1"));
+  CHECK_EQ(stream_spec_json(s)["sinks"].size(), size_t(2));
+  CHECK_EQ(stream_spec_json(s)["sink"]["target"].get<std::string>(), std::string("bluez_output.A.1"));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":{"type":"pipewire"}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[null]})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[{"type":"pipewire","target":"-x"}]})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[{"target":"a"},{"target":"b"},
+      {"target":"c"},{"target":"d"},{"target":"e"}]})"), &s, &err));  // kMaxSinks
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[]})"), &s, &err));
+  CHECK(s.sinks.empty());
+  CHECK(is_local(SourceSpec{}));
+  SourceSpec cap;
+  cap.type = "capture";
+  CHECK(!is_local(cap));
 
   // A media server's track carries its artist, album and length; repeat and shuffle round-trip.
   CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"url","repeat":"all","shuffle":true,"playlist":[
@@ -597,6 +631,134 @@ void test_upnp() {
   CHECK_EQ(parse_duration("x"), -1.0);
 }
 
+// ---- the pump's sinks, against fake processes -----------------------------------------------------
+
+// aplay as the pump runs it ("-D <target> ... -r <rate> -c <channels>"): takes the audio at the
+// rate it says, as a sound card would, into <dir>/<target>; "hw:stall" takes none.
+const char* kFakeAplay = R"(#!/usr/bin/env python3
+import os, sys, time
+a = sys.argv
+t = a[a.index('-D') + 1]
+if t.startswith('hw:stall'):
+    time.sleep(60)
+    sys.exit(0)
+per_s = int(a[a.index('-r') + 1]) * int(a[a.index('-c') + 1]) * 2
+out = open(os.path.join(os.path.dirname(sys.argv[0]), '..', t), 'wb', buffering=0)
+t0, n = time.monotonic(), 0
+while True:
+    room = int((time.monotonic() - t0) * per_s) - n
+    if room < 4096:
+        time.sleep(0.005)
+        continue
+    b = os.read(0, min(room, 65536))
+    if not b:
+        break
+    out.write(b)
+    n += len(b)
+)";
+
+std::string sink_state(const json& st, const std::string& target) {
+  for (const json& k : st["sinks_status"])
+    if (k["target"] == target) return k["state"].get<std::string>();
+  return "";
+}
+
+long file_size(const std::string& p) {
+  struct stat sb;
+  return stat(p.c_str(), &sb) == 0 ? static_cast<long>(sb.st_size) : -1;
+}
+
+// Waits up to `ms` for `ok` on stream `id`.
+template <typename F>
+bool wait_for(AudioEngine& e, int id, int ms, F ok) {
+  for (int i = 0; i < ms / 50; ++i) {
+    if (ok(e.get(id))) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return ok(e.get(id));
+}
+
+void test_engine_sinks() {
+  // As btbenchd (main.cpp): a sink process gone is a broken pipe to the pump, not a signal.
+  std::signal(SIGPIPE, SIG_IGN);
+  char tmpl[] = "/tmp/btbench-test-audio-XXXXXX";
+  const std::string dir = mkdtemp(tmpl);
+  mkdir((dir + "/bin").c_str(), 0755);
+  {
+    std::ofstream f(dir + "/bin/aplay");
+    f << kFakeAplay;
+  }
+  // arecord: a capture that gives nothing, still running.
+  {
+    std::ofstream f(dir + "/bin/arecord");
+    f << "#!/bin/sh\nexec sleep 60\n";
+  }
+  chmod((dir + "/bin/aplay").c_str(), 0755);
+  chmod((dir + "/bin/arecord").c_str(), 0755);
+  const std::string path = getenv("PATH") ? getenv("PATH") : "/usr/bin:/bin";
+  setenv("PATH", (dir + "/bin:" + path).c_str(), 1);
+  {
+    AudioEngine e([](const std::string&, const json&) {}, [](const std::string&) { return false; }, dir);
+    json out;
+    std::string err;
+    int status = 0;
+    const auto playing = [](const std::string& t) {
+      return [t](const json& st) { return sink_state(st, t) == "playing"; };
+    };
+
+    // One stream into two sinks: both take it, at the rate it plays.
+    CHECK(e.create(json::parse(R"({"source":{"type":"tone"},"sinks":[{"type":"alsa","target":"hw:A"},
+        {"type":"alsa","target":"hw:B"}]})"), &out, &err, &status));
+    const int one = out["id"];
+    CHECK(wait_for(e, one, 3000, playing("hw:A")));
+    CHECK(wait_for(e, one, 3000, playing("hw:B")));
+    const long a0 = file_size(dir + "/hw:A"), b0 = file_size(dir + "/hw:B");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    const long da = file_size(dir + "/hw:A") - a0, db = file_size(dir + "/hw:B") - b0;
+    CHECK(da > 192000 / 2 && da < 192000 * 3 / 2);
+    CHECK(db > 192000 / 2 && db < 192000 * 3 / 2);
+    CHECK_EQ(e.get(one)["sink"]["target"].get<std::string>(), std::string("hw:A"));
+
+    // A capture is not a local stream: it plays beside the local one.
+    CHECK(e.create(json::parse(R"({"source":{"type":"capture","backend":"alsa","target":"hw:In"}})"), &out, &err, &status));
+    const int cap = out["id"];
+
+    // A second local stream takes the place of the first. One of its sinks takes nothing: it
+    // stalls, and the other plays on at the stream's rate regardless.
+    CHECK(e.create(json::parse(R"({"source":{"type":"noise"},"sinks":[{"type":"alsa","target":"hw:stall"},
+        {"type":"alsa","target":"hw:A"}]})"), &out, &err, &status));
+    const int two = out["id"];
+    CHECK(e.get(one).is_null());
+    CHECK_EQ(e.get(cap)["state"].get<std::string>(), std::string("running"));
+    CHECK(wait_for(e, two, 3000, playing("hw:A")));
+    CHECK(wait_for(e, two, 4000, [](const json& st) { return sink_state(st, "hw:stall") == "stalled"; }));
+    const long a1 = file_size(dir + "/hw:A");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    const long da1 = file_size(dir + "/hw:A") - a1;
+    CHECK(da1 > 192000 / 2 && da1 < 192000 * 3 / 2);
+    CHECK_EQ(sink_state(e.get(two), "hw:A"), std::string("playing"));
+
+    // The sinks changed while it plays: the stalled one goes, B comes, A plays on as it was.
+    CHECK(e.update(two, json::parse(R"({"sinks":[{"type":"alsa","target":"hw:A"},{"type":"alsa","target":"hw:B"}]})"),
+                   &out, &err, &status));
+    const int req = out["sink_req"];
+    CHECK(wait_for(e, two, 3000, [req](const json& st) {
+      return st["sink_seq"] == req && sink_state(st, "hw:B") == "playing" && sink_state(st, "hw:stall").empty();
+    }));
+    CHECK_EQ(sink_state(e.get(two), "hw:A"), std::string("playing"));
+    CHECK_EQ(e.get(two)["sinks"].size(), size_t(2));
+
+    // To listeners only: no sink left, the stream still running.
+    CHECK(e.update(two, json::parse(R"({"sinks":[]})"), &out, &err, &status));
+    CHECK(wait_for(e, two, 2000, [](const json& st) { return st["sinks_status"].empty() && st["sinks"].empty(); }));
+    CHECK_EQ(e.get(two)["state"].get<std::string>(), std::string("running"));
+
+    e.stop_all();
+  }
+  setenv("PATH", path.c_str(), 1);
+  std::filesystem::remove_all(dir);
+}
+
 }  // namespace
 
 int main() {
@@ -613,5 +775,6 @@ int main() {
   test_cards();
   test_xml();
   test_upnp();
+  test_engine_sinks();
   return report("test_audio");
 }

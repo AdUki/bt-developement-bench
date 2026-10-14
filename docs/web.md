@@ -55,9 +55,10 @@ server, Test signal or Audio input; then the path, source → this board → whe
 then the phone's own folders and search (for a browsable player), the radio stations, the media servers
 on the LAN, and *Test signals* (tones, a left/right check, a sweep, pink and white noise, silence,
 and a tone of any frequency and level): a station plays on its own, a track plays with the rest of
-its folder after it as the queue, and **+** adds a track to the end of the queue. A station or
-tracks take the place of the URL stream shown, on its output; a test signal is a stream of its own
-beside it, on the output chosen. Under the stations a stream's URL adds
+its folder after it as the queue, and **+** adds a track to the end of the queue. The board plays one
+thing of its own at a time: a station, tracks or a test signal takes the place of what it plays, on
+its outputs (and in this browser if that one was heard here), or on the outputs chosen when nothing
+plays; what phones send the board plays on beside it, each a source of its own. Under the stations a stream's URL adds
 it, named as the stream calls itself, and **×** on a station removes it. Media servers show their covers: a folder of
 albums is a grid of them (title, artist, year), an album opens with its cover, artist, year, genre,
 track count and length, *Play all* and *Add all*, and its tracks by number with their format
@@ -67,17 +68,22 @@ shows the plain icons. On a wide screen both are on screen side by side, so the 
 phone shows here as soon as it is connected, before it has played anything: its play button is
 how the music is started from the console. A bar at the bottom of the library keeps the
 track playing, play/pause and next in reach. Every source has the same *Play to* — none, the
-board's default output, the loopback card or a Bluetooth speaker, each a button — and, apart from
-that, *Listen in this browser*, and each stream has its own: a tone can play on one speaker while
-the radio plays on another. The board keeps playing with the page closed. A phone's music always
-plays on the default output (PipeWire links it there); picking a speaker sends it on there too (a
-capture of it, a tunnel), and listening in this browser starts within a second while the phone
-plays into the board — one that does not is asked once to play, never paused. Both change what
-plays at once: an output picked moves the stream there (the
-station and the queue carry on), and the line under the buttons says what the board is doing —
-asking, opening the output, waiting for the Bluetooth link to stream, *Playing on … · codec* — or
-why it could not (a speaker not connected, one that went away, one that takes no audio). The volume slider sets what a person means: the Bluetooth speaker's
-own volume when the link has one, else the stream's level, or this browser's.
+board's default output, the loopback card and each Bluetooth speaker, a button each — and, apart
+from that, *Listen in this browser*. The speakers and the loopback card are on or off each by
+itself, so one source plays on two Bluetooth speakers at once; none and the default output are a
+choice of their own. Each source has its own outputs, and they are what the next thing played
+gets. The board keeps playing with the page closed. A phone's music always plays on the default
+output (PipeWire links it there); the speakers lit send it on there too (a capture of it, a
+tunnel), and listening in this browser starts within a second while the phone plays into the
+board — one that does not is asked once to play, never paused. Both change what plays at once: a
+speaker tapped joins (or leaves) the ones playing, which carry on untouched, as do the station and
+the queue; and the line under the buttons says what the board is doing — asking, opening the
+output, waiting for the Bluetooth link to stream, *Playing on … · codec and … · codec* — or why it
+could not (a speaker not connected, one that went away, one that takes no audio: the others play
+on without it); a line that says all plays well is cleared after 5 s. Nothing is retried on its
+own: a speaker lost is tapped again. The volume slider sets what a person means: the Bluetooth speaker's own volume when
+the link has one and the source plays on that one alone, else the stream's level (all its outputs
+at once), or this browser's.
 
 
 **Devices** — the adapter bar. With two adapters (the board's own and a USB one) it starts with a
@@ -154,11 +160,13 @@ browser: the now-playing list, its files, search, and *play* or *add* per item. 
 *This board's player*: what a car or speaker the board plays to sees (its track, play state and
 the adapters it is offered on), its controls, *Offer it* (on or off), and folded, its library and
 now-playing list. *Streams*: what the board plays itself. *Output for new streams*, where every
-stream started there begins — the connected Bluetooth sinks by name and codec first, PipeWire's
-default output, the other sinks, or nowhere — with the codec picker for a Bluetooth one and *also
-listen in this browser*; *Running*, each stream with its own output (*to*: moved there at once,
-the source carrying on, so two streams play to two devices) and under it, in Listen's words, what
-the board does about it — asking, opening it, waiting for the Bluetooth link to stream, *Playing
+stream started there begins — Listen's buttons: none, PipeWire's default output, or any of the
+connected Bluetooth sinks (by name and codec) and the other sinks at once — with the codec picker
+for each Bluetooth one and *also listen in this browser*. A test signal or a station started there
+takes the place of the one the board plays (one at a time); a device's audio plays beside it.
+*Running*, each stream with its own outputs (the same buttons: one tapped joins or leaves at once,
+the source and the others carrying on) and under them, in Listen's words, what the board does
+about them — asking, opening it, waiting for the Bluetooth link to stream, *Playing
 on … · codec*, or why not — then its level meters (RMS bar, peak mark, per channel), the radio
 title, Pause (and Previous/Next for a playlist) for a URL stream, a live gain slider and, for a
 tone, its frequency and level, listening adding the buffered time, a volume and a spectrum (the
