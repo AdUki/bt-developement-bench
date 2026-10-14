@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -245,7 +246,12 @@ CoverArtServer::CoverArtServer(std::string dir) : dir_(std::move(dir)) {}
 CoverArtServer::~CoverArtServer() { stop(); }
 
 bool CoverArtServer::start(std::string* err) {
+  // The images are kept by handle, and handles count from 1 again with each start: what a run
+  // before this one fetched would answer the new handles with other covers.
   mkdir(dir_.c_str(), 0755);
+  std::error_code ec;
+  for (const auto& f : std::filesystem::directory_iterator(dir_, ec))
+    if (f.is_regular_file(ec)) std::filesystem::remove(f.path(), ec);
   const int fd = socket(kAfBluetooth, SOCK_SEQPACKET | SOCK_CLOEXEC, kBtprotoL2cap);
   if (fd < 0) {
     *err = std::string("L2CAP socket: ") + strerror(errno);

@@ -55,7 +55,7 @@ std::string image_properties_xml(const std::string& handle, int w, int h, size_t
 
 class CoverArtServer {
  public:
-  // `dir` keeps the images fetched (a tmpfs is fine: they are fetched again after a reboot).
+  // `dir` keeps the images fetched, for this run only (start() empties it).
   explicit CoverArtServer(std::string dir);
   ~CoverArtServer();
   CoverArtServer(const CoverArtServer&) = delete;
