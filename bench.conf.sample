@@ -3,7 +3,7 @@
 # Copy to bench.conf (not tracked by git) and edit, or let `make configure` write it.
 # Every value here can also be given on the make command line: make bluez BOARD=rpi4.
 
-# Which board (boards/<name>.mk): rpi0w, rpi4, vim3l.
+# Which board (boards/<name>.mk): rpi0w, rpi4, rpi5, vim3l.
 BOARD ?= rpi0w
 
 # Which kernel the image boots and `make linux` builds:

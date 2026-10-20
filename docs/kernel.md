@@ -304,3 +304,67 @@ slot. Two differences:
 
 The good slot is `/boot/Image` and `/boot/meson-sm1-khadas-vim3l.dtb`.
 
+
+## Raspberry Pi 5 (`BOARD=rpi5`)
+
+BCM2712 (four Cortex-A76, arm64), with an Intel BE200 on an M.2 HAT as the bench's second
+adapter. Both kernels, `KERNEL=next` by default. The image builds; it has not been booted yet.
+
+| | |
+|---|---|
+| defconfig | arm64 `defconfig` + `boards/rpi5.cfg` (every SoC family but Broadcom's off, PCIe and the RP1 built in, iwlwifi with the MLD op mode, no HDMI sound card) |
+| device tree | `broadcom/bcm2712-d-rpi-5-b.dtb` (D0) or `bcm2712-rpi-5-b.dtb` (C1), `RPI5_SOC=d0\|c1`, with `boards/dts/rpi5-btbench.dtsi`: the USB-C port's dwc2 as a peripheral (mainline has no node for it) and a ramoops region |
+| Bluetooth | onboard CYW43455 on `uarta` (8250 bcm7271) with RTS/CTS, `brcm,bcm43438-bt`, hci_uart over serdev: hci0. The BE200 on USB, btusb + btintel: hci1 |
+| Wi-Fi | onboard CYW43455 on SDIO, brcmfmac: `wlan0`, the bench's. The BE200 on PCIe, iwlwifi: `wlpcie0`, unconfigured |
+| gadget | dwc2, `1000480000.usb`, on the USB-C port that also powers the board |
+| console | the 3-pin JST "UART" connector between the HDMI ports, 3.3 V, 115200 8N1 (`ttyAMA10`; the Raspberry Pi Debug Probe fits it) |
+| Ethernet | RP1 (macb), DHCP through systemd-conf's `80-wired.network` |
+
+**The SoC stepping.** The D0 moved the pin controllers and the debug UART's interrupt, and mainline
+has a dts for each stepping. config.txt has no filter for the stepping, so `boards/rpi5.mk` picks
+the dtb with `RPI5_SOC` (default `d0`) and the board conf names it in `device_tree=`. All 2 GB and
+16 GB boards and later 4 GB and 8 GB ones are D0; the first 4 GB and 8 GB boards (revision 1.0)
+are C1. With the wrong one the firmware and U-Boot print on the debug UART, and the kernel prints
+nothing. Rebuild with `make image BOARD=rpi5 RPI5_SOC=c1`, or put `RPI5_SOC := c1` in
+`bench.conf`. `KERNEL=rpi` leaves the choice to the firmware.
+
+**The boot chain.** The firmware lives in the board's EEPROM, not on the card. It reads
+`config.txt` and loads U-Boot as `kernel_2712.img`. That U-Boot is 2025.04 from meta-lts-mixins'
+`scarthgap/u-boot` branch (`rpi_arm64_defconfig`), because scarthgap's own 2024.01 predates the
+Pi 5. `make` clones the layer for this board only, and meta-raspberrypi recommends it. U-Boot runs
+the same `boot.scr` as on the other Pis, with the firmware's device tree and command line.
+
+**The M.2 HAT.** The Pi 5's PCIe FFC connector carries PCIe alone, and the BE200 is two devices:
+the Wi-Fi on PCIe, and the Bluetooth as a USB device on the M.2 slot's USB pins. A HAT that only
+wires PCIe gives you `wlpcie0` and no hci1. A HAT for E-key cards that takes USB from one of the
+board's USB-A ports (a cable or a pogo-pin bridge) gives you both. The Pi 5 powers the HAT
+through the FFC and the header: give the board its 5 V/5 A supply. Over a PC's USB-C port the
+gadget link works, but a Pi 5 with a busy M.2 card may brown out (`in0_lcrit_alarm`). Ethernet,
+or Wi-Fi with the supply on USB-C, is then the way in.
+
+**First boot, what to check** (in this order, on the debug UART):
+
+1. Firmware, then `U-Boot 2025.04`, then the kernel's first lines on `ttyAMA10`. Kernel silent:
+   wrong `RPI5_SOC`.
+2. The root mounts (`root=PARTUUID=b7be4c4e-02`, sdhci-brcmstb), and `usb0` comes up when the
+   USB-C port is on a PC (`/sys/class/udc/1000480000.usb`).
+3. `lspci`: the RP1 (`1de4:0001`) and the BE200 (`8086:272b`). No BE200: check the FFC cable, and
+   for `brcm-pcie` errors in `dmesg`.
+4. `dmesg | grep -e iwlwifi -e Bluetooth`: iwlwifi loads `iwlwifi-gl-c0-fm-c0-c107.ucode` and the
+   `.pnvm`, btintel `intel/ibt-0291-0291.sfi`; `btmgmt info` lists hci0 (the CYW43455) and hci1.
+5. `ip link`: `wlan0` (brcmfmac) and `wlpcie0` (iwlwifi).
+
+**Kernel trials** work as on the other Pis (`TRY_METHOD=uboot-oneshot`, `tryboot` with
+`KERNEL=rpi`). U-Boot keeps its environment in `/boot/uboot.env` on mmc 0, the SD card. `boot.scr`
+also tries the BCM2712's watchdog (`watchdog@7d200000`), but U-Boot 2025.04 may have no driver
+for it. If it has none, a test kernel that hangs before the kernel's `bcm2835_wdt` takes over is
+not reset, and you power-cycle the board to get back to the good kernel. Whether the ramoops
+region survives the Pi 5's reset is also untested.
+
+**Room for the kernel.** U-Boot loads `Image` at `kernel_addr_r` (0x80000), and a trial boot then
+loads its `board.dtb` at `fdt_addr_r` (0x2600000). That leaves 37.5 MB for the kernel. The image's
+is 37.3 MB, trimmed to Broadcom by `boards/rpi5.cfg`. A config that grows it past that limit
+breaks trial boots, because the dtb is loaded over the kernel's tail. Check the size of a
+`make linux` build before `linux-test`.
+
+The good slot is `/boot/Image` and `/boot/bcm2712-d-rpi-5-b.dtb` (or the C1's).

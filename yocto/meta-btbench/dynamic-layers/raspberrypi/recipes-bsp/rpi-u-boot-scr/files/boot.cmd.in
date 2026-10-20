@@ -38,8 +38,11 @@ if test "${bench_try}" = "1"; then
 
 			# The SoC watchdog (16 s at most), for a kernel that hangs before systemd takes the
 			# watchdog over; the kernel's bcm2835_wdt keeps it fed from its probe on. A U-Boot
-			# without the wdt command or driver just skips this.
+			# without the wdt command or driver just skips this. watchdog@7d200000 is the
+			# BCM2712's (Raspberry Pi 5), where U-Boot may well have no driver for it.
 			if wdt dev watchdog@7e100000; then
+				wdt start 15000
+			elif wdt dev watchdog@7d200000; then
 				wdt start 15000
 			fi
 

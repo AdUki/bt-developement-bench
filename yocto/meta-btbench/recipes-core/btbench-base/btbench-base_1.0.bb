@@ -26,6 +26,7 @@ SRC_URI = " \
     file://btbench-wifi.service \
     file://10-usb0.network \
     file://30-wlan0.network \
+    file://70-btbench-pcie-wifi.link \
     file://resolved-btbench.conf \
     file://btbench-http.dnssd \
     file://btbench-ssh.dnssd \
@@ -168,6 +169,7 @@ EOF
     # /etc/systemd/network replaces one of these on a board.
     install -d ${D}${systemd_unitdir}/network
     install -m 0644 ${WORKDIR}/10-usb0.network ${WORKDIR}/30-wlan0.network ${D}${systemd_unitdir}/network/
+    install -m 0644 ${WORKDIR}/70-btbench-pcie-wifi.link ${D}${systemd_unitdir}/network/
     install -d ${D}${sysconfdir}/systemd/resolved.conf.d
     install -m 0644 ${WORKDIR}/resolved-btbench.conf ${D}${sysconfdir}/systemd/resolved.conf.d/10-btbench.conf
     # The console and ssh as DNS-SD services, published by resolved on mDNS.

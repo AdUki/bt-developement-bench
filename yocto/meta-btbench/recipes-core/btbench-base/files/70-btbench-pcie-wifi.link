@@ -1,0 +1,12 @@
+# A PCIe Wi-Fi card next to the board's own Wi-Fi (the Raspberry Pi 5's BE200 on its M.2 HAT,
+# iwlwifi) gets a name of its own. The bench's Wi-Fi is wlan0, the board's chip (btbench-wifi,
+# 30-wlan0.network, btbench-hostname), and with net.ifnames=0 the kernel would hand wlan0 to
+# whichever driver registers first, and iwlwifi can beat brcmfmac, which loads its firmware over
+# SDIO first. Renamed as soon as it appears, the card leaves wlan0 free for the board's.
+# Nothing on the bench configures wlpcie0; `iw dev wlpcie0` and `ip link set wlpcie0 up` work as
+# for any interface.
+[Match]
+Driver=iwlwifi
+
+[Link]
+Name=wlpcie0

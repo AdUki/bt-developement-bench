@@ -275,6 +275,11 @@ $(LAYERS)/meta-meson:
 	@echo "Cloning meta-meson ($(BRANCH))..."
 	@git clone -q --depth 1 -b $(BRANCH) https://github.com/superna9999/meta-meson.git $@
 
+# A current U-Boot for scarthgap (BOARD=rpi5): its 2024.01 predates the Raspberry Pi 5.
+$(LAYERS)/meta-lts-mixins-u-boot:
+	@echo "Cloning meta-lts-mixins ($(BRANCH)/u-boot)..."
+	@git clone -q --depth 1 -b $(BRANCH)/u-boot https://git.yoctoproject.org/meta-lts-mixins $@
+
 $(YB)/conf/bblayers.conf: $(LAYERS)/poky $(LAYERS)/meta-openembedded $(BSP_LAYERS) \
                           $(YOCTO)/conf/bblayers.conf.sample $(BOARD_MK)
 	@mkdir -p $(YB)/conf

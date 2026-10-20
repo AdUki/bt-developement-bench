@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Raspberry Pi 5: what the bench adds to mainline's bcm2712-rpi-5-b.dts (C1 stepping) or
+ * bcm2712-d-rpi-5-b.dts (D0), whichever RPI5_SOC picks in boards/rpi5.mk.
+ *
+ * Compiled in after the board's dts by tools/dev/mkdtb (make linux, and the linux-btbench recipe
+ * for the image), so everything here can refer to the board's labels.
+ *
+ * Already in the mainline dts, so not repeated: the SD card (sdio1), the CYW43455's Wi-Fi on
+ * sdio2 (brcm,bcm4329-fmac) and its Bluetooth on uarta (brcm,bcm43438-bt, RTS/CTS, shutdown on
+ * GPIO 29), the debug UART on the 3-pin connector (uart10, ttyAMA10), the external PCIe connector
+ * the M.2 HAT plugs into (pcie1) and the RP1 behind pcie2 (USB host ports, Ethernet).
+ */
+
+/ {
+	/*
+	 * The USB-C port is the power input and, behind it, the BCM2712's own dwc2 controller (not
+	 * the RP1's): the dev link, a USB device to the PC (configfs gadget, NCM + ACM). Mainline
+	 * has no node for it; this is the downstream kernel's (bcm2712-ds.dtsi, the dwc2 overlay)
+	 * with mainline's FIFO sizes for device mode (bcm283x-rpi-usb-otg.dtsi).
+	 */
+	clk_usb: clk-usb {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-output-names = "otg";
+		clock-frequency = <480000000>;
+	};
+
+	usbphy: phy {
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
+	};
+};
+
+&axi {
+	usb: usb@1000480000 {
+		compatible = "brcm,bcm2835-usb";
+		reg = <0x10 0x00480000 0x0 0x10000>;
+		interrupts = <GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&clk_usb>;
+		clock-names = "otg";
+		phys = <&usbphy>;
+		phy-names = "usb2-phy";
+		/*
+		 * "peripheral" makes it a device whatever the cable. The board is powered through the
+		 * same port, so the PC's port has to supply it (docs/kernel.md "Raspberry Pi 5").
+		 */
+		dr_mode = "peripheral";
+		g-rx-fifo-size = <256>;
+		g-np-tx-fifo-size = <32>;
+		g-tx-fifo-size = <256 256 512 512 512 768 768>;
+	};
+};
+
+/*
+ * pstore/ramoops: the kernel log of a crashed or hung boot survives the reset in this region and
+ * is read back from /sys/fs/pstore on the next boot. 0x0b000000 as on the other Pis: clear of the
+ * ATF at 0, of U-Boot's kernel_addr_r (0x80000), fdt_addr_r (0x2600000) and ramdisk, and of
+ * U-Boot itself and the firmware's device tree near the top of the first GiB.
+ *
+ * 1 MiB: console 256 KiB, pmsg 128 KiB (userspace, /dev/pmsg0), and five 128 KiB oops/panic
+ * dumps.
+ */
+&rmem {
+	ramoops@b000000 {
+		compatible = "ramoops";
+		reg = <0x0 0x0b000000 0x0 0x100000>;
+		no-map;
+		record-size = <0x20000>;
+		console-size = <0x40000>;
+		pmsg-size = <0x20000>;
+	};
+};

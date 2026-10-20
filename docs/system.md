@@ -158,11 +158,15 @@ A USB Bluetooth adapter next to the board's own controller is a second adapter o
 scan, pair and connect with, and `bench primary` moves the advertisements, the GATT server and the
 HID remote to another. Its firmware goes in the board's image (`BTBENCH_BOARD_FIRMWARE`).
 
-- **Intel BE200** (Wi-Fi 7 M.2 card, on a USB adapter on the VIM3L; USB `8087:0036`, Bluetooth 5.4
-  with LE Audio). btusb + btintel load `intel/ibt-0291-0291.sfi` and its `.ddc`: from
-  `btbench-firmware-ibt`, pinned to a linux-firmware tag newer than scarthgap's. Without them it
-  stays in its bootloader, an hci with address `00:00:00:00:00:00` that never comes up. Booted,
-  `dmesg` says `hci1: Firmware timestamp 2026.29 buildtype 1 build 120611`.
+- **Intel BE200** (Wi-Fi 7 M.2 card, on a USB adapter on the VIM3L and on an M.2 HAT on the
+  Raspberry Pi 5; USB `8087:0036`, Bluetooth 5.4 with LE Audio). btusb + btintel load
+  `intel/ibt-0291-0291.sfi` and its `.ddc`: from `btbench-firmware-ibt`, pinned to a
+  linux-firmware tag newer than scarthgap's. Without them it stays in its bootloader, an hci with
+  address `00:00:00:00:00:00` that never comes up. Booted, `dmesg` says
+  `hci1: Firmware timestamp 2026.29 buildtype 1 build 120611`.
+  On the Pi 5 its Bluetooth needs the HAT to wire the M.2 slot's USB pins to one of the board's
+  USB ports. A PCIe-only HAT shows the Wi-Fi alone (docs/kernel.md "Raspberry Pi 5"). The Wi-Fi
+  half is `wlpcie0` (iwlwifi, `btbench-firmware-iwlwifi`), up only when you bring it up.
 
 ## Changing the scripts
 

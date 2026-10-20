@@ -101,6 +101,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   mDNS `<hostname>-<mac>.local` (btbench-hostname: the last three bytes of wlan0's MAC after
   `/etc/hostname`, a transient hostname; `HOSTNAME_MAC=0` in device.env keeps it plain), with the
 console and ssh announced as DNS-SD `_http._tcp` and `_ssh._tcp` (`/etc/systemd/dnssd/`).
+- `wlan0` is always the board's own Wi-Fi. A PCIe Wi-Fi card (iwlwifi: the rpi5's BE200) is renamed
+  `wlpcie0` as it appears (btbench-base's `70-btbench-pcie-wifi.link`), and nothing configures it.
 
 ## Target scripts (`/usr/bin`, sources in `tools/target/`)
 
