@@ -54,6 +54,10 @@ nlohmann::json bt_keep_adapter_settings(nlohmann::json kept, const nlohmann::jso
 // Device1.Connect follows BlueZ's PreferredBearer, "last-used" by default, so a speaker last used
 // over LE (an LE HID link to it, say) was connected over LE only, and the audio never came up.
 bool bt_connect_over_bredr(const nlohmann::json& obj);
+// Whether such a Connect should go to the LE bearer instead: the LE link is up (a pairing just
+// made over LE) and the device has no classic profile. Device1.Connect then finds LE connected
+// and pages BR/EDR, so an LE Audio earbud paired fine but the pairing ended in a page timeout.
+bool bt_connect_over_le(const nlohmann::json& obj);
 
 // The kept settings as the property writes that restore them, in the order BlueZ needs: Powered
 // first (it refuses Discoverable on an adapter that is off), the timeout before Discoverable.

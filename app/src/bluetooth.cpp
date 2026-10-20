@@ -115,6 +115,12 @@ bool bt_connect_over_bredr(const json& obj) {
   return false;
 }
 
+bool bt_connect_over_le(const json& obj) {
+  if (!obj.is_object() || !obj.contains(kBearerLeIface) || bt_connect_over_bredr(obj)) return false;
+  const bool bredr_up = obj.contains(kBearerBredrIface) && bool_of(obj[kBearerBredrIface], "Connected");
+  return bool_of(obj[kBearerLeIface], "Connected") && !bredr_up;
+}
+
 DDict bt_restore_adapter_props(const json& kept) {
   DDict props;
   if (!kept.is_object()) return props;
@@ -1098,6 +1104,10 @@ void BtManager::on_reply(const std::string& path, const std::string& method, con
     call_device(path, "Connect", "", "connecting", kConnectTimeoutS);
     return;
   }
+  // The LE link of a device with no classic profile is all there is to connect: its LE profiles
+  // come up by themselves once its services are resolved.
+  if (e && method == "Connect" && iface == kBearerLeIface && is_error(e, "org.bluez.Error.AlreadyConnected"))
+    e = nullptr;
   // Nothing to disconnect is done, not failed: it is also how a bearer's Disconnect answers when
   // it only cancelled a Connect still in progress.
   if (e && method == "Disconnect" && is_error(e, "org.bluez.Error.NotConnected")) e = nullptr;
@@ -1132,13 +1142,16 @@ void BtManager::on_reply(const std::string& path, const std::string& method, con
 // Bus thread. A device's profiles: over BR/EDR's bearer only while that link is down: with it up
 // (after a pairing), Device1's Connect is what connects the profiles (on_reply).
 void BtManager::connect_profiles(const std::string& path) {
-  bool bredr;
+  const char* bearer = nullptr;
   {
     std::lock_guard<std::mutex> lk(m_);
-    bredr = objs_->contains(path) && bt_connect_over_bredr((*objs_)[path]) &&
-            !bool_of((*objs_)[path][kBearerBredrIface], "Connected");
+    if (objs_->contains(path)) {
+      const json& o = (*objs_)[path];
+      if (bt_connect_over_bredr(o) && !bool_of(o[kBearerBredrIface], "Connected")) bearer = kBearerBredrIface;
+      else if (bt_connect_over_le(o)) bearer = kBearerLeIface;
+    }
   }
-  call_device(path, "Connect", "", "connecting", kConnectTimeoutS, bredr ? kBearerBredrIface : nullptr);
+  call_device(path, "Connect", "", "connecting", kConnectTimeoutS, bearer);
 }
 
 // ---- The agent -----------------------------------------------------------------------------------

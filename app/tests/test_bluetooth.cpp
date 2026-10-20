@@ -146,6 +146,23 @@ void test_connect_over_bredr() {
   CHECK(!bt_connect_over_bredr(json::object()));
 }
 
+void test_connect_over_le() {
+  // An LE Audio earbud just paired over LE: its public address gives it a BR/EDR bearer too.
+  const json earbud = {{"org.bluez.Device1", {{"UUIDs", {"0000184e-0000-1000-8000-00805f9b34fb"}}}},
+                       {"org.bluez.Bearer.BREDR1", {{"Connected", false}}},
+                       {"org.bluez.Bearer.LE1", {{"Connected", true}}}};
+  CHECK(bt_connect_over_le(earbud));
+  // LE down: BlueZ's own choice of bearer.
+  json down = earbud;
+  down["org.bluez.Bearer.LE1"]["Connected"] = false;
+  CHECK(!bt_connect_over_le(down));
+  // A classic profile goes over BR/EDR, whatever LE does.
+  json speaker = earbud;
+  speaker["org.bluez.Device1"]["UUIDs"].push_back("0000110b-0000-1000-8000-00805f9b34fb");
+  CHECK(!bt_connect_over_le(speaker));
+  CHECK(!bt_connect_over_le(json::object()));
+}
+
 int main() {
   uuid_names().load_text(R"({"uuid16": {"110d": "Advanced Audio Distribution"}})", nullptr);
   test_agent_policy();
@@ -154,5 +171,6 @@ int main() {
   test_request_json();
   test_kept_adapter_settings();
   test_connect_over_bredr();
+  test_connect_over_le();
   return report("test_bluetooth");
 }
