@@ -388,10 +388,20 @@ cmd_adv() {
       if [ "$2" = - ]; then spec=$(cat); else spec=$(cat "$2") || exit 1; fi
       jq -e . >/dev/null <<<"$spec" || die "$2 is not JSON"
       post /api/le/adv "$spec" | show '"advertisement " + (.id | tostring) + ": " + .state + (if .error != "" then " (" + .error + ")" else "" end)' ;;
+    le-audio)
+      # An LE Audio unicast receiver as phones look for one (the console's "LE Audio receiver"):
+      # ASCS and CAS announcements, PACS, an earbud's appearance, a short interval (at BlueZ's
+      # 1.28 s default a phone's scan missed the board), under the adapter's name.
+      local name
+      name=$(get /api/bluetooth | jq -r '.adapter.alias // ""')
+      post /api/le/adv "$(jq -nc --arg n "$name" '{type: "peripheral", local_name: $n, discoverable: true,
+          service_uuids: ["184e", "1850", "1853"], service_data: {"184e": "00ff0fff0f00", "1853": "00"},
+          appearance: "0x0941", min_interval_ms: 100, max_interval_ms: 150}')" \
+        | show '"advertisement " + (.id | tostring) + ": " + .state + (if .error != "" then " (" + .error + ")" else "" end)' ;;
     stop)
       if [ $# -ge 2 ]; then del "/api/le/adv/$2" >/dev/null && echo "advertisement $2 removed"
       else del /api/le/adv >/dev/null && echo "all advertisements removed"; fi ;;
-    *) die "usage: bench adv [ls] | start FILE.json | stop [ID]" ;;
+    *) die "usage: bench adv [ls] | start FILE.json | le-audio | stop [ID]" ;;
   esac
 }
 
@@ -905,7 +915,7 @@ _bench() {
     -a|--adapter|primary) COMPREPLY=($(compgen -W "$(bench adapters 2>/dev/null | awk '{ print $1 }') default" -- "$cur")) ;;
     agent) COMPREPLY=($(compgen -W "auto ask" -- "$cur")) ;;
     ask|auto) COMPREPLY=($(compgen -W "DisplayOnly DisplayYesNo KeyboardOnly NoInputNoOutput KeyboardDisplay" -- "$cur")) ;;
-    adv) COMPREPLY=($(compgen -W "ls start stop" -- "$cur")) ;;
+    adv) COMPREPLY=($(compgen -W "ls start le-audio stop" -- "$cur")) ;;
     start) COMPREPLY=($(compgen -f -- "$cur")) ;;
     audio) COMPREPLY=($(compgen -W "restart on off" -- "$cur")) ;;
     cap) COMPREPLY=($(compgen -W "on off ls get analyze rm live" -- "$cur")) ;;
@@ -952,6 +962,7 @@ ${bold}LE${off}
   gatt ADDR write H HEX [cmd|req|reliable]
   gatt ADDR notify H              follow its value (Ctrl-C stops notifications)
   adv [ls] | start FILE.json | stop [ID]   LE advertisements (fields: see /api)
+  adv le-audio                    advertise as an LE Audio receiver (phones stream to the board)
 ${bold}Audio${off}
   audio [restart [--restart-bt]]         show the audio stack, or restart PipeWire + WirePlumber
   media                           A2DP/BAP endpoints and transports, codec decoded

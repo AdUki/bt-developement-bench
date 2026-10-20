@@ -181,6 +181,21 @@ function advBody(form) {
   return b;
 }
 
+// An LE Audio unicast receiver as phones look for one: the ASCS and CAS announcements (general:
+// any device may connect; available contexts all, both ways), PACS, an earbud's appearance. The
+// interval is short: at BlueZ's default (1.28 s) a phone's scan did not list the board at all.
+const LEA_ADV = {service_uuids: '184e, 1850, 1853', service_data: '184e:00ff0fff0f00, 1853:00',
+                 appearance: '0x0941', min_interval_ms: '100', max_interval_ms: '150'};
+
+function fillLeAudioAdv(form) {
+  form.elements.type.value = 'peripheral';
+  form.elements.discoverable.checked = true;
+  for (const [k, v] of Object.entries(LEA_ADV)) form.elements[k].value = v;
+  if (!form.elements.local_name.value.trim())
+    api('/bluetooth').then(b => { form.elements.local_name.value = (b.adapter && b.adapter.alias) || ''; }).catch(() => {});
+  form.querySelector('.more-fields').open = true;
+}
+
 function refreshAdv() {
   return api('/le/adv').then(r => {
     const m = r.manager;
@@ -250,6 +265,7 @@ function setupLe() {
     e.preventDefault();
     post('/le/adv', advBody(e.target)).then(refreshAdv).catch(e2 => { fail(e2); refreshAdv(); });
   };
+  $('adv-lea').onclick = () => fillLeAudioAdv($('adv-form'));
   $('adv-list').onclick = e => {
     const b = e.target.closest('button[data-adv]');
     if (b) del(`/le/adv/${b.dataset.adv}`).then(refreshAdv).catch(fail);

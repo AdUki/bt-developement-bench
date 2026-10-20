@@ -253,6 +253,25 @@ it) 0-0.3 a minute. aptX (384 kbit/s) arrived whole in a minute with the Wi-Fi a
 To exercise BAP, use a USB dongle that has them (with the gadget off, `BTBENCH_GADGET = "off"`)
 or a virtual controller: `btvirt -l2` or a vhci device.
 
+**LE Audio unicast (VIM3L, Intel BE200).** The board sends to an LE Audio earbud or speaker:
+pair it over LE (`bench pair`; a device with no classic profile is connected over its LE bearer),
+then pick the profile — PipeWire chooses `bap-duplex` when the device also has a source PAC, which
+enables its microphone too; `bench codec ADDR bap-sink` for music only — and play into
+`bluez_output.ADDR.1`. The board receives from a phone: `bench adv le-audio` (Devices → LE →
+*LE Audio receiver* in the console) announces ASCS, PACS and CAS as an earbud does, the phone pairs
+with *btbench-…* and, with LE Audio switched on in the device's settings there, streams.
+Verified 2026-10-20: the board to an RTL8763EFL (48 kHz stereo LC3, one CIS, 253 kbit/s). The
+other way an S25 configures and enables the board's sink ASE (BlueZ accepts the CCID List Android
+puts in Enable since `bap: accept CCID List metadata`), but the BE200 as CIS peripheral refuses the
+phone's CIS (`PARAMETER_OUT_OF_MANDATORY_RANGE`, never reported to the host: no CIS Request); the
+same was seen with a Synaptics central.
+
+Two things that look like LE Audio faults and are not: a BE200 whose LE Create CIS answers
+*Command Disallowed* after days up was stuck on an earlier CIS; `btmgmt power off` / `on` (an HCI
+reset) cleared it. And when the adapter is unplugged or re-enumerated, PipeWire does not register
+its LE endpoints with the new one: the board's PACS is empty (no PAC, locations and contexts 0) and
+phones find nothing to stream to until WirePlumber restarts.
+
 ## The board's player
 
 When the board plays to something (a car, a speaker, headphones: the board as A2DP source), that

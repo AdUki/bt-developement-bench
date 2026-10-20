@@ -136,7 +136,8 @@ flags allow) and notify; its descriptors read the same way. Every value change l
 notification log; below it, the *advertisers in range*, strongest first,
 with what each advertisement carried. *Advertise*: a form for `LEAdvertisingManager1`
 (type, name, UUIDs, discoverable; under *More fields* manufacturer and service data as `id:hex`,
-appearance, includes, intervals, TX power, timeout); several at once, each with its state (an advertisement whose timeout ran out shows
+appearance, includes, intervals, TX power, timeout), and *LE Audio receiver*, which fills it in
+as an earbud announces itself (ASCS, PACS, CAS, 100-150 ms) so phones stream to the board; several at once, each with its state (an advertisement whose timeout ran out shows
 "released"). *Remote control*: the board as a Bluetooth LE remote (HID over GATT). Switched on, it advertises
 under its name; pair it from a phone, TV or computer like any remote. The pad has power, mute,
 a d-pad with OK, back, home, menu, previous / play–pause / next, and volume and search rockers;
