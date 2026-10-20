@@ -282,8 +282,9 @@ int adv_get(sd_bus*, const char*, const char*, const char* property, sd_bus_mess
 
 }  // namespace
 
-// BlueZ calls Release when it drops an advertisement of its own accord: its Timeout ran out, or
-// the adapter went away. Nothing to free: the object stays exported and can be registered again.
+// BlueZ calls Release when it drops an advertisement of its own accord: its Timeout ran out, the
+// adapter went away, or bluetoothd is stopping (it releases every one on its way out). Nothing to
+// free: the object stays exported and can be registered again.
 static int adv_release(sd_bus_message* m, void* userdata, sd_bus_error*) {
   auto* in = static_cast<AdvManager::Instance*>(userdata);
   LOG_INFO("adv: {} released by BlueZ", in->path);
@@ -298,7 +299,10 @@ AdvManager::~AdvManager() = default;
 void AdvManager::bt_released(int id) {
   std::lock_guard<std::mutex> lk(m_);
   const auto it = instances_.find(id);
-  if (it != instances_.end()) it->second->state = "released";
+  if (it == instances_.end()) return;
+  // Only a timeout ends an advertisement: without one, BlueZ or the adapter went away, and it is
+  // registered again when they are back (bluez_ready), as the docs promise for a BlueZ restart.
+  it->second->state = it->second->spec.timeout_s ? "released" : "pending";
 }
 
 void AdvManager::export_one(sd_bus* bus, Instance& in) {
