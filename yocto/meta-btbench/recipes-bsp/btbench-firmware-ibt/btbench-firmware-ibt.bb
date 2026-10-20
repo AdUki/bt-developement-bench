@@ -11,6 +11,15 @@
 #
 # 20260916: BT_BlazarU_S_REL120611_24.70.26293.120611 in WHENCE; the controller reports "Firmware
 # timestamp 2026.29 buildtype 1 build 120611" when it boots.
+#
+# Auracast is in the firmware but switched off: the LE features the controller reports come from
+# DDC entry 0x0126, and linux-firmware's leaves out Isochronous Broadcaster and Synchronized
+# Receiver (bits 30 and 31), so there are no BIG commands either. Intel's Windows driver (24.80,
+# the same .sfi byte for byte) reads that entry and sets the two bits when its
+# EnableLEAudioBroadcast registry value is on. The .ddc gets one more entry doing the same:
+# btintel sends each entry with Intel Write DDC (0xfc8b) right after boot, before the kernel reads
+# the features. The entry is the whole 8-byte mask, as read from 24.70 and 24.80 (FF F9 01 3F BE
+# 00 00 00) with 0xc0 added; check it against `hcitool cmd 0x3f 0x08c 26 01` on a new release.
 
 SUMMARY = "Intel BE200 Bluetooth firmware (ibt-0291-0291) for a USB-attached Intel controller"
 LICENSE = "Firmware-ibt_firmware"
@@ -41,6 +50,8 @@ do_install() {
 	install -d $d
 	install -m 0644 ${WORKDIR}/ibt-0291-0291-${LINUX_FIRMWARE_TAG}.sfi $d/ibt-0291-0291.sfi
 	install -m 0644 ${WORKDIR}/ibt-0291-0291-${LINUX_FIRMWARE_TAG}.ddc $d/ibt-0291-0291.ddc
+	# Entry: length 10, id 0x0126 (LE features), the mask with ISO broadcast on.
+	printf '\012\046\001\377\371\001\377\276\000\000\000' >>$d/ibt-0291-0291.ddc
 	install -m 0644 ${WORKDIR}/LICENCE.ibt_firmware ${D}${nonarch_base_libdir}/firmware/
 }
 

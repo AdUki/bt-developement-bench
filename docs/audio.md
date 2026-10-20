@@ -266,6 +266,22 @@ puts in Enable since `bap: accept CCID List metadata`), but the BE200 as CIS per
 phone's CIS (`PARAMETER_OUT_OF_MANDATORY_RANGE`, never reported to the host: no CIS Request); the
 same was seen with a Synaptics central.
 
+**Auracast on the BE200.** Its firmware does broadcast, but linux-firmware's DDC leaves it off:
+the controller's LE features come from DDC entry 0x0126, without Isochronous Broadcaster and
+Synchronized Receiver, so it has no BIG commands and only PA-syncs. The image's .ddc
+(btbench-firmware-ibt) adds an entry with both bits set, as Intel's Windows driver does when
+its `EnableLEAudioBroadcast` is on. The kernel applies it only when it loads the firmware, i.e. from
+power-up: not after a USB re-enumeration that finds the firmware already running. On a running
+adapter, write the entry by hand and power-cycle the hci to re-read the features:
+`hcitool -i hci0 cmd 0x3f 0x08b 0a 26 01 ff f9 01 ff be 00 00 00`, then `btmgmt power off` / `on`.
+`btmgmt info` then lists `iso-broadcaster sync-receiver`. Restart bluetoothd and WirePlumber so
+they register broadcast endpoints. A broadcast source also needs `bluez5.bcast_source.config` in
+WirePlumber's `monitor.bluez.properties`, which makes PipeWire create the
+`bluez_output.00_00_00_00_00_00.N.1` sink. Verified 2026-10-20: a 48_2_1 broadcast (one BIS, 83
+kbit/s) from the board, received by an RTL8763EFL (PA sync, BIG sync, audio playing). The other way
+is not verified yet. The Realtek broadcasts from its own public address, and the board, bonded to
+that address, treats it as the unicast device and creates no broadcast endpoint.
+
 Two things that look like LE Audio faults and are not: a BE200 whose LE Create CIS answers
 *Command Disallowed* after days up was stuck on an earlier CIS; `btmgmt power off` / `on` (an HCI
 reset) cleared it. And when the adapter is unplugged or re-enumerated, PipeWire does not register
