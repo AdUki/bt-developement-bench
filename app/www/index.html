@@ -260,6 +260,45 @@
     </div>
   </section>
 
+  <!-- ======================================================== Audio: LE Audio broadcasts (Auracast) -->
+  <section id="leaudio" class="panel">
+    <div class="card toolbar pending" id="la-bar">
+      <div class="tb-main">
+        <div class="tb-id"><b>LE Audio</b> <span id="la-caps" class="small muted"></span></div>
+        <label class="inline-label small" id="la-ad-l" hidden>Adapter <select id="la-ad" aria-label="Adapter"></select></label>
+      </div>
+      <p class="hint">Auracast both ways: the board broadcasts what plays into its broadcast, and receives the broadcasts in range. LE Audio earbuds and speakers (unicast) are in Bluetooth, with their codec and links.</p>
+    </div>
+
+    <div class="card" id="la-src">
+      <div class="card-head"><h3>Broadcast from the board</h3></div>
+      <form id="la-form">
+        <div class="grid">
+          <label class="wide">Quality <select name="preset" id="la-preset"></select></label>
+          <label>Channels <select name="channels"><option value="2">Stereo (front left + right, one BIS)</option><option value="1">Mono (front left)</option></select></label>
+          <label>Broadcast Code <input name="code" maxlength="34" placeholder="none: anyone in range listens" autocomplete="off"></label>
+        </div>
+        <details class="more-fields">
+          <summary>Options</summary>
+          <div class="grid">
+            <label>Presentation delay (ms) <input name="pd_ms" type="number" min="0" max="1000" step="1" value="40"></label>
+          </div>
+        </details>
+        <div class="form-acts"><span id="la-msg" class="small muted"></span><button type="submit" class="primary">Start broadcast</button></div>
+      </form>
+      <div id="la-bcasts" class="rows ld"></div>
+    </div>
+
+    <div class="card" id="la-rx">
+      <div class="card-head">
+        <h3>Broadcasts in range <span id="la-scan-st" class="pill"></span></h3>
+        <div class="acts"><button id="la-scan">Scan</button></div>
+      </div>
+      <p class="hint">While the adapter scans, BlueZ syncs to each broadcaster for a moment and reads what it sends (its BASE): one stream per BIS. <b>Listen</b> syncs to the BIG; the audio plays on the board's default output, and here with <b>Listen here</b>.</p>
+      <div id="la-sources" class="rows-cards ld"></div>
+    </div>
+  </section>
+
   <!-- ======================================================== Audio -->
   <section id="audio" class="panel">
     <!-- Bluetooth: one card per audio device — its links, codec, endpoints and the AVDTP probe. -->
@@ -815,6 +854,7 @@
 <script src="devices.js"></script>
 <script src="le.js"></script>
 <script src="audio.js"></script>
+<script src="leaudio.js"></script>
 <script src="monitor.js"></script>
 <script src="graphs.js"></script>
 <script src="dbus.js"></script>

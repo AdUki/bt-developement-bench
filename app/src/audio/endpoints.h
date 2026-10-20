@@ -12,10 +12,12 @@ namespace btb::audio {
 
 // One endpoint: {id, backend: "pipewire"|"alsa", direction: "sink"|"source", label, kind:
 // "bluetooth"|"loopback"|"hardware"|"virtual", address|null, profile, codec, state, default,
-// rate|null, channels|null, adapter|null}. `id` is what a stream names as its target: PipeWire's
-// node.name, or the ALSA device string ("hw:Loopback,0,0"). A Bluetooth endpoint's `adapter` is the
-// hciN its device is connected on; a device connected on two adapters has two nodes of one
-// node.name, and those have their object.serial as `id` and the adapter in the label.
+// rate|null, channels|null, adapter|null, transport|null}. `id` is what a stream names as its
+// target: PipeWire's node.name, or the ALSA device string ("hw:Loopback,0,0"). A Bluetooth
+// endpoint's `adapter` is the hciN its device is connected on; a device connected on two adapters
+// has two nodes of one node.name, and those have their object.serial as `id` and the adapter in
+// the label. An LE Audio broadcast's node (one per BIS: the board's own, or one received) has its
+// BlueZ transport as `transport` (null for the rest) and a label that says what it is.
 
 // pw-dump's stdout → one array of objects. pw-dump prints the dump as a JSON array, and when
 // objects change while it runs it prints more arrays after it (the updates, keyed by id, with

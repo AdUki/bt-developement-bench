@@ -1129,8 +1129,8 @@ function outOptions(phone, o = pl) {
     const v = `${kind}:${e.id}`;
     const t = e.address ? outTransport(v, o) : null;
     opts.push({value: v, name: e.address ? devName(e.address) : e.label,
-      sub: e.address ? (t && t.codec ? t.codec.name : 'Bluetooth') : e.kind === 'loopback' ? 'loopback' : '',
-      icon: e.address ? PL_SVG.bt : e.kind === 'loopback' ? PL_SVG.loop : PL_SVG.speaker});
+      sub: e.address ? (t && t.codec ? t.codec.name : 'Bluetooth') : e.transport ? 'LE Audio · anyone in range' : e.kind === 'loopback' ? 'loopback' : '',
+      icon: e.address || e.transport ? PL_SVG.bt : e.kind === 'loopback' ? PL_SVG.loop : PL_SVG.speaker});
   });
   return opts;
 }

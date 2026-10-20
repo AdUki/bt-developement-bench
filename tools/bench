@@ -405,6 +405,56 @@ cmd_adv() {
   esac
 }
 
+# LE Audio broadcasts (Auracast): the board's own and the ones in range (/api/le-audio).
+cmd_auracast() {
+  case "${1-}" in
+    ""|ls|list)
+      get /api/le-audio | show '
+        (.adapters[] | select(.broadcaster or .receiver) | .adapter + " " + .address
+           + (if .broadcaster then " broadcasts" else "" end) + (if .receiver then " receives" else "" end)
+           + (if .discovering then ", scanning" else "" end)),
+        "the board",
+        (if (.broadcasts | length) == 0 then "  none" else empty end),
+        (.broadcasts[] | "  BIG " + (.big | tostring) + "  " + .state + "  " + .codec.summary
+           + (if .encrypted then "  encrypted" else "" end) + "  node " + (.node // "-")),
+        "in range",
+        (if (.sources | length) == 0 then "  none (scan: bench scan le 15)" else empty end),
+        (.sources[] | "  " + .address + "  " + (.name | if . == "" then "?" else . end)
+           + "  id " + (.broadcast_id // "?") + "  " + (if .rssi != null then (.rssi | tostring) + " dBm" else "not heard" end)
+           + (if .encrypted then "  encrypted" else "" end),
+          (.streams[] | "      BIS " + (.bis // "?" | tostring) + "  " + .state + "  " + .codec.summary
+           + (if .node != null then "  node " + .node else "" end)))' ;;
+    start)
+      # bench auracast start [PRESET] [mono|stereo] [CODE]
+      local preset=48_2_1 ch=2 code=""
+      shift
+      for a in "$@"; do
+        case "$a" in
+          mono) ch=1 ;; stereo) ch=2 ;;
+          [0-9]*_[0-9]_[12]) preset=$a ;;
+          *) code=$a ;;
+        esac
+      done
+      post /api/le-audio/broadcasts "$(jq -nc --arg p "$preset" --argjson c "$ch" --arg k "$code" \
+          '{preset: $p, channels: $c, code: $k}')" \
+        | show '"BIG " + (.big | tostring) + " ready: play into it (bench auracast) to go on air"' ;;
+    stop)
+      [ $# -ge 2 ] || die "usage: bench auracast stop BIG"
+      del "/api/le-audio/broadcasts/$2" >/dev/null && echo "BIG $2 stopped" ;;
+    listen|leave)
+      # A source's address takes its first stream; a stream's path names one.
+      [ $# -ge 2 ] || die "usage: bench auracast $1 ADDR|PATH [CODE]"
+      local path=$2
+      if [ "${path#/}" = "$path" ]; then
+        path=$(get /api/le-audio | jq -r --arg a "${2^^}" '[.sources[] | select(.address == $a) | .streams[].path][0] // empty')
+        [ -n "$path" ] || die "no broadcast stream from $2 (bench auracast: is it found and read?)"
+      fi
+      put /api/le-audio/streams "$(jq -nc --arg p "$path" --argjson r "$([ "$1" = listen ] && echo true || echo false)" \
+          --arg k "${3-}" '{path: $p, receive: $r, code: $k}')" >/dev/null && echo "$1: $path" ;;
+    *) die "usage: bench auracast [ls] | start [PRESET] [mono|stereo] [CODE] | stop BIG | listen|leave ADDR|PATH [CODE]" ;;
+  esac
+}
+
 # ---- Audio -------------------------------------------------------------------------------------
 
 cmd_audio() {
@@ -905,7 +955,7 @@ cmd_completion() {
 _bench() {
   local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
   local cmds="status adapters primary scan devices info pair connect disconnect trust untrust block unblock cancel remove
-    discoverable agent gatt adv audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel btdebug sys logs dbus bt-args run ssh help completion"
+    discoverable agent gatt adv auracast audio media player codec obex avdtp sinks play radio streams stop listen cap mark mon wifi kernel btdebug sys logs dbus bt-args run ssh help completion"
   if [ "$COMP_CWORD" = 1 ]; then COMPREPLY=($(compgen -W "$cmds -a -b --json -y" -- "$cur")); return; fi
   case "$prev" in
     scan) COMPREPLY=($(compgen -W "le bredr auto" -- "$cur")) ;;
@@ -916,6 +966,7 @@ _bench() {
     agent) COMPREPLY=($(compgen -W "auto ask" -- "$cur")) ;;
     ask|auto) COMPREPLY=($(compgen -W "DisplayOnly DisplayYesNo KeyboardOnly NoInputNoOutput KeyboardDisplay" -- "$cur")) ;;
     adv) COMPREPLY=($(compgen -W "ls start le-audio stop" -- "$cur")) ;;
+    auracast) COMPREPLY=($(compgen -W "ls start stop listen leave" -- "$cur")) ;;
     start) COMPREPLY=($(compgen -f -- "$cur")) ;;
     audio) COMPREPLY=($(compgen -W "restart on off" -- "$cur")) ;;
     cap) COMPREPLY=($(compgen -W "on off ls get analyze rm live" -- "$cur")) ;;
@@ -963,6 +1014,9 @@ ${bold}LE${off}
   gatt ADDR notify H              follow its value (Ctrl-C stops notifications)
   adv [ls] | start FILE.json | stop [ID]   LE advertisements (fields: see /api)
   adv le-audio                    advertise as an LE Audio receiver (phones stream to the board)
+  auracast                        LE Audio broadcasts: the board's own and the ones in range
+  auracast start [PRESET] [mono|stereo] [CODE]   a broadcast (48_2_1 stereo): play into its node
+  auracast stop BIG | listen|leave ADDR|PATH [CODE]   end one / receive one found by a scan
 ${bold}Audio${off}
   audio [restart [--restart-bt]]         show the audio stack, or restart PipeWire + WirePlumber
   media                           A2DP/BAP endpoints and transports, codec decoded
@@ -1020,6 +1074,7 @@ case "$cmd" in
   agent) cmd_agent "$@" ;;
   gatt) cmd_gatt "$@" ;;
   adv) cmd_adv "$@" ;;
+  auracast) cmd_auracast "$@" ;;
   audio) cmd_audio "$@" ;;
   media) cmd_media ;;
   player) cmd_player "$@" ;;

@@ -1183,3 +1183,9 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 .sh-empty { padding: 2rem 1rem; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; font-size: 0.9rem; }
 .sh-grid > .sh-empty { grid-column: 1 / -1; }
 .sh-send > h3 { margin-bottom: 0.7rem; }
+
+/* ------------------------------------------------------------------ LE Audio */
+
+#la-bcasts { margin-top: 0.8rem; }
+.la-code { width: 10rem; }
+#la-preset { max-width: 32rem; }

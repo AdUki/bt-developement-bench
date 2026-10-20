@@ -52,6 +52,13 @@ std::string bt_adapter(const std::string& path) {
   return path.substr(root.size(), path.find('/', root.size()) - root.size());
 }
 
+// A PipeWire Bluetooth device that stands for one LE Audio broadcast stream: PipeWire makes one
+// per BIS, with the transport as its api.bluez5.path — the board's own (/org/bluez/hci0/
+// pac_bcast0/fd1) or one received (/org/bluez/hci0/dev_.../sid0/bis1/fd0).
+bool bt_broadcast_path(const std::string& path) {
+  return path.find("/pac_bcast") != std::string::npos || path.find("/sid") != std::string::npos;
+}
+
 std::string bt_address(std::string a) {
   // PipeWire names carry it as AA_BB_..., the property as AA:BB:...
   for (char& c : a)
@@ -98,10 +105,11 @@ json endpoints_from_pw_dump(const json& dump) {
   const std::string def_source = default_name(dump, "default.audio.source");
   // A Bluetooth node's adapter is its device's (api.bluez5.path): a board with two adapters can have
   // a device connected on both, and then two nodes with one node.name.
-  std::map<long long, std::string> adapter_of;
+  std::map<long long, std::string> path_of;
   for (const json& o : dump)
     if (o.value("type", "") == "PipeWire:Interface:Device" && o.contains("info") && o["info"].contains("props"))
-      adapter_of[o.value("id", -1LL)] = bt_adapter(prop(o["info"]["props"], "api.bluez5.path"));
+      path_of[o.value("id", -1LL)] = prop(o["info"]["props"], "api.bluez5.path");
+  int broadcasts = 0;
   for (const json& o : dump) {
     if (o.value("type", "") != "PipeWire:Interface:Node") continue;
     if (!o.contains("info") || !o["info"].contains("props")) continue;
@@ -124,10 +132,12 @@ json endpoints_from_pw_dump(const json& dump) {
     std::string kind = "hardware";
     json address = nullptr;
     json adapter = nullptr;
+    json transport = nullptr;
     if (api == "bluez5" || starts_with(name, "bluez_")) {
       const std::string dev = prop(p, "device.id");
-      const auto ad = dev.empty() ? adapter_of.end() : adapter_of.find(std::atoll(dev.c_str()));
-      if (ad != adapter_of.end() && !ad->second.empty()) adapter = ad->second;
+      const auto dp = dev.empty() ? path_of.end() : path_of.find(std::atoll(dev.c_str()));
+      const std::string path = dp != path_of.end() ? dp->second : std::string{};
+      if (!bt_adapter(path).empty()) adapter = bt_adapter(path);
       kind = "bluetooth";
       std::string a = prop(p, "api.bluez5.address");
       if (a.empty()) {
@@ -136,6 +146,19 @@ json endpoints_from_pw_dump(const json& dump) {
         if (parts.size() >= 2) a = parts[1];
       }
       if (!a.empty()) address = bt_address(a);
+      if (bt_broadcast_path(path)) {
+        // PipeWire names these after a made-up device ("00 00 00 00 00 00.3986", the broadcaster's
+        // address with a number): say what they are, and give the transport they play.
+        transport = path;
+        const size_t d = path.find("/dev_");
+        if (d == std::string::npos) {
+          address = nullptr;
+          label = "Auracast broadcast" + (broadcasts++ ? " " + std::to_string(broadcasts) : std::string{});
+        } else {
+          address = bt_address(path.substr(d + 5, 17));
+          label = "Auracast from " + address.get<std::string>();
+        }
+      }
     } else if (prop(p, "alsa.id") == "Loopback" || prop(p, "api.alsa.card.name") == "Loopback" ||
                name.find("Loopback") != std::string::npos) {
       kind = "loopback";
@@ -149,6 +172,7 @@ json endpoints_from_pw_dump(const json& dump) {
            {"kind", kind},
            {"address", address},
            {"adapter", adapter},
+           {"transport", transport},
            {"profile", prop(p, "api.bluez5.profile")},
            {"codec", prop(p, "api.bluez5.codec")},
            {"serial", prop(p, "object.serial")},
@@ -223,6 +247,8 @@ json cards_from_pw_dump(const json& dump) {
     if (!info.contains("props")) continue;
     const json& p = info["props"];
     if (prop(p, "device.api") != "bluez5") continue;
+    // One broadcast stream each, with no codec to choose (GET /api/le-audio shows them).
+    if (bt_broadcast_path(prop(p, "api.bluez5.path"))) continue;
     auto to_profile = [](const json& pr) {
       const std::string name = pr.value("name", "");
       const std::string desc = pr.value("description", "");

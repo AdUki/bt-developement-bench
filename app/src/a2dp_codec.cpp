@@ -204,6 +204,14 @@ json decode_lc3(const std::vector<uint8_t>& d, bool caps) {
   json j{{"name", "LC3"}};
   std::vector<std::string> parts;
   size_t i = 0;
+  // A broadcast receiver's transport carries the configuration as the BASE has it, with its length
+  // byte in front (BlueZ passes the field on as is): 13 02 01 08 ... for 19 bytes of LTVs. Read
+  // plainly that is one LTV over all of it, longer than any LC3 configuration value (5 bytes).
+  if (!caps && d.size() > 6 && d[0] == d.size() - 1) {
+    size_t k = 1;
+    while (k < d.size() && d[k] && k + 1 + d[k] <= d.size()) k += 1 + d[k];
+    if (k == d.size()) i = 1;
+  }
   while (i < d.size()) {
     const uint8_t len = d[i];
     if (len == 0 || i + 1 + len > d.size()) {
@@ -229,8 +237,11 @@ json decode_lc3(const std::vector<uint8_t>& d, bool caps) {
       j["frame_duration"] = dur;
       parts.push_back(dur);
     } else if (type == 0x03 && v.size() == 4) {
-      j["channel_allocation"] = hex32(le32(v, 0));
-      parts.push_back("allocation " + hex32(le32(v, 0)));
+      const uint32_t a = le32(v, 0);
+      j["channel_allocation"] = hex32(a);
+      // One frame per channel the allocation names; none set is a single mono channel.
+      j["channels"] = a ? __builtin_popcount(a) : 1;
+      parts.push_back("allocation " + hex32(a));
     } else if (type == 0x04 && v.size() == 2) {
       j["octets_per_frame"] = le16(v, 0);
       parts.push_back(std::to_string(le16(v, 0)) + " octets/frame");

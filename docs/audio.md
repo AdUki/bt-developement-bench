@@ -201,6 +201,44 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
   loop: at a nice value the Zero W had it late about once a second, and PipeWire dropped that cycle
   (a click, and a listening browser's buffer running dry minutes later).
 
+## LE Audio broadcasts (Auracast)
+
+PipeWire's own way to broadcast is a fixed list of BIGs in WirePlumber's config
+(`bluez5.bcast_source.config`), read once when WirePlumber starts. The bench does without it:
+btbenchd calls `SetConfiguration` on the adapter's broadcast PAC (`/org/bluez/hci0/pac_bcast0`, which
+BlueZ makes for PipeWire's broadcast source endpoint) with an LC3 configuration and a BIG's QoS
+(BAP's broadcast presets), BlueZ hands PipeWire the transport, and PipeWire makes a sink of it
+(`bluez_output.00_00_00_00_00_00.N.1`). The BIG goes on air when something plays into the sink and
+off when the transport is cleared (`ClearConfiguration`), so a broadcast is started and stopped like
+a stream (`/api/le-audio`, Audio → LE Audio). The kernel puts the BIG on the first advertising set it
+finds free and advertises the Broadcast ID only: there is no Broadcast Name.
+
+Receiving is BlueZ's: while the adapter scans, BAP syncs to a broadcaster's periodic advertising
+for a moment, reads its BASE and makes an endpoint and a transport per BIS
+(`dev_.../sid0/bis1/fd0`). `MediaTransport1.Select` marks one to receive; PipeWire acquires it, BlueZ
+syncs to the BIG, and the audio is a `bluez_input` stream that plays to the default output.
+
+Both need an adapter whose controller has the ISO broadcaster and sync receiver features (`btmgmt
+info`: `iso-broadcaster sync-receiver`): the VIM3L's BE200 (with the DDC entry of
+btbench-firmware-ibt that switches them on), not the boards' own BCM chips.
+
+What the bench's forks change for it:
+
+- **BlueZ** (`src/device.c`, `profiles/audio/bap.c`): a Broadcast Audio Announcement probes the
+  broadcast source profile on a device whose services are resolved too (a bonded LE Audio device
+  that broadcasts from its public address was never found), again when the Broadcast ID changes,
+  and again once BAP dropped the session of a broadcast that ended (or whose PA sync could not
+  start: a stored broadcaster is probed before the adapter is up).
+- **BlueZ** (`profiles/audio/transport.c`): a broadcast transport keeps its own copy of the
+  Broadcast Code. It copied the stream's QoS with the code's pointer, which the setup frees when the
+  stream is cleared; a GetManagedObjects in between (btbenchd reads the tree on every change)
+  appended freed memory and libdbus aborted bluetoothd. Clearing a broadcast PipeWire still holds
+  has more of this (the transport stays half gone, and the next Acquire segfaults), so btbenchd
+  clears a broadcast only off air.
+- **PipeWire**: upstream's "bluez5: deal with asynchronous device and node removal" (after 1.6.9):
+  a broadcast cleared while its sink still held the transport crashed WirePlumber (the SPA device
+  kept a pointer to the freed Bluetooth device).
+
 ## bluetoothd
 
 - **Version.** BlueZ comes from the fork at `BTBENCH_BLUEZ_SRCREV` (`yocto/conf/versions.conf`),

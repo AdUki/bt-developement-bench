@@ -430,14 +430,17 @@ void install_bluetooth_routes(httplib::Server& svr, Deps& d) {
     send_json(res, model_media(*d.bt.objects()));
   });
 
-  // Body: {"path": "<a MediaTransport1>", "volume": 0..127}: AVRCP absolute volume.
+  // Body: {"path": "<a MediaTransport1>", "volume": 0..127}: AVRCP absolute volume on A2DP, or
+  // 0..255 on LE Audio (the Volume Control Service's volume setting).
   svr.Put("/api/media/transport", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     const std::string path = j.at("path").get<std::string>();
     const auto objs = d.bt.objects();
     if (!objs->contains(path) || !(*objs)[path].contains("org.bluez.MediaTransport1"))
       return send_error(res, 404, "no such transport");
+    const std::string u = uuid_short(str_of((*objs)[path]["org.bluez.MediaTransport1"], "UUID"));
+    const int max = u == "110a" || u == "110b" ? 127 : 255;
     const int v = j.at("volume").get<int>();
-    if (v < 0 || v > 127) return send_error(res, 400, "volume is 0..127");
+    if (v < 0 || v > max) return send_error(res, 400, "volume is 0.." + std::to_string(max));
     const BtCallResult r = d.bt.set_property(path, "org.bluez.MediaTransport1", "Volume",
                                              DVar::u16(static_cast<uint16_t>(v)), 5000);
     if (!r.ok) return reply_error(res, r);

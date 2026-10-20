@@ -208,6 +208,7 @@ const NAV = [
     {tab: 'hid', label: 'Input devices'}]},
   {id: 'audio', label: 'Audio', icon: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z', views: [
     {tab: 'audio', pane: 'bt', label: 'Bluetooth'},
+    {tab: 'leaudio', label: 'LE Audio'},
     {tab: 'audio', pane: 'players', label: 'Players'},
     {tab: 'audio', pane: 'streams', label: 'Streams'},
     {tab: 'audio', pane: 'stack', label: 'PipeWire'}]},

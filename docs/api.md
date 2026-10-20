@@ -391,7 +391,8 @@ Decoded: SBC, AAC, aptX/aptX HD, LDAC (rates and modes), other vendor codecs by 
 configurations (BAP LTVs: rate, frame duration, allocation, octets per frame, bitrate); always the
 raw element as hex. `delay_ms` is the sink's reported delay (A2DP delay reporting), `null` without.
 
-`PUT /api/media/transport` `{"path": "<transport>", "volume": 0..127}` — AVRCP absolute volume.
+`PUT /api/media/transport` `{"path": "<transport>", "volume": 0..127}` — AVRCP absolute volume;
+on an LE Audio transport 0..255, the Volume Control Service's volume setting.
 
 ### AVRCP players
 
@@ -503,6 +504,62 @@ GET_ALL_CAPABILITIES (GET_CAPABILITIES for AVDTP 1.0) of every SEP.
 It needs no audio stack and shows what BlueZ's endpoint objects do not (SEPs in use, every
 capability, a device not connected over A2DP). Devices take one signalling channel at a time:
 while A2DP is up the probe is refused (409) and `GET /api/media`'s endpoints are BlueZ's view.
+
+## LE Audio broadcasts (Auracast)
+
+Both ways, over BlueZ's BAP plugin and PipeWire. Unicast LE Audio (earbuds, speakers) needs nothing
+of its own: a connected device is a PipeWire sink or source like an A2DP one, its links are in
+`GET /api/media` (transport UUIDs `2bc9`/`2bcb`: the board's sink or source PAC) and its codec is a
+profile (`bap-sink`, `bap-duplex`).
+
+`GET /api/le-audio`:
+
+```json
+{"adapters": [{"adapter": "hci0", "address": "44:A3:BB:36:5E:2E", "name": "btbench-vim3l",
+               "broadcaster": true, "receiver": true, "pac": "/org/bluez/hci0/pac_bcast0", "discovering": false}],
+ "broadcasts": [{"path": "/org/bluez/hci0/pac_bcast0/fd1", "adapter": "hci0", "uuid": "1852", "big": 0, "bis": 1,
+                 "state": "active", "codec": {...LC3, as in /api/media, with channels...},
+                 "qos": {"big": 0, "bis": 1, "interval_us": 10000, "sdu": 200, "rtn": 4, "latency_ms": 20,
+                         "phy": "2M", "framed": false, "presentation_delay_us": 40000, "sync_factor": 2},
+                 "encrypted": false, "node": "bluez_output.00_00_00_00_00_00.6381.1"}],
+ "sources": [{"address": "84:17:15:2D:00:20", "device": "/org/bluez/hci0/dev_84_17_15_2D_00_20", "adapter": "hci0",
+              "name": "RTL8763E", "rssi": -60, "broadcast_id": "A327AC", "encrypted": false, "paired": true,
+              "connected": true,
+              "streams": [{"path": ".../dev_84_17_15_2D_00_20/sid0/bis1/fd0", "endpoint": ".../sid0/bis1",
+                           "big": 0, "bis": 1, "state": "idle", "codec": {...}, "location": 3,
+                           "metadata": "0302040002052003", "encrypted": false, "node": null}]}]}
+```
+
+`adapters`: which can broadcast (`broadcaster`: the controller's ISO broadcaster) and receive
+(`receiver`: sync receiver), from mgmt; `pac` is the adapter's broadcast endpoint, there once
+PipeWire registered the LE Audio broadcast source role (`null` without it). `broadcasts`: the
+board's own, a BIG each (one BIS here); `state` is the transport's: `idle` (configured, off air:
+nothing plays into it), `active` (on air), `pending`/`broadcasting` on the way. `node` is the
+PipeWire sink to play into (an Audio streams sink, `null` until PipeWire made it). `sources`: the
+broadcasters in range, strongest first (`rssi` null when not heard lately): a device with a
+Broadcast Audio Announcement (its `broadcast_id`; `name` is the Broadcast Name when it sends one),
+and its `streams` once BlueZ read its BASE — which it does on its own while the adapter scans, by
+syncing to the periodic advertising for a moment. `location` is the BIS's audio location (bits:
+front left 1, front right 2, ...), `metadata` the BASE's as hex; `encrypted` from the BIGInfo or
+the Public Broadcast Announcement. A stream's `state`: `idle`, `broadcasting` (selected, being
+synced), `active` (received: `node` is PipeWire's capture of it, which plays to the default
+output). A Broadcast Assistant's sources (BASS, `src_...` objects) are left out: the assistant
+drives them.
+
+| route | what |
+|---|---|
+| `POST /api/le-audio/broadcasts` | `{"adapter": "", "preset": "48_2_1", "channels": 2, "code": "", "presentation_delay_us": 40000}` — a new BIG of one BIS on `adapter` (default the primary), with the next free BIG handle: 201 `{"big", "pac"}` once PipeWire has its node. `preset` is BAP's broadcast configuration `8_1_1` … `48_6_2` (rate, 7.5/10 ms frames, low latency `_1` or high reliability `_2`; 44.1 kHz is not offered), `channels` 2 (front left + right in the BIS) or 1 (front left), `code` a Broadcast Code (text of up to 16 bytes, or `0x` and 32 hex digits) which encrypts it. It goes on air while something plays into its `node`. 409 when the adapter cannot broadcast or has no broadcast endpoint |
+| `DELETE /api/le-audio/broadcasts/{big}?adapter=` | the BIG's streams go (`ClearConfiguration`), and its node with them. Only off air (`state` `idle`), else 409: stop what plays into it first, and PipeWire lets the broadcast go some 6 s later (BlueZ clearing a stream PipeWire still holds left its transport half gone, and the next Acquire crashed bluetoothd) |
+| `PUT /api/le-audio/streams` | `{"path": "<a source's stream>", "receive": true, "code": ""}` — `true` selects it (`MediaTransport1.Select`): PipeWire acquires it and BlueZ syncs to the BIG; `code` first sets an encrypted one's Broadcast Code. `false` lets it go (`Unselect`). Nothing is retried: a stream that does not sync stays as BlueZ has it, and another `true` tries again |
+
+Broadcasts are found by scanning (`POST /api/bluetooth/scan` with `transport` `le`) on an adapter
+that can receive. A broadcaster bonded with the board (an LE Audio earbud or speaker that also
+broadcasts) is found like any other: the bench's BlueZ probes the announcement on a device whose
+services are resolved too. When a broadcast ends (its streams gone) BlueZ drops what it read, and
+the next announcement is read again.
+
+The board's broadcast carries no Broadcast Name: the kernel advertises it with its Broadcast ID
+alone, so receivers list it by the adapter's address (or the ID).
 
 ## Audio streams
 
@@ -621,7 +678,10 @@ from:
 With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`), Bluetooth
 first. Without it (`alsa`: PipeWire stopped or not answering) they are the loopback card's two sides when
 snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to capture), and nothing
-(`none`) otherwise. `kind`: `bluetooth`, `loopback`, `hardware`, `virtual`.
+(`none`) otherwise. `kind`: `bluetooth`, `loopback`, `hardware`, `virtual`. An LE Audio broadcast's
+node (PipeWire makes one per BIS) has its BlueZ transport as `transport` (`null` on the others) and
+says what it is: `Auracast broadcast` (the board's own, `address` null) or `Auracast from
+AA:BB:...` (one received); PipeWire's own name for it is a made-up `00 00 00 00 00 00.3986`.
 
 ### Bluetooth codecs
 

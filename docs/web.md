@@ -147,15 +147,33 @@ sends text as key presses; *Battery* sets the level hosts show. *GATT server*: a
 heart-rate counter, a battery level and an echo characteristic), its live values, and a log of
 what remote devices read, wrote and subscribed to.
 
-**Audio** — four views, from the links to the audio server. *Bluetooth*: a card per connected
+**Audio** — five views, from the links to the audio server. *Bluetooth*: a card per connected
 audio device — each audio link on it, which way it goes (*Receiving*: the device plays into the
-board; *Sending*: the board plays to it), its codec in words, its state (streaming or idle), the
-sink's reported delay and the AVRCP absolute volume, and *Listen here* on a receiving link; the
+board; *Sending*: the board plays to it) and what kind it is (A2DP, LE Audio · CIS for a unicast
+earbud or speaker, Auracast · BIS for a broadcast it receives), its codec in words, its state (streaming or idle), the
+sink's reported delay and the volume (AVRCP's absolute volume, or LE Audio's Volume Control), and
+*Listen here* on a receiving link; the
 PipeWire profile, which is the codec choice (send with SBC, SBC-XQ, AAC, aptX, LDAC, Opus — what
 the build has — both ways, receive, or HFP with CVSD/mSBC; the link renegotiates on a change);
 folded, the device's remote stream endpoints with their capabilities, and the raw configuration
 and paths. Under the cards the *AVDTP probe*: any device's own DISCOVER / GET_ALL_CAPABILITIES
 answer, connected or not, every stream endpoint with its role, codec and other capabilities.
+*LE Audio*: Auracast both ways, on the adapter that can (a picker when two can; the bar says
+whether it broadcasts, receives or both). *Broadcast from the board* starts a broadcast: the
+quality (BAP's broadcast configurations, 48 kHz 10 ms low latency first), stereo or mono, and a
+Broadcast Code to encrypt it (empty: anyone listens), the presentation delay under *Options*. Each
+broadcast is a row: BIG and BIS, *on air* or *ready · off air* (it transmits only while something
+plays into it), its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it
+(each with Stop), *Tone* for a test tone and *Stop broadcast* (which stops what plays into it,
+waits until it is off air — PipeWire lets it go a few seconds later — and then clears it). It is a sink like any other: pick
+*Auracast broadcast* as the output in Listen or Streams to send a station, a phone's audio or a
+file. The board's broadcast carries no Broadcast Name, so receivers list it by address.
+*Broadcasts in range* scans (LE, 30 s) and shows each broadcaster as a card: its name (the
+Broadcast Name), address, Broadcast ID, signal, encrypted and paired; then its streams, one per
+BIS, once BlueZ has read them (location, codec, state). *Listen* syncs to one — a Broadcast Code
+field comes first on an encrypted one — and it plays on the board's default output; *syncing…*
+until the BIG is up, *receiving* then, with *Listen here* to hear it in the browser, and *Stop*.
+Nothing is retried: a stream that does not sync stays as it is, and Listen again is the retry.
 *Players*: AVRCP only — each connected device's player with its track (title, artist, album,
 genre, track n of m), a progress bar that moves between the phone's updates, its cover art (AVRCP
 1.6, pulled over BIP) when the phone offers it, previous / rewind / play–pause / stop / fast

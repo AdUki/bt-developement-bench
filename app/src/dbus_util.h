@@ -21,7 +21,7 @@ int read_json(sd_bus_message* m, nlohmann::json* out);
 // One value of an a{sv} the daemon builds (discovery filters, GATT read/write options). Only the
 // types those need.
 struct DVar {
-  char type = 's';  // s, b, q, n, u, i, y; 'A' = as, 'Y' = ay
+  char type = 's';  // s, b, y, q, n, u, i; 'A' = as, 'Y' = ay
   std::string s;
   int64_t i = 0;
   std::vector<std::string> as;
@@ -29,6 +29,7 @@ struct DVar {
 
   static DVar str(std::string v) { DVar d; d.type = 's'; d.s = std::move(v); return d; }
   static DVar boolean(bool v) { DVar d; d.type = 'b'; d.i = v; return d; }
+  static DVar u8(uint8_t v) { DVar d; d.type = 'y'; d.i = v; return d; }
   static DVar u16(uint16_t v) { DVar d; d.type = 'q'; d.i = v; return d; }
   static DVar i16(int16_t v) { DVar d; d.type = 'n'; d.i = v; return d; }
   static DVar u32(uint32_t v) { DVar d; d.type = 'u'; d.i = v; return d; }

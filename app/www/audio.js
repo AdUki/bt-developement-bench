@@ -815,9 +815,15 @@ function renderMedia(m) {
 
 // ---------------------------------------------------------------- Bluetooth: one card a device
 
-// The board's own role on a transport is its UUID: Audio Sink (or a sink PAC) means the board
-// receives from the device.
-const receives = t => /^(110b|2bc9)$/i.test(t.uuid);
+// The board's own role on a transport is its UUID: Audio Sink (or a sink PAC, or a broadcast it
+// syncs to: Basic Audio Announcement) means the board receives from the device.
+const receives = t => /^(110b|2bc9|1851)$/i.test(t.uuid);
+// What kind of link a transport is, in words: BlueZ's UUID names are the board's PAC or role.
+const LINK_KIND = {'110a': 'A2DP', '110b': 'A2DP', '2bc9': 'LE Audio · CIS', '2bcb': 'LE Audio · CIS',
+  '1851': 'Auracast · BIS', '1852': 'Auracast · BIS'};
+const linkKind = t => LINK_KIND[(t.uuid || '').toLowerCase()] || t.profile || t.uuid;
+// AVRCP's absolute volume is 0..127; LE Audio's (the Volume Control Service) 0..255.
+const volMax = t => /^110[ab]$/i.test(t.uuid) ? 127 : 255;
 
 // Every device with a transport, a PipeWire card or stream endpoints, by address.
 function audioDevices() {
@@ -839,11 +845,12 @@ function audioDeviceCard(x) {
   const name = devName(x.address) !== x.address ? devName(x.address) : x.card ? x.card.label : x.address;
   const live = x.transports.some(t => t.state === 'active');
   const links = x.transports.slice().sort((a, b) => receives(b) - receives(a)).map(t => `<div class="ad-link">
-      <span class="ad-dir"><b>${receives(t) ? 'Receiving' : 'Sending'}</b> <span class="muted small">${esc(t.profile || t.uuid)}</span></span>
+      <span class="ad-dir"><b>${receives(t) ? 'Receiving' : 'Sending'}</b> <span class="muted small">${esc(linkKind(t))}</span></span>
       <span class="ad-codec">${codecCell(t.codec)}${t.delay_ms != null ? ` <span class="muted small">· delay ${t.delay_ms.toFixed(1)} ms</span>` : ''}</span>
       <span class="ad-state">${pill(t.state === 'active' ? 'streaming' : t.state, t.state === 'active' ? 'good' : t.state === 'pending' ? 'warn' : '')}</span>
-      <span class="ad-acts">${receives(t) ? `<button class="small-btn ad-listen" data-address="${esc(x.address)}" title="Hear what the device sends the board, in this browser">Listen here</button>` : ''}</span>
-      ${t.volume != null ? `<label class="row small ad-vol"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
+      <span class="ad-acts">${/^185[12]$/.test(t.uuid) ? '<a class="small-btn btn-link" href="#leaudio" title="Receiving a broadcast is chosen in Audio → LE Audio">LE Audio</a>'
+        : receives(t) ? `<button class="small-btn ad-listen" data-address="${esc(x.address)}" title="Hear what the device sends the board, in this browser">Listen here</button>` : ''}</span>
+      ${t.volume != null ? `<label class="row small ad-vol"><span class="muted">Volume</span> <input type="range" min="0" max="${volMax(t)}" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
         <span class="mono">${t.volume}</span></label>` : ''}
     </div>`).join('');
   // Every A2DP endpoint set has SBC (the spec makes it mandatory): one without it was discovered
@@ -858,7 +865,7 @@ function audioDeviceCard(x) {
         <td class="wrap small" title="${esc(e.capabilities)}">${esc(e.codec.summary)}</td><td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div>
     </details>` : '';
   const raw = x.transports.length ? `<details class="more-fields" data-key="raw-${esc(x.address)}"${au.adOpen['raw-' + x.address] ? ' open' : ''}><summary>Details</summary>
-      <div class="kv" style="margin-top:.4rem">${x.transports.map(t => `<span>${esc(t.profile || t.uuid)}</span><span class="mono">${esc(t.configuration)} · ${esc(t.path)}</span>`).join('')}</div></details>` : '';
+      <div class="kv" style="margin-top:.4rem">${x.transports.map(t => `<span>${esc(linkKind(t))}</span><span class="mono">${esc(t.configuration)} · ${esc(t.path)}</span>`).join('')}</div></details>` : '';
   return `<div class="card ad-card" data-address="${esc(x.address)}">
     <div class="card-head"><h3>${esc(name)} <span class="mono small muted">${esc(x.address)}</span></h3>
       ${pill(live ? 'streaming' : x.transports.length ? 'idle' : 'connected', live ? 'good' : '')}</div>
