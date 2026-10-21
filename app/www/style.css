@@ -333,6 +333,11 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 .rw-acts .dev-main { min-width: 9.5rem; text-align: center; white-space: nowrap; }
 .rw-acts .dev-rm { min-width: 8.5rem; text-align: center; white-space: nowrap; }
 .rw-acts .dev-main:disabled:has(.dots) { opacity: 0.8; }
+/* A device's row leads with its light and an icon of what it is (devices.js devKind); its details
+   line up under the name. */
+.dev-lead { display: inline-flex; align-items: center; gap: 0.6rem; }
+.dev-ic { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.rw.dev > .rw-body, .rw.dev > .rw-note { padding-left: calc(2.6rem + 20px + 0.6rem); }
 .rw-title .tag.own { align-self: center; color: var(--accent); border: 1px dashed var(--accent); background: none; }
 /* A row whose state changed (connected, paired, busy) says so briefly instead of jumping. */
 .rw.changed { animation: rw-changed 1.2s ease-out; }
@@ -548,7 +553,7 @@ body.wifi-page main { max-width: 560px; margin: 0 auto; padding: 0.5rem 16px 2re
   .rw-main { padding: 0.55rem 0.8rem; gap: 0.3rem 0.6rem; }
   /* A device's Connect and Remove go on their own line under its name. */
   .rw-acts:has(.dev-rm) { grid-column: 2 / -1; justify-content: flex-end; }
-  .rw-body, .rw-note { padding-left: 0.8rem; padding-right: 0.8rem; }
+  .rw-body, .rw-note, .rw.dev > .rw-body, .rw.dev > .rw-note { padding-left: 0.8rem; padding-right: 0.8rem; }
   .player { grid-template-columns: 76px minmax(0, 1fr); gap: 0 0.75rem; }
   .pl-art { width: 76px; height: 76px; }
   .player > .pl-controls, .player > .pl-vol-row, .player > .pl-more { grid-column: 1 / -1; }

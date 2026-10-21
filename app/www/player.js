@@ -192,8 +192,13 @@ function renderNowPlaying() {
   // Source chips: every phone, and every stream the board plays.
   // A chip names the device and the player in it: one phone can have several (Samsung Music,
   // Spotify), and the device's name alone would make them look the same.
+  // Its icon is what the device is (as in Devices), once the device list is here.
+  const devSvg = addr => {
+    const d = btState && btState.devices.find(x => sameAddr(x.address, addr));
+    return d ? DEV_SVG[devKind(d).kind] : PL_SVG.bt;
+  };
   const chips = phones().concat(inputs()).map(p => ({key: p.path, label: inputLabel(p) + (p.name ? ' · ' + p.name : ''),
-    icon: PL_SVG.bt, on: c.kind === 'phone' && c.p.path === p.path}));
+    icon: devSvg(p.address), on: c.kind === 'phone' && c.p.path === p.path}));
   boardStreams().forEach(s => chips.push({key: 'stream:' + s.id, label: streamTitle(s), icon: streamKind(s).icon,
     on: c.kind === 'board' && c.s.id === s.id}));
   // One chip only when it is not what is shown: a broadcast in range, there to be chosen.

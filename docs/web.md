@@ -111,12 +111,19 @@ when to stop, a signal filter (RSSI at least, or path loss at most), services by
 address prefix, every advertisement or only changed ones, the board visible while it scans, and
 connecting to what the prefix matches; a filter the adapter's BlueZ does not take is greyed out,
 and the options are remembered in the browser. While a scan runs its filter is spelled out beside
-the button. A device is one row: a light (green connected, pale paired, amber busy), its name,
+the button. A device is one row: a light (green connected, pale paired, amber busy), an icon of what it is,
+its name,
 address, kind, signal (bars and dBm, from the scan) and its transports (BR/EDR, LE; lit where
 connected), and the one action its state calls for — pair, connect, disconnect, or cancel a
 pairing (one button of one width, which shows the work in progress itself); a connected device also
 shows the profiles it has up (A2DP, AVRCP, HFP, HID, PAN, GATT; lit while streaming). One of the
-board's own adapters, seen advertising by the other, is tagged *this board · hciN*. Rows keep their
+board's own adapters, seen advertising by the other, is tagged *this board · hciN*. The icon is a
+computer, a phone, a wearable (a watch), a speaker, headphones (headsets, earbuds, hearing aids), a
+TV, an input device (keyboards, mice, remotes, game pads) or, for anything else, the Bluetooth
+sign; it is decided by the Class of Device (major and minor class) first, then the LE Appearance,
+then BlueZ's own `Icon`, then the services listed (HID or HID over GATT: input; Hearing Access:
+headphones; A2DP sink, ASCS or BASS: speaker), and a hover says which it came from. The same icon
+marks the device in Files → Share and on the source chips in Listen. Rows keep their
 place while they change (a connect, a pairing, a new RSSI) and only a row that changed is redrawn,
 with a short highlight when its state does; new devices go last, and the list is sorted again
 (connected, paired, then by name) when the view is opened or the filter or adapter changes. A click on the row opens the rest: each transport with its own state (connected,

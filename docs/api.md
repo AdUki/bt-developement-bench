@@ -123,6 +123,10 @@ place with `stale: true` until the next one. A device is:
 `security_level` (0 none, 1 low, 2 medium, 3 high, 4 FIPS) and `encryption_type` (0 none, 1 E0,
 2 AES-CCM) are BlueZ's experimental `SecurityLevel` and `EncryptionType`, null without them;
 `modalias` is the device's Device ID, as the adapter's.
+`class` is the Class of Device (BR/EDR; `class_major` its major class in words), `appearance` the GAP
+Appearance (LE; `appearance_name` its category), each null when the device sent none, and `icon`
+BlueZ's `Icon`, a freedesktop icon name it derives from either (`phone`, `audio-headset`, …; empty
+when it has none).
 `rssi` (and the advertising data) are only there while BlueZ has them, i.e. during and shortly after
 a scan; a connected device's live link RSSI is `GET .../link` (below). `bearers` are BlueZ's
 experimental `org.bluez.Bearer.BREDR1` and `.LE1`, one per transport the device was seen on (null

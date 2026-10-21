@@ -270,10 +270,6 @@ function setupObex() {
 const sh = {picked: [], dev: lsGet('btbench.sh.dev') || '', jobs: [], busy: false};
 
 const SH_ICON = {
-  phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
-  computer: 'M4 5h16v10H4zM2 19h20',
-  audio: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z',
-  other: 'M7 7l10 10-5 5V2l5 5L7 17',
   file: 'M6 2h8l4 4v16H6zM14 2v4h4',
   image: 'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5M15 9h.01',
   contact: 'M5 4h14v16H5zM12 11a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM8 17a4 4 0 018 0',
@@ -284,8 +280,6 @@ const SH_ICON = {
 const shSvg = d => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
 const shKind = n => /\.(jpe?g|png|gif|webp|bmp)$/i.test(n) ? 'image' : /\.vcf$/i.test(n) ? 'contact'
   : /\.(mp3|m4a|aac|flac|wav|ogg|opus)$/i.test(n) ? 'music' : /\.(mp4|mkv|mov|3gp|webm)$/i.test(n) ? 'video' : 'file';
-const shDevIcon = d => /phone/.test(d.icon || '') || d.class_major === 'phone' ? 'phone'
-  : /computer/.test(d.icon || '') || d.class_major === 'computer' ? 'computer' : /audio|headset|headphone/.test(d.icon || '') ? 'audio' : 'other';
 // How long ago, by the board's clock (now: its now_ms; one without a network may be hours off).
 const shAgo = (ms, now) => {
   const s = Math.max(0, ((now || Date.now()) - ms) / 1000);
@@ -302,7 +296,7 @@ function renderShareDevices() {
   setHTML($('sh-devs'), devs.length ? devs.map(d => {
     const ok = shCanTake(d);
     return `<button class="sh-dev${d.address === sh.dev ? ' on' : ''}" data-addr="${d.address}"${ok ? '' : ' disabled title="It offers no Object Push: it cannot receive files"'}>
-      <span class="sh-dev-i">${shSvg(SH_ICON[shDevIcon(d)])}</span><b>${esc(d.alias)}</b>
+      <span class="sh-dev-i">${shSvg(DEV_SVG[devKind(d).kind])}</span><b>${esc(d.alias)}</b>
       <span class="small muted">${ok ? (d.connected ? 'connected' : 'paired') : 'takes no files'}</span></button>`;
   }).join('') : '<div class="small muted">No paired device. Pair one in Devices, then it shows here.</div>');
   $('sh-send').disabled = sh.busy || !sh.picked.length || !sh.dev;

@@ -143,6 +143,58 @@ function sigBars(rssi) {
   return `<span class="sig s${n}" aria-hidden="true"><i></i><i></i><i></i><i></i></span>`;
 }
 
+// What a device is, for its icon. The Class of Device a BR/EDR device sends comes first: its minor
+// class is the only field that tells headphones from a speaker, and phones and PCs always send one.
+// Then the GAP Appearance an LE device may advertise, then BlueZ's Icon (derived from the same two,
+// so it rarely adds anything), and last the services it lists, for an LE device that says nothing
+// else about itself. A class or appearance that names something not drawn here (a camera, a heart
+// rate sensor) falls through to the next, and to the Bluetooth sign in the end.
+const DEV_SVG = {
+  computer: 'M4 5h16v11H4zM2 19h20',
+  phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
+  wearable: 'M9 7h6a2 2 0 012 2v6a2 2 0 01-2 2H9a2 2 0 01-2-2V9a2 2 0 012-2zM9.5 7l.5-4h4l.5 4M9.5 17l.5 4h4l.5-4',
+  speaker: 'M6 3h12v18H6zM12 17.5a3 3 0 100-6 3 3 0 000 6zM12 7h.01',
+  headphones: 'M4 15v-3a8 8 0 0116 0v3M4 14h3v6H5a1 1 0 01-1-1zM20 14h-3v6h2a1 1 0 001-1z',
+  tv: 'M3 7h18v13H3zM8 3l4 4 4-4',
+  input: 'M3 6h18v12H3zM7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8',
+  bt: 'M7 7l10 10-5 5V2l5 5L7 17',
+};
+const DEV_KIND = {computer: 'computer', phone: 'phone', wearable: 'wearable', speaker: 'speaker',
+  headphones: 'headphones', tv: 'TV', input: 'input device', bt: 'Bluetooth device'};
+// Audio/Video minor classes: headset, hands-free and headphones; loudspeaker, portable, car and
+// HiFi audio; set-top box, VCR, video monitor and display with loudspeaker.
+const COD_AV = {1: 'headphones', 2: 'headphones', 6: 'headphones', 5: 'speaker', 7: 'speaker', 8: 'speaker',
+  10: 'speaker', 9: 'tv', 11: 'tv', 14: 'tv', 15: 'tv'};
+// Appearance categories (the top ten bits): phone, computer, watch, display, remote control, HID,
+// audio sink, wearable audio (earbuds, headset, headphones, neckband), display equipment, hearing
+// aid, gaming.
+const APPEAR_KIND = {0x001: 'phone', 0x002: 'computer', 0x003: 'wearable', 0x005: 'tv', 0x006: 'input',
+  0x00f: 'input', 0x021: 'speaker', 0x025: 'headphones', 0x028: 'tv', 0x029: 'headphones', 0x02a: 'input'};
+const ICON_KIND = {computer: 'computer', phone: 'phone', 'audio-headset': 'headphones', 'audio-headphones': 'headphones',
+  'audio-card': 'speaker', 'video-display': 'tv', 'input-keyboard': 'input', 'input-mouse': 'input',
+  'input-gaming': 'input', 'input-tablet': 'input'};
+function devKind(d) {
+  const cod = d.class ? parseInt(d.class, 16) : 0;
+  const major = (cod >> 8) & 0x1f, minor = (cod >> 2) & 0x3f;
+  const byClass = major === 1 ? (minor === 7 ? 'wearable' : 'computer') : major === 2 ? 'phone'
+    : major === 4 ? COD_AV[minor] : major === 5 ? 'input' : major === 7 ? 'wearable' : '';
+  if (byClass) return {kind: byClass, from: 'class ' + d.class};
+  const byAppear = d.appearance ? APPEAR_KIND[parseInt(d.appearance, 16) >> 6] : '';
+  if (byAppear) return {kind: byAppear, from: 'appearance ' + d.appearance};
+  if (ICON_KIND[d.icon]) return {kind: ICON_KIND[d.icon], from: 'BlueZ icon ' + d.icon};
+  // HID or HID over GATT; the Hearing Access Service; an audio sink: A2DP sink, LE Audio's unicast
+  // (ASCS) or broadcast (BASS) server. A phone lists none of these as its own.
+  const has = re => (d.uuids || []).some(u => re.test(u.uuid));
+  const byUuid = has(/^(1124|1812)$/i) ? 'input' : has(/^1854$/i) ? 'headphones' : has(/^(110b|184e|184f)$/i) ? 'speaker' : '';
+  if (byUuid) return {kind: byUuid, from: 'services'};
+  return {kind: 'bt', from: ''};
+}
+function devIcon(d) {
+  const k = devKind(d);
+  const what = DEV_KIND[k.kind] + (k.from ? ' (from its ' + k.from + ')' : '');
+  return `<svg class="dev-ic" viewBox="0 0 24 24" role="img" aria-label="${esc(what)}"><title>${esc(what)}</title><path d="${DEV_SVG[k.kind]}"/></svg>`;
+}
+
 // The transports the device was seen on (BlueZ's bearers), lit where it is connected.
 const BEARER_NAME = {le: 'LE', bredr: 'BR/EDR'};
 function bearerChips(d) {
@@ -268,7 +320,7 @@ const uuidLabel = (d, u) => {
   return x ? x.name : u;
 };
 
-// One row a device: a state LED, its name with what it is, and the one action its state calls for
+// One row a device: a state LED, an icon of what it is, its name with what it is, and the one action its state calls for
 // (pair, connect or disconnect). The rest — trust, remove, profiles, a PIN, where else to take it —
 // waits behind a click on the row, since it is wanted for one device at a time.
 // A device that is one of this board's own adapters, as the other adapter sees it advertise.
@@ -357,9 +409,9 @@ function deviceRow(d) {
       </details>
     </div>`;
   }
-  return `<div class="rw click${open ? ' open' : ''}" data-dev="${a}" data-state="${led}">
+  return `<div class="rw click dev${open ? ' open' : ''}" data-dev="${a}" data-state="${led}">
     <div class="rw-main" data-act="toggle" data-key="${a}">
-      <span class="rw-led ${led}"></span>
+      <span class="dev-lead"><span class="rw-led ${led}"></span>${devIcon(d)}</span>
       <div class="rw-title"><b>${esc(d.alias || d.address)}</b>${ownAdapterTag(d)}<span class="rw-sub">${sub}</span></div>
       <div class="rw-acts">${main}<button data-act="remove" data-key="${a}" class="danger dev-rm"${dis}>${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button><span class="chev"></span></div>
     </div>
