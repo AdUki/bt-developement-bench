@@ -46,11 +46,17 @@ cover art, progress, previous / play / pause / next / stop, repeat and shuffle w
 them, the link's volume) or a stream the board plays itself (a radio station, with the cover or
 logo it sends and its description; tracks from a UPnP media server with their artist, album and
 length, and repeat and shuffle for a playlist; a test signal, with its level, which only stops; or
-anything started in Audio → Streams). Chips switch between them when there are several: one per
-phone and one per stream the board plays. Above the title it says which way the music flows, the
-same way for both: *Receiving · Bluetooth* from a device (and whether its audio is streaming into
-the board, or only its player is known), or *Playing from the board* · Internet radio, Media
-server, Test signal or Audio input; then the path, source → this board → where it plays. *Library*, a page of its own so long folders get the screen, has
+anything started in Audio → Streams), or Bluetooth audio coming in with no player to show: an
+Auracast broadcast in range (every one BlueZ has read, received or not: ▶ receives it and ■ stops,
+the title is the Program_Info it carries) or a device streaming to the board with no media control
+(an LE Audio source). Chips switch between them when there are several, or when the one there is
+not shown: one per phone, broadcaster and stream the board plays. Above the title it says which way
+the music flows, the same way for all: *Receiving · Bluetooth* or *Receiving · Auracast* from a
+device (and whether its audio is streaming into the board, or only its player is known), or
+*Playing from the board* · Internet radio, Media server, Test signal or Audio input; then the path,
+source → this board → where it plays. What comes in plays on the board's default output (PipeWire
+links it there); other outputs and this browser take a capture of it, and a broadcast not received
+yet is received first. *Library*, a page of its own so long folders get the screen, has
 *Up next* first — the phone's now-playing list (read again when its shuffle changes or the phone
 says the list changed), or the board's queue with each track's artist and length and **×** to take
 a track out; shuffled, it is in the order it plays; a click plays that track —
@@ -60,9 +66,12 @@ and a tone of any frequency and level): a station plays on its own, a track play
 its folder after it as the queue, **+** adds a track to the end of the queue and *Play next*
 right after the track playing, and ▶ on a media server's folder plays all of it (its subfolders'
 tracks too, up to 500). The board plays one
-thing of its own at a time: a station, tracks or a test signal takes the place of what it plays, on
-its outputs (and in this browser if that one was heard here), or on the outputs chosen when nothing
-plays; what phones send the board plays on beside it, each a source of its own. Under the stations a stream's URL adds
+thing of its own on an output at a time: a station, tracks or a test signal takes the place of what
+it plays, on its outputs (and in this browser if that one was heard here), or on the outputs chosen
+when nothing plays — leaving out an output that is not there any more, and on the board's default
+output when that leaves none and this browser is not listening. What plays into one of the board's
+Auracast broadcasts is the broadcast's and plays on beside it (unless the broadcast is chosen as an
+output); what phones send the board plays on beside it, each a source of its own. Under the stations a stream's URL adds
 it, named as the stream calls itself, and **×** on a station removes it. Media servers show their covers: a folder of
 albums is a grid of them (title, artist, year), an album opens with its cover, artist, year, genre,
 track count and length, *Play all*, *Play next* and *Add all*, and its tracks by number with their format
@@ -187,7 +196,7 @@ now-playing list. *Streams*: what the board plays itself. *Output for new stream
 stream started there begins — Listen's buttons: none, PipeWire's default output, or any of the
 connected Bluetooth sinks (by name and codec) and the other sinks at once — with the codec picker
 for each Bluetooth one and *also listen in this browser*. A test signal or a station started there
-takes the place of the one the board plays (one at a time); a device's audio plays beside it.
+takes the place of the one the board plays on those outputs; a device's audio plays beside it.
 *Running*, each stream with its own outputs (the same buttons: one tapped joins or leaves at once,
 the source and the others carrying on) and under them, in Listen's words, what the board does
 about them — asking, opening it, waiting for the Bluetooth link to stream, *Playing

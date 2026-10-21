@@ -5,9 +5,10 @@
 // itself (internet radio, tracks from a UPnP media server as a playlist the board plays to the end,
 // a test signal, anything started in Audio → Streams) — each with its own outputs: any of the
 // speakers the board has (one source on two Bluetooth speakers at once), and this browser. The
-// board plays one source of its own at a time, and a new one takes the place (and the outputs) of
-// the one playing; what devices send the board, each its own source, plays beside it. The bench
-// views (Audio) stay for everything else.
+// board plays one source of its own on an output at a time, and a new one takes the place (and the
+// outputs) of the one playing; what devices send the board (a phone, an Auracast broadcast it
+// receives), each its own source, and a broadcast's programme play beside it. The bench views
+// (Audio) stay for everything else.
 //
 // The board's playlist lives in the daemon (a URL stream's playlist): closing the page does not
 // stop the music, and another phone opening the page sees the same queue.
@@ -131,18 +132,49 @@ const streamTitle = s => TEST_SIGNALS.includes(s.source.type) ? signalTitle(s.so
 const phones = () => (pl.media ? pl.media.players : []).filter(p => p.name || p.browsable || (p.track && p.track.title) ||
   /\/avrcp\//.test(p.path));
 
+// Bluetooth audio coming into the board with no player of the device's to show for it, each a
+// source shown the way a phone's is (`input` set): an Auracast broadcast in range — every one
+// BlueZ has read, received or not, so one can be chosen here and play and stop receive it — and a
+// device that streams to the board with no media control (an LE Audio source). A broadcaster's
+// BISes are one source.
+const sameAddr = (a, b) => !!a && !!b && a.toUpperCase() === b.toUpperCase();
+function inputs() {
+  const ts = pl.media ? pl.media.transports : [], ps = phones();
+  const out = [];
+  for (const t of ts) {
+    const bcast = /^1851$/i.test(t.uuid);
+    if (!bcast && !(/^(110b|2bc9)$/i.test(t.uuid) && t.state !== 'idle' && !ps.some(p => sameAddr(p.address, t.address)))) continue;
+    const key = 'in:' + (bcast ? t.device : t.path);
+    let x = out.find(o => o.path === key);
+    if (!x) {
+      x = {path: key, input: true, broadcast: bcast, address: t.address, device_name: t.device_name, name: '', transports: [], track: {}};
+      out.push(x);
+    }
+    x.transports.push(t);
+  }
+  out.forEach(x => {
+    const st = x.transports.map(t => t.state);
+    x.receiving = st.some(v => v === 'active' || v === 'broadcasting');
+    x.status = x.receiving ? 'playing' : st.includes('pending') ? 'syncing' : x.broadcast ? 'not received' : 'stopped';
+    x.transport = x.transports[0].path;
+    x.track = {title: x.transports.map(t => t.program_info).find(Boolean) || ''};
+  });
+  return out;
+}
+
 // The source on screen: the one chosen if it is still there, else what this view started, else a
 // URL stream, any stream the board plays, a phone that plays, any phone.
 function current() {
   const bs = boardStreams();
-  const ps = phones();
+  const ps = phones(), ins = inputs();
   const chosenS = bs.find(s => pl.src === 'stream:' + s.id);
   if (chosenS) return {kind: 'board', s: chosenS};
-  const chosen = ps.find(p => p.path === pl.src);
+  const chosen = ps.concat(ins).find(p => p.path === pl.src);
   if (chosen) return {kind: 'phone', p: chosen};
   const b = bs.find(s => s.id === pl.boardId) || bs.find(s => s.source.type === 'url') || bs[0];
   if (b) return {kind: 'board', s: b};
-  const playing = ps.find(p => p.status === 'playing');
+  // A broadcast in range is shown when chosen or received, not just for being there.
+  const playing = ps.find(p => p.status === 'playing') || ins.find(p => p.receiving);
   if (playing || ps[0]) return {kind: 'phone', p: playing || ps[0]};
   return {kind: 'none'};
 }
@@ -160,17 +192,29 @@ function renderNowPlaying() {
   // Source chips: every phone, and every stream the board plays.
   // A chip names the device and the player in it: one phone can have several (Samsung Music,
   // Spotify), and the device's name alone would make them look the same.
-  const chips = phones().map(p => ({key: p.path, label: (p.device_name || devName(p.address)) + (p.name ? ' · ' + p.name : ''),
+  const chips = phones().concat(inputs()).map(p => ({key: p.path, label: inputLabel(p) + (p.name ? ' · ' + p.name : ''),
     icon: PL_SVG.bt, on: c.kind === 'phone' && c.p.path === p.path}));
   boardStreams().forEach(s => chips.push({key: 'stream:' + s.id, label: streamTitle(s), icon: streamKind(s).icon,
     on: c.kind === 'board' && c.s.id === s.id}));
-  setHTML($('np-src'), chips.length > 1 ? chips.map(x =>
+  // One chip only when it is not what is shown: a broadcast in range, there to be chosen.
+  setHTML($('np-src'), chips.length > 1 || (chips.length && !chips[0].on) ? chips.map(x =>
     `<button class="chip${x.on ? ' on' : ''}" data-src="${esc(x.key)}">${svg(x.icon)}${esc(x.label)}</button>`).join('') : '');
 
   let artSrc = '', artLoading = false, ph = PL_SVG.note;
   let art = svg(ph, 'ph'), title = 'Nothing playing', sub = '', sub2 = '', playing = false, pos = 0, dur = 0;
   let can = {prev: false, next: false, play: false, stop: false};
-  if (c.kind === 'phone') {
+  if (c.kind === 'phone' && c.p.input) {
+    // A broadcast or an LE Audio source: what the broadcaster says it plays (its Program_Info), the
+    // codec, and play/stop to receive it or stop (nothing to control on the device).
+    const p = c.p, t0 = p.transports[0];
+    playing = p.receiving;
+    title = p.track.title || inputLabel(p);
+    sub = p.track.title ? inputLabel(p) : '';
+    sub2 = t0.codec ? t0.codec.summary : '';
+    ph = PL_SVG.bt;
+    art = svg(ph, 'ph');
+    can = {prev: false, next: false, play: p.broadcast, stop: p.broadcast && p.status !== 'not received'};
+  } else if (c.kind === 'phone') {
     const p = c.p, t = p.track || {};
     playing = p.status === 'playing';
     title = t.title || 'Nothing playing';
@@ -254,7 +298,7 @@ function renderNowPlaying() {
   setHTML($('np-ctl'), '<div class="np-row">' + btn('previous', PL_SVG.previous, can.prev) +
     btn('play', PL_SVG.play, can.play) + btn('pause', PL_SVG.pause, can.play) +
     btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop) + '</div><div class="np-row">' +
-    (c.kind === 'phone' ? modeButtons('np-btn', btRepeat(c.p.repeat), c.p.shuffle == null ? null : c.p.shuffle !== 'off')
+    (c.kind === 'phone' && !c.p.input ? modeButtons('np-btn', btRepeat(c.p.repeat), c.p.shuffle == null ? null : c.p.shuffle !== 'off')
       : c.kind === 'board' && isUrl(c.s) && (c.s.source.playlist || []).length > 1 ? modeButtons('np-btn', boardRepeat(c.s.source.repeat), !!c.s.source.shuffle) : '') +
     (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : '') + '</div>');
   // The library page's bar: the track, and play/pause and next, to skip without leaving the list.
@@ -280,15 +324,19 @@ function npFrom(c) {
   const lower = n => n.replace(/^The /, 'the ');
   const outs = s => (s ? streamOuts(s).map(v => lower(outName(v))) : []).concat(s && pl.hearId === s.id ? ['this browser'] : []);
   if (c.kind === 'phone') {
-    const ts = (pl.media ? pl.media.transports : []).filter(t => t.address === c.p.address && /^(110b|2bc9)$/i.test(t.uuid));
-    const on = ts.some(t => t.state === 'active');
+    const ts = c.p.input ? c.p.transports : (pl.media ? pl.media.transports : []).filter(t => t.address === c.p.address && /^(110b|2bc9)$/i.test(t.uuid));
+    const on = ts.some(t => t.state === 'active' || t.state === 'broadcasting');
     const s = phoneStream(c.p);
     // PipeWire links what a phone sends to the default output on its own; a capture of it can take
     // it on to a speaker (a tunnel) and to browsers as well.
     const to = (hasOut(s) ? streamOuts(s).map(v => lower(outName(v))) : ['the board’s default output']).concat(s && pl.hearId === s.id ? ['this browser'] : []);
-    return tag(PL_SVG.into, 'bt', 'Receiving · Bluetooth') +
-      `<span class="np-state ${on ? 'good-text' : ''}">${on ? 'streaming into the board' : ts.length ? 'connected, not streaming' : 'remote control only, no audio link'}</span>` +
-      flow([c.p.device_name || devName(c.p.address), 'this board', to.join(' + ')]);
+    const bc = c.p.input && c.p.broadcast;
+    const state = on ? (bc ? 'received by the board' : 'streaming into the board')
+      : bc ? (c.p.status === 'syncing' ? 'syncing to it…' : 'in range: play receives it')
+      : ts.length ? 'connected, not streaming' : 'remote control only, no audio link';
+    return tag(PL_SVG.into, 'bt', bc ? 'Receiving · Auracast' : 'Receiving · Bluetooth') +
+      `<span class="np-state ${on ? 'good-text' : ''}">${state}</span>` +
+      flow([inputLabel(c.p), 'this board', to.join(' + ')]);
   }
   if (c.kind === 'board') {
     const s = c.s, to = outs(s);
@@ -301,7 +349,7 @@ function npFrom(c) {
 // Repeat or shuffle pressed: the phone's player's setting, or the board's playlist's.
 function npMode(mode) {
   const c = current();
-  if (c.kind === 'phone') {
+  if (c.kind === 'phone' && !c.p.input) {
     const p = c.p;
     const body = mode === 'repeat' ? {repeat: btRepeatValue(nextRepeat(btRepeat(p.repeat)))} : {shuffle: p.shuffle === 'off' ? 'alltracks' : 'off'};
     return put('/media/players', Object.assign({path: p.path}, body)).catch(fail);
@@ -327,7 +375,7 @@ function volumeTarget(c) {
   const ts = pl.media ? pl.media.transports : [];
   if (c.kind === 'phone') {
     const t = ts.find(x => x.path === c.p.transport);
-    return t && t.volume != null ? {kind: 'transport', path: t.path, value: Math.round(t.volume / 127 * 100)} : null;
+    return t && t.volume != null ? {kind: 'transport', path: t.path, max: transportVolMax(t), value: Math.round(t.volume / transportVolMax(t) * 100)} : null;
   }
   if (c.kind === 'board') {
     const s = c.s;
@@ -338,7 +386,7 @@ function volumeTarget(c) {
     // its "Audio Source" side — the other is what the device would send the board.
     const same = x => ep && ep.address && x.address && x.address.toUpperCase() === ep.address.toUpperCase() && x.volume != null;
     const t = ts.find(x => same(x) && /source/i.test(x.profile || '')) || ts.find(same);
-    if (t) return {kind: 'transport', path: t.path, value: Math.round(t.volume / 127 * 100)};
+    if (t) return {kind: 'transport', path: t.path, max: transportVolMax(t), value: Math.round(t.volume / transportVolMax(t) * 100)};
     return {kind: 'gain', id: s.id, value: Math.round(Math.pow(10, s.gain_db / 40) * 100)};
   }
   return null;
@@ -354,7 +402,7 @@ function renderVolume(c) {
 function setVolume(value) {
   const v = pl.vol;
   if (!v) return;
-  if (v.kind === 'transport') put('/media/transport', {path: v.path, volume: Math.round(value / 100 * 127)}).catch(fail);
+  if (v.kind === 'transport') put('/media/transport', {path: v.path, volume: Math.round(value / 100 * v.max)}).catch(fail);
   else if (v.kind === 'browser') npAudio.volume = value / 100;
   // 0..100 as -60..0 dB on a square-law curve: the slider's middle is about half as loud.
   else put(`/audio/streams/${v.id}`, {gain_db: value <= 0 ? -60 : Math.max(-60, 40 * Math.log10(value / 100))}).catch(fail);
@@ -362,6 +410,7 @@ function setVolume(value) {
 
 function npAction(a) {
   const c = current();
+  if (c.kind === 'phone' && c.p.input) return c.p.broadcast ? receiveBroadcast(c.p, a === 'play') : null;
   if (c.kind === 'phone') return playerAction(c.p.path, a);
   if (c.kind !== 'board') return;
   const s = c.s;
@@ -378,6 +427,22 @@ function npAction(a) {
     if (a === 'play') hearConnect();
   }
   put(`/audio/streams/${s.id}`, body).catch(fail);
+}
+
+// A device in words: its name, and for a broadcast what it is.
+function inputLabel(p) {
+  const name = p.device_name || devName(p.address);
+  return p.input && p.broadcast ? 'Auracast · ' + name : name;
+}
+// AVRCP's absolute volume is 0..127, LE Audio's (the Volume Control Service) 0..255.
+const transportVolMax = t => /^110[ab]$/i.test(t.uuid) ? 127 : 255;
+
+// A broadcast received or let go: every BIS of it (Select on each, as Audio → LE Audio does), with
+// the Broadcast Code typed there if it is encrypted. Resolves once BlueZ answered.
+function receiveBroadcast(p, on) {
+  const codes = typeof la !== 'undefined' ? la.codes : {};
+  return Promise.all(p.transports.map(t => put('/le-audio/streams', {path: t.path, receive: on, code: codes[t.path] || ''})))
+    .catch(fail).finally(() => { api('/media').then(m => { pl.media = m; renderNowPlaying(); }).catch(() => {}); });
 }
 
 // ---------------------------------------------------------------- hearing it in this browser
@@ -529,7 +594,7 @@ function renderQueue(c) {
         <span class="tr-n">${now ? svg(PL_SVG.play) : i + 1}</span>
         <span class="tr-t">${esc(t)}${it.artist ? ` <span class="muted">${esc(it.artist)}</span>` : ''}</span></div>`;
     }).join('');
-    note = c.p.browsable ? '' : 'This player does not share its list';
+    note = c.p.browsable || c.p.input ? '' : 'This player does not share its list';
   }
   setText($('np-q-note'), note);
   const waiting = c.kind === 'phone' && c.p.browsable && pl.queueBusy && !pl.queueItems.length;
@@ -971,9 +1036,9 @@ const playlistItem = it => ({url: it.url, title: it.title, artist: it.artist || 
   duration_ms: it.duration_s ? Math.round(it.duration_s * 1000) : null, art: it.art || ''});
 
 // What the board plays from the library: one stream with the tracks as its playlist. It takes the
-// place of the board's own stream playing (the daemon plays one at a time), on that one's outputs
+// place of the board's own stream playing (the daemon plays one to an output), on that one's outputs
 // and in this browser if that one was heard here; with none, it starts on the outputs chosen. What
-// devices send the board plays on beside it. What a UPnP server said of a track is kept here by URL
+// devices send the board, and a broadcast's programme, play on beside it. What a UPnP server said of a track is kept here by URL
 // too (its length in seconds, for the progress bar).
 function playOnBoard(items) {
   items.forEach(it => { pl.art[it.url] = it; });
@@ -982,16 +1047,33 @@ function playOnBoard(items) {
   s => { pl.boardId = s.id; });
 }
 
-// The board's own stream playing (a station, tracks, a test signal): one at most.
-const localStream = () => boardStreams().find(s => s.source.type !== 'capture') || null;
+// An output that is an LE Audio broadcast of the board's (its node carries the transport).
+const outIsBroadcast = v => { const e = outEndpoint(v); return !!(e && e.transport); };
+// The board's own stream playing (a station, tracks, a test signal) that what the library plays
+// takes the place of: the one shown, else the one this view started, else any. A broadcast's
+// programme is not one: it is the broadcast's (Audio → LE Audio), and plays on beside the music
+// unless the broadcast is chosen as an output here.
+function localStream() {
+  const own = s => s.source.type !== 'capture' && !(hasOut(s) && streamOuts(s).every(outIsBroadcast));
+  const c = current(), bs = boardStreams().filter(own);
+  return (c.kind === 'board' && bs.includes(c.s) ? c.s : null) || bs.find(s => s.id === pl.boardId) || bs[0] || null;
+}
 
 // A stream of the board's own started (`body` without its outputs), in the place of the one
-// playing: on its outputs and in this browser as it was, else on the outputs chosen.
+// playing: on its outputs and in this browser as it was, else on the outputs chosen. Outputs that
+// are not there (a speaker that went away) are left out, and with none left and this browser not
+// listening it plays on the board's default output rather than nowhere.
 function playLocal(body, started) {
   const old = localStream();
-  const sinks = old ? old.sinks || [] : outSinks(pl.outs);
+  const there = k => !k.target || !pl.endpoints || pl.endpoints.sinks.some(e => e.id === k.target);
+  const want = old ? old.sinks || [] : outSinks(pl.outs);
+  let sinks = want.filter(there);
   const listen = old ? pl.hearId === old.id || (!sinks.length && pl.listen) : pl.listen;
-  if (!sinks.length && !listen) { toast('Choose an output in "Play to", or tick "Listen in this browser".'); return; }
+  if (!sinks.length && !listen) {
+    sinks = [outSink('default')];
+    toast(want.length ? `${want.map(k => outName(sinkOut(k))).join(', ')} is not there: playing on the board’s default output.`
+      : 'Playing on the board’s default output: choose others in “Play to”.');
+  }
   pl.sw = null;
   if (old && pl.hearId === old.id) hearStop();
   post('/audio/streams', Object.assign({}, body, {sinks})).then(s => {
@@ -1320,6 +1402,8 @@ function pickOut(v) {
   pl.sw = sw;
   renderOuts();
   if (phone && !b) {
+    // A broadcast in range is received first: its node comes once the board synced to it.
+    if (phone.input && phone.broadcast && !phone.receiving) receiveBroadcast(phone, true);
     listenToDevice(phone.address, s => {
       if (pl.sw !== sw) return;
       sw.seq = s.sink_req || 0;
@@ -1362,6 +1446,7 @@ function pickListen(on) {
       hear(b.id);
     } else if (on && !pl.hearBusy) {
       pl.hearBusy = true;
+      if (c.p.input && c.p.broadcast && !c.p.receiving) receiveBroadcast(c.p, true);
       listenToDevice(c.p.address, s => hear(s.id)).finally(() => { pl.hearBusy = false; refreshPlayerStreams(); });
     } else if (!on && b && pl.hearId === b.id) {
       hearStop();

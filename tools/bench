@@ -1029,7 +1029,7 @@ ${bold}Audio${off}
   codec [ADDR [PROFILE]]          a device's codecs (PipeWire profiles), or switch: a2dp-sink-sbc_xq
   play tone [HZ]|sweep|noise [COLOUR]|silence|url URL|capture SOURCE [TARGET]
                                   start a stream into TARGET (default sink; - = listen only;
-                                  A+B = both): a tone, sweep, noise or URL replaces the one playing
+                                  A+B = both): a tone, sweep, noise or URL replaces the one on TARGET
   radio [NAME [TARGET]]           the station list, or play one
   streams | stop ID|all           the running streams (levels, titles) / stop them
   listen ID                       hear a stream here (curl | pw-play)

@@ -459,8 +459,8 @@ board's player"). btbenchd registers it with BlueZ (`org.bluez.Media1.RegisterPl
 `position` where in it the track is. `stream` is the audio stream that plays it
 (`/api/audio/streams/{id}`), `sink` the endpoint it plays into: the Bluetooth sink (PipeWire's
 default sink if that is one, else the first), or PipeWire's default sink when there is none. It
-is a local stream (Audio streams): playing takes the place of what the board plays of its own,
-and a test signal or URL started elsewhere ends the player's (it is then stopped).
+is a local stream (Audio streams): playing takes the place of what the board plays of its own on
+that sink, and a test signal or URL started elsewhere on it ends the player's (it is then stopped).
 `registered` lists the adapters BlueZ took it on; `error` says why the last play or registration
 failed. `library` is the whole tree, ids are stable while btbenchd runs. `position_ms` is how far
 into the track it is (paused time not counted); `repeat` (`off`, `track`, `all`) and `shuffle` are
@@ -576,10 +576,12 @@ processes (`pw-cat` in PipeWire mode, one per sink; `aplay`/`arecord` for plain 
 as the loopback card; `mpg123` or `ffmpeg` for URLs). With PipeWire stopped only the ALSA devices
 are there to play into or capture from. At most 4 run at once.
 
-One **local** stream plays at a time: a test signal or a URL (what the board plays of its own). A
-new one takes the place of the one playing, which is stopped and forgotten as `DELETE` would; it
-does not inherit its sinks, the request names them. Captures (what devices send the board, two
-phones at once say) are not local: any number of them run beside it.
+One **local** stream plays to an output at a time: a test signal or a URL (what the board plays of
+its own). A new one takes the place of those playing to any of its sinks, and of those with no sink
+(only browsers hear them), which are stopped and forgotten as `DELETE` would; it does not inherit
+their sinks, the request names them. Local streams on other outputs play on beside it (a broadcast's
+programme and music on a speaker). Captures (what devices send the board, two phones at once say)
+are not local: any number of them run beside it.
 
 `POST /api/audio/streams` (201):
 

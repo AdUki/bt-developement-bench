@@ -1549,15 +1549,26 @@ bool AudioEngine::create(const json& body, json* out, std::string* err, int* sta
     return false;
   }
   std::shared_ptr<Stream> s;
-  // One local stream plays at a time: a new one takes the place of the one playing, which is
-  // stopped first (its sinks free for the new one) and forgotten. Captures stay, any number.
+  // One local stream plays to an output at a time: a new one takes the place of those playing to
+  // any of its outputs, and of those only browsers hear, which are stopped first (their sinks free
+  // for the new one) and forgotten. The rest stay, so a broadcast's programme and the music on a
+  // speaker play side by side. Captures stay, any number.
   if (is_local(spec.source)) {
+    const auto shares = [&spec](const std::vector<SinkSpec>& sinks) {
+      if (sinks.empty()) return true;
+      for (const SinkSpec& a : sinks)
+        for (const SinkSpec& b : spec.sinks)
+          if (a.type == b.type && a.target == b.target) return true;
+      return false;
+    };
     std::vector<int> old;
     {
       std::lock_guard<std::mutex> lk(m_);
       for (const auto& [id, st] : streams_) {
         std::lock_guard<std::mutex> lk2(st->m);
-        if ((st->state == "starting" || st->state == "running") && is_local(st->spec.source)) old.push_back(id);
+        if ((st->state == "starting" || st->state == "running") && is_local(st->spec.source) &&
+            shares(st->spec.sinks))
+          old.push_back(id);
       }
     }
     for (const int id : old) {
