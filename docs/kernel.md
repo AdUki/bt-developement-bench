@@ -107,9 +107,11 @@ make linux-commit         # keep it
 
 **`make src-linux`.** `src/linux` is a submodule of the repository, the bench's fork
 (`github.com/AdUki/linux`) on its branch `bench`: bluetooth-next at the image's pin plus the
-bench's fixes as commits (the dwc2 gadget one). `make src-linux` checks it out, shallow (one
-commit, not the history), at the commit the repository records, which is the image's kernel. A
-tree already there is left alone. See docs/dev.md "The forks" for changes, pushing and bumping.
+bench's fixes as commits (the dwc2 gadget one, and Bluetooth fixes on their way upstream: LE
+Audio broadcast source, advertising, cancelling pending connections). `make src-linux` checks it
+out, shallow (one commit, not the history), at the commit the repository records, which is the
+image's kernel. A tree already there is left alone. See docs/dev.md "The forks" for changes,
+pushing and bumping.
 
 **`make src-linux-rpi`.** A blobless clone of raspberrypi/linux at the revision the image's
 `linux-raspberrypi` recipe uses (read with `bitbake -e`).

@@ -48,7 +48,8 @@ refuses one.
 
 Every fork has upstream's `master` (bluetooth-next's for the kernel, under the upstream remote)
 and a branch `bench`: the image's pin and the bench's commits on top (BlueZ: AVRCP browsing in the
-target role and its fixes; the kernel: the dwc2 gadget fix). The recipes fetch from the forks
+target role and its fixes; the kernel: the dwc2 gadget fix and Bluetooth fixes on their way
+upstream, see [upstream.md](upstream.md)). The recipes fetch from the forks
 (`BTBENCH_<COMP>_GIT` in `yocto/conf/versions.conf`) at `BTBENCH_<COMP>_SRCREV`, which is the
 submodule's commit: the same commit recorded twice, by git for the tree and by bitbake for the
 image.
