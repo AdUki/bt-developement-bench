@@ -1112,6 +1112,18 @@ void BtManager::on_reply(const std::string& path, const std::string& method, con
   // it only cancelled a Connect still in progress.
   if (e && method == "Disconnect" && is_error(e, "org.bluez.Error.NotConnected")) e = nullptr;
   const std::string addr = address_from_path(path);
+  if (method == "RemoveDevice") {
+    if (e) {
+      LOG_WARN("bluetooth: RemoveDevice {} failed: {} ({})", addr, friendly(e), e->name);
+      set_device_state(path, "", "RemoveDevice: " + friendly(e));
+    } else {
+      LOG_INFO("bluetooth: removed {}", addr);
+      std::lock_guard<std::mutex> lk(m_);
+      dev_state_.erase(path);
+    }
+    dirty_ = true;
+    return;
+  }
   if (method == "Pair") {
     started_here_.erase(path);
     if (pending_ && pending_->dev_path == path) clear_request(false);
@@ -1689,6 +1701,7 @@ bool BtManager::device_action(const std::string& address, Action action, const s
     if (action == Action::Connect) s.busy = "connecting";
     if (action == Action::Disconnect || action == Action::DisconnectBearer) s.busy = "disconnecting";
     if (action == Action::ConnectBearer) s.busy = "connecting";
+    if (action == Action::Remove) s.busy = "removing";
     s.busy_on = action == Action::ConnectBearer || action == Action::DisconnectBearer ? arg
                 : action == Action::Pair || action == Action::Remove ? std::string{} : uuid_full(arg);
   }
@@ -1731,18 +1744,25 @@ bool BtManager::device_action(const std::string& address, Action action, const s
                     arg == "le" ? kBearerLeIface : kBearerBredrIface, arg);
         break;
       case Action::Remove: {
+        // Asynchronous like the rest: removing a connected device disconnects it first, which takes
+        // BlueZ seconds, and the row says "Removing" meanwhile. The device's state goes with it.
         const std::string apath = path.substr(0, path.rfind('/'));
-        sd_bus_error e = SD_BUS_ERROR_NULL;
-        if (sd_bus_call_method(bus, kBluez, apath.c_str(), kAdapterIface, "RemoveDevice", &e,
-                               nullptr, "o", path.c_str()) < 0) {
-          set_device_state(path, "", "RemoveDevice: " + friendly(&e));
-        } else {
-          LOG_INFO("bluetooth: removed {}", address_from_path(path));
-          std::lock_guard<std::mutex> lk(m_);
-          dev_state_.erase(path);
+        sd_bus_message* m = nullptr;
+        int r = sd_bus_message_new_method_call(bus, &m, kBluez, apath.c_str(), kAdapterIface, "RemoveDevice");
+        if (r >= 0) r = sd_bus_message_append(m, "o", path.c_str());
+        auto* op = new BtBus::AsyncOp{this, path, "RemoveDevice", kAdapterIface};
+        sd_bus_slot* slot = nullptr;
+        if (r >= 0) r = sd_bus_call_async(bus, &slot, m, BtBus::async, op, s_to_ns(kConnectTimeoutS) / 1000);
+        sd_bus_message_unref(m);
+        if (r < 0) {
+          delete op;
+          set_device_state(path, "", std::string("RemoveDevice: ") + strerror(-r));
+          break;
         }
-        sd_bus_error_free(&e);
-        dirty_ = true;
+        sd_bus_slot_set_destroy_callback(slot, [](void* p) { delete static_cast<BtBus::AsyncOp*>(p); });
+        sd_bus_slot_set_floating(slot, 1);
+        sd_bus_slot_unref(slot);
+        changed(false);
         break;
       }
     }

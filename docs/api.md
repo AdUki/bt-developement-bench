@@ -130,9 +130,10 @@ for the other): a dual-mode device has both, each with its own connection and pa
 `preferred_bearer` is the transport a dual-mode device connects on first (`last-used`, `bredr`,
 `le`, `last-seen`; null for a single-mode one). `last_disconnect` is the last time one of its
 bearers went down and why (BlueZ's `Disconnected` signal: `unknown`, `timeout`, `local`, `remote`,
-`authentication`, `suspend`), kept until btbenchd restarts. `busy` is `pairing`, `connecting` or `disconnecting` while one of those runs, and `busy_on` what it
-is about: a bearer (`le`, `bredr`), a profile's full UUID, or empty for the whole device; `error` is the
-last operation's failure in BlueZ's words, kept until the next one, `error_on` likewise.
+`authentication`, `suspend`), kept until btbenchd restarts. `busy` is `pairing`, `connecting`,
+`disconnecting` or `removing` while one of those runs, and `busy_on` what it is about: a bearer
+(`le`, `bredr`), a profile's full UUID, or empty for the whole device; `error` is the last
+operation's failure in BlueZ's words, kept until the next one, `error_on` likewise.
 `profiles` (empty unless connected) is what the device has up, from its BlueZ objects: `a2dp` and
 `le-audio` per media transport (`detail` says `receiving` or `sending` — the board's side — and the
 codec; `state` is the transport's `idle`, `pending` or `active`), `avrcp` (its player's name),
@@ -221,7 +222,7 @@ auto_connect without a pattern, values out of range).
 | `GET .../link` | | a connected device's link as the controller measures it, per connected bearer: `{"bredr": {rssi, rssi_relative, tx_power, max_tx_power} \| {error} \| null, "le": ...}`, through `btmgmt conn-info` (mgmt Get Connection Information), asked when called. BR/EDR's `rssi` is relative (`rssi_relative`: dB from the controller's golden receive power range, 0 inside it), LE's in dBm; a null value is one the controller does not know |
 | `POST .../trust`, `.../untrust`, `.../block`, `.../unblock` | | the `Trusted` / `Blocked` property |
 | `PUT /api/bluetooth/devices/{addr}` | any of `alias`, `trusted`, `blocked`, `wake_allowed`, `preferred_bearer` (`last-used`, `bredr`, `le`, `last-seen`; effective once disconnected) | properties; answers with the device |
-| `DELETE /api/bluetooth/devices/{addr}` | | `RemoveDevice()`: forget it, bond and all |
+| `DELETE /api/bluetooth/devices/{addr}` | | `RemoveDevice()`: forget it, bond and all; `busy` is `removing` until it is gone |
 
 404 for an address BlueZ does not know (scan first), 503 when Bluetooth is not running.
 

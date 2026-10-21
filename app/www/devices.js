@@ -361,7 +361,7 @@ function deviceRow(d) {
     <div class="rw-main" data-act="toggle" data-key="${a}">
       <span class="rw-led ${led}"></span>
       <div class="rw-title"><b>${esc(d.alias || d.address)}</b>${ownAdapterTag(d)}<span class="rw-sub">${sub}</span></div>
-      <div class="rw-acts">${main}<button data-act="remove" data-key="${a}" class="danger dev-rm">${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button><span class="chev"></span></div>
+      <div class="rw-acts">${main}<button data-act="remove" data-key="${a}" class="danger dev-rm"${dis}>${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button><span class="chev"></span></div>
     </div>
     ${d.error && (!d.error_on || !open) ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
     ${body}
