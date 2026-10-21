@@ -257,9 +257,9 @@ function upsertStream(s) {
   swAdvance(sw, s, au);
   q('.st-outs').hidden = !live;
   if (live) setHTML(q('.st-outs'), outButtonsHTML(outOptions(false, au), streamOuts(s), sw, au));
-  const line = outLine(s, sw && sw.phase !== 'done' ? sw : null, au) || {cls: s.listeners ? 'good' : 'warn',
+  const line = outLine(s, sw && sw.phase !== 'done' ? sw : null, au) || {cls: s.listeners ? 'good' : '',
     html: s.listeners ? `No board output: ${s.listeners} browser${s.listeners > 1 ? 's' : ''} listening.`
-      : 'No board output and nobody listening: the board stops it in 30 s.'};
+      : 'No board output and nobody listening: it plays on until stopped.'};
   q('.st-out-status').hidden = !live;
   if (live) outStatusHTML(q('.st-out-status'), line);
   q('.st-listen').hidden = !live;

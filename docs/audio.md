@@ -194,8 +194,8 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
   bytes win over the header, as Shoutcast servers send AAC as `audio/mpeg`.
 - **CPU.** The Zero W has one core: a decoder plus pw-cat into an SBC sink is the heaviest kind
   of stream, a generator into a sink the lightest. Watch the console's CPU readout (or Traffic →
-  Graphs) while one runs. At most four streams run at once, and one that plays nowhere ends after
-  30 s with nobody listening.
+  Graphs) while one runs. At most four streams run at once; one that plays nowhere still runs
+  until it is stopped.
 - **Real time.** The capture and the sink (pw-cat, or arecord/aplay) run SCHED_FIFO 30, the
   decoder at the pump's nice -15. pw-cat moves each graph cycle (512 frames, 10.7 ms) in its main
   loop: at a nice value the Zero W had it late about once a second, and PipeWire dropped that cycle

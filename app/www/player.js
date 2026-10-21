@@ -1319,7 +1319,7 @@ function outStatus(b, phone) {
   const browser = here ? (npAudio.paused || npAudio.readyState < 3 ? ' This browser is connecting…' : ' Also in this browser.') : '';
   if (sw && sw.phase === 'failed') {
     return {cls: 'bad', html: outLine(b, sw).html +
-      (here ? ' Still playing in this browser.' : b && !hasOut(b) ? ' Pick another output, or listen in this browser: with neither, the board stops in 30 s.' : '')};
+      (here ? ' Still playing in this browser.' : b && !hasOut(b) ? ' It plays on: pick another output, or listen in this browser.' : '')};
   }
   if (sw && sw.phase !== 'done') return outLine(b, sw);
   if (!b && phone) {
@@ -1333,16 +1333,16 @@ function outStatus(b, phone) {
   const line = outLine(b, null);
   if (hasOut(b)) return line.cls === 'good' || line.cls === 'warn' ? {cls: line.cls, html: line.html + browser} : line;
   if (line) {
-    return {cls: 'bad', html: line.html +
-      (here ? ' Still playing in this browser.' : ' Pick another output, or listen in this browser: with neither, the board stops in 30 s.')};
+    return {cls: 'warn', html: line.html +
+      (here ? ' Still playing in this browser.' : ' It plays on: pick another output, or listen in this browser.')};
   }
   if (here) {
     const where = phone ? ' (and on the board’s default output)' : '';
     return {cls: browser.includes('connecting') ? 'busy' : 'good', html: browser.includes('connecting') ? 'Connecting this browser…' : `Playing in this browser${where}.`};
   }
   const others = b.listeners;
-  return {cls: 'warn', html: others ? `Playing to ${others} other browser${others > 1 ? 's' : ''} only.`
-    : 'Playing to no output: pick one, or listen in this browser. With neither, the board stops in 30 s.'};
+  return {cls: '', html: others ? `Playing to ${others} other browser${others > 1 ? 's' : ''} only.`
+    : 'Playing, to no output: pick one, or listen in this browser.'};
 }
 
 // PipeWire's words for an output that is not there.

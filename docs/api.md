@@ -635,9 +635,9 @@ first), is the spec as normalised plus:
  "track": 0, "track_seconds": 12.3, "paused": false}
 ```
 
-`state`: `starting`, `running`, `ended` (a file or sweep finished; a stream that plays nowhere and
-was not listened to for 30 s ends too, saying so in `error`), `failed` (`error` has the tool's
-last words: a refused URL, the sink it started with gone and nobody listening), `stopped`. `level`
+`state`: `starting`, `running`, `ended` (a file or sweep finished), `failed` (`error` has the
+tool's last words: a refused URL, none of the sinks it started with would open), `stopped`. A
+stream that plays nowhere and that nobody listens to runs on until it is stopped. `level`
 is the last 250 ms after the gain. `sink` is the first of `sinks` (`null` with none), for
 clients that read one. `sinks_status` is each sink as the pump has it, in the order of `sinks`, then
 the ones lost since the last `PUT {"sinks"}`: `{type, target, state, error, since_ms}`, `state` one
@@ -645,9 +645,7 @@ of `starting` (open, not yet taking audio), `playing` (has taken half a second),
 taken nothing for 2 s: a Bluetooth link that stopped streaming; the stream plays on without it, on
 the other sinks or its own clock, and it plays again when it takes audio), `failed` (it would not
 open, or its pw-cat ended — a speaker gone, a codec change that made its node anew: `error` is what
-pw-cat said; it leaves `sinks`, and the stream goes on with the others, or without one if it had
-listeners or its sinks were changed — a stream whose only starting sink is lost, and with nobody
-listening, fails). Nothing is opened again by itself: a sink lost is added again by hand (`PUT
+pw-cat said; it leaves `sinks`, and the stream goes on with the others, or without one). Nothing is opened again by itself: a sink lost is added again by hand (`PUT
 {"sinks"}`), and a capture whose source went away ends the stream. `sink_status` is the
 first of `sinks_status` with `seq` (`state` `none` with no sink), as before there were several. A named PipeWire sink is that one only
 (`node.dont-fallback`, `node.dont-reconnect`): never the default output instead. `meta` carries an ICY stream's station name and current title (from the decoder, or —
