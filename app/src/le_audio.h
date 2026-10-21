@@ -58,13 +58,19 @@ bool le_bcast_config_from_json(const nlohmann::json& j, uint8_t big, LeBcastConf
 // digits as the 16 bytes in the order they go on air.
 bool le_bcast_code(const std::string& text, std::vector<uint8_t>* out, std::string* err);
 
+// LE Audio metadata LTVs (Assigned Numbers 6.12.6) in the API's words, only those present:
+// {contexts (Streaming_Audio_Contexts bits), program_info (what plays, UTF-8), language (ISO 639-3)}.
+nlohmann::json le_metadata_json(const std::vector<uint8_t>& m);
+
 // GET /api/le-audio from the object snapshot, mgmt's controllers (mgmt_read_controllers: which
 // adapter can broadcast and receive) and the audio endpoints (GET /api/audio/endpoints: the node
 // each transport plays through):
 // {adapters: [{adapter, address, name, broadcaster, receiver, pac, discovering}],
 //  broadcasts: [{path, adapter, big, bis, state, codec, qos, encrypted, node}],
 //  sources: [{address, device, adapter, name, rssi, broadcast_id, encrypted, paired, connected,
-//             streams: [{path, endpoint, big, bis, state, codec, location, metadata, encrypted, node}]}]}
+//             streams: [{path, endpoint, big, bis, state, codec, location, metadata, program_info,
+//                        encrypted, node}]}]}
+// A stream's program_info is its metadata's Program_Info, null without one.
 nlohmann::json model_le_audio(const nlohmann::json& objs, const nlohmann::json& controllers,
                               const nlohmann::json& endpoints);
 

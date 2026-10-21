@@ -109,10 +109,24 @@ void test_endpoints() {
   CHECK_EQ(audio::cards_from_pw_dump(dump)["devices"].size(), size_t(0));
 }
 
+void test_metadata() {
+  // What a Realtek broadcaster sends: media context and a CCID list, nothing about what plays.
+  json m = le_metadata_json({3, 2, 4, 0, 2, 5, 0x20});
+  CHECK_EQ(m["contexts"].get<int>(), 4);
+  CHECK(!m.contains("program_info"));
+  // One that says what plays: Program_Info after the context.
+  m = le_metadata_json({3, 2, 4, 0, 13, 3, 'G', 'r', 'o', 'o', 'v', 'e', ' ', 'S', 'a', 'l', 'a', 'd'});
+  CHECK_EQ(m["program_info"].get<std::string>(), std::string("Groove Salad"));
+  CHECK_EQ(m["contexts"].get<int>(), 4);
+  // A truncated LTV ends the walk rather than reading past the end.
+  CHECK(le_metadata_json({9, 3, 'a'}).empty());
+}
+
 }  // namespace
 
 int main() {
   test_config();
+  test_metadata();
   test_model();
   test_endpoints();
   return report("le_audio");

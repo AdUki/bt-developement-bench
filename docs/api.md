@@ -390,7 +390,9 @@ BlueZ's objects, whoever registered the local endpoints). Transports and players
 
 Decoded: SBC, AAC, aptX/aptX HD, LDAC (rates and modes), other vendor codecs by name, and LC3
 configurations (BAP LTVs: rate, frame duration, allocation, octets per frame, bitrate); always the
-raw element as hex. `delay_ms` is the sink's reported delay (A2DP delay reporting), `null` without.
+raw element as hex. `delay_ms` is the sink's reported delay (A2DP delay reporting), `null` without;
+`program_info` an LE Audio transport's Program_Info metadata (what a broadcast plays), `null`
+without.
 
 `PUT /api/media/transport` `{"path": "<transport>", "volume": 0..127}` — AVRCP absolute volume;
 on an LE Audio transport 0..255, the Volume Control Service's volume setting.
@@ -528,7 +530,8 @@ profile (`bap-sink`, `bap-duplex`).
               "connected": true,
               "streams": [{"path": ".../dev_84_17_15_2D_00_20/sid0/bis1/fd0", "endpoint": ".../sid0/bis1",
                            "big": 0, "bis": 1, "state": "idle", "codec": {...}, "location": 3,
-                           "metadata": "0302040002052003", "encrypted": false, "node": null}]}]}
+                           "metadata": "0302040002052003", "program_info": null, "encrypted": false,
+                           "node": null}]}]}
 ```
 
 `adapters`: which can broadcast (`broadcaster`: the controller's ISO broadcaster) and receive
@@ -537,11 +540,13 @@ PipeWire registered the LE Audio broadcast source role (`null` without it). `bro
 board's own, a BIG each (one BIS here); `state` is the transport's: `idle` (configured, off air:
 nothing plays into it), `active` (on air), `pending`/`broadcasting` on the way. `node` is the
 PipeWire sink to play into (an Audio streams sink, `null` until PipeWire made it). `sources`: the
-broadcasters in range, strongest first (`rssi` null when not heard lately): a device with a
+broadcasters in range, strongest first (`rssi` null when not heard lately; one an LE scan did not
+hear goes, see audio.md): a device with a
 Broadcast Audio Announcement (its `broadcast_id`; `name` is the Broadcast Name when it sends one),
 and its `streams` once BlueZ read its BASE — which it does on its own while the adapter scans, by
 syncing to the periodic advertising for a moment. `location` is the BIS's audio location (bits:
-front left 1, front right 2, ...), `metadata` the BASE's as hex; `encrypted` from the BIGInfo or
+front left 1, front right 2, ...), `metadata` the BASE's as hex and `program_info` its
+Program_Info (what plays, `null` when the broadcaster says nothing); `encrypted` from the BIGInfo or
 the Public Broadcast Announcement. A stream's `state`: `idle`, `broadcasting` (selected, being
 synced), `active` (received: `node` is PipeWire's capture of it, which plays to the default
 output). A Broadcast Assistant's sources (BASS, `src_...` objects) are left out: the assistant

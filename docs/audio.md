@@ -229,6 +229,17 @@ What the bench's forks change for it:
   that broadcasts from its public address was never found), again when the Broadcast ID changes,
   and again once BAP dropped the session of a broadcast that ended (or whose PA sync could not
   start: a stored broadcaster is probed before the adapter is up).
+- **BlueZ** (`src/adapter.c`, `src/device.c`): a broadcast that an LE scan of 5 s or more (counted
+  from the scan asked for, even when it joins one already running) did not hear has ended: its
+  Broadcast Audio Announcement leaves the device's `ServiceData` and its BISes' endpoints and
+  transports go. BlueZ keeps the advertising data of a device that stays (a bonded broadcaster), so
+  a broadcast that stopped was listed for good, rescan or not. A scan that never ran (the
+  controller still busy answers a start late) decides nothing: the next one does.
+- **BlueZ** (`profiles/audio/bass.c`): no PAST flag on every BASS peer. The kernel reads it when it
+  syncs to that device's broadcast and first waits 20 s for the device to transfer the sync, so
+  each BASE read of a connected LE Audio device that also broadcasts (the Realtek) held the
+  controller for 20 s, and scans asked for meanwhile never ran. An assistant that wants PAST asks
+  for it in its Add Source, where the flag is still set.
 - **BlueZ** (`profiles/audio/transport.c`): a broadcast transport keeps its own copy of the
   Broadcast Code. It copied the stream's QoS with the code's pointer, which the setup frees when the
   stream is cleared; a GetManagedObjects in between (btbenchd reads the tree on every change)

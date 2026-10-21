@@ -423,7 +423,8 @@ cmd_auracast() {
            + "  id " + (.broadcast_id // "?") + "  " + (if .rssi != null then (.rssi | tostring) + " dBm" else "not heard" end)
            + (if .encrypted then "  encrypted" else "" end),
           (.streams[] | "      BIS " + (.bis // "?" | tostring) + "  " + .state + "  " + .codec.summary
-           + (if .node != null then "  node " + .node else "" end)))' ;;
+           + (if .node != null then "  node " + .node else "" end)
+           + (if .program_info then "  ♪ " + .program_info else "" end)))' ;;
     start)
       # bench auracast start [PRESET] [mono|stereo] [CODE]
       local preset=48_2_1 ch=2 code=""

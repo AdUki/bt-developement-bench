@@ -1016,7 +1016,12 @@ void BtManager::start_scan(const std::string& apath) {
   sd_bus_error_free(&e);
 
   r = sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "StartDiscovery", &e, nullptr, "");
-  if (r < 0 && !is_error(&e, "org.bluez.Error.InProgress")) {
+  // No answer is not a refusal: BlueZ answers once the controller has started, and one busy syncing
+  // to a broadcast takes 20 s and more. The scan is kept, so it is stopped when its time is up; one
+  // forgotten here ran on in BlueZ, and the next scan asked for was refused as already running.
+  if (r < 0 && (is_error(&e, "org.freedesktop.DBus.Error.NoReply") || is_error(&e, "org.freedesktop.DBus.Error.Timeout"))) {
+    LOG_WARN("bluetooth: {}: no answer to the scan yet (the controller is busy): it may start late", name);
+  } else if (r < 0 && !is_error(&e, "org.bluez.Error.InProgress")) {
     const std::string why = name + ": cannot scan: " + friendly(&e);
     LOG_WARN("bluetooth: {}", why);
     std::lock_guard<std::mutex> lk(m_);

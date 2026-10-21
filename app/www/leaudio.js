@@ -65,7 +65,7 @@ function streamRow(src, t) {
   const code = t.encrypted && !selected ? `<input class="la-code" data-path="${esc(t.path)}" placeholder="Broadcast Code" maxlength="34" value="${esc(la.codes[t.path] || '')}" autocomplete="off">` : '';
   return `<div class="ad-link">
       <span class="ad-dir"><b>BIS ${t.bis != null ? t.bis : '?'}</b> <span class="muted small">${esc(locName(t.location))}</span></span>
-      <span class="ad-codec"><span class="small">${esc(t.codec.summary)}</span></span>
+      <span class="ad-codec">${t.program_info ? `<b>${esc(t.program_info)}</b> ` : ''}<span class="small">${esc(t.codec.summary)}</span></span>
       <span class="ad-state">${st}${t.encrypted ? ' ' + pill('encrypted') : ''}</span>
       <span class="ad-acts">${code}
         <button class="small-btn" data-la-rx="${esc(t.path)}" data-on="${selected ? 0 : 1}"${busy ? ' disabled' : ''}>${busy ? '…' : selected ? 'Stop' : 'Listen'}</button>

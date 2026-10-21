@@ -8,6 +8,7 @@
 
 #include "a2dp_codec.h"
 #include "dbus_util.h"
+#include "le_audio.h"
 #include "util/strings.h"
 #include "uuids.h"
 
@@ -535,7 +536,8 @@ json model_media(const json& objs) {
           {"codec", c},
           {"configuration", to_hex(cfg)},
           {"delay_ms", t.contains("Delay") ? json(num_of(t, "Delay") / 10.0) : json(nullptr)},
-          {"volume", t.contains("Volume") ? json(num_of(t, "Volume")) : json(nullptr)}});
+          {"volume", t.contains("Volume") ? json(num_of(t, "Volume")) : json(nullptr)},
+          {"program_info", le_metadata_json(bytes_of(t, "Metadata")).value("program_info", json(nullptr))}});
     }
     if (it->contains(kPlayer)) {
       const json& p = (*it)[kPlayer];

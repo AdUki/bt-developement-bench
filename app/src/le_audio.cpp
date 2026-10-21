@@ -41,6 +41,11 @@ uint8_t lc3_rate_code(unsigned rate) {
 
 std::string hciN(const std::string& path) { return adapter_from_path(path); }
 
+json program_info_of(const std::vector<uint8_t>& m) {
+  const json j = le_metadata_json(m);
+  return j.contains("program_info") ? j["program_info"] : json(nullptr);
+}
+
 // The node a transport plays through: GET /api/audio/endpoints' entry whose transport it is.
 json node_of(const json& endpoints, const std::string& transport) {
   for (const char* list : {"sinks", "sources"})
@@ -171,6 +176,21 @@ bool le_bcast_config_from_json(const json& j, uint8_t big, LeBcastConfig* out, s
   return true;
 }
 
+json le_metadata_json(const std::vector<uint8_t>& m) {
+  json o = json::object();
+  for (size_t i = 0; i + 1 < m.size() && m[i];) {
+    const size_t len = m[i];
+    if (i + 1 + len > m.size()) break;
+    const uint8_t type = m[i + 1];
+    const std::string v(m.begin() + static_cast<long>(i) + 2, m.begin() + static_cast<long>(i + 1 + len));
+    if (type == 0x02 && v.size() == 2) o["contexts"] = static_cast<uint8_t>(v[0]) | static_cast<uint8_t>(v[1]) << 8;
+    if (type == 0x03) o["program_info"] = v;  // invalid UTF-8 is replaced when sent
+    if (type == 0x04 && v.size() == 3) o["language"] = v;
+    i += 1 + len;
+  }
+  return o;
+}
+
 json model_le_audio(const json& objs, const json& controllers, const json& endpoints) {
   json adapters = json::array(), broadcasts = json::array(), sources = json::array();
   for (auto it = objs.begin(); it != objs.end(); ++it) {
@@ -239,6 +259,7 @@ json model_le_audio(const json& objs, const json& controllers, const json& endpo
                              {"codec", decode_codec(static_cast<uint8_t>(num_of(tr, "Codec")), bytes_of(tr, "Configuration"), false)},
                              {"location", num_of(tr, "Location")},
                              {"metadata", to_hex(bytes_of(tr, "Metadata"))},
+                             {"program_info", program_info_of(bytes_of(tr, "Metadata"))},
                              {"encrypted", encrypted_qos(q)},
                              {"node", source_node_of(endpoints, t.key(), str_of(d, "Address"),
                                                      str_of(tr, "State") == "active")}});

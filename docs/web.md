@@ -170,7 +170,8 @@ waits until it is off air — PipeWire lets it go a few seconds later — and th
 file. The board's broadcast carries no Broadcast Name, so receivers list it by address.
 *Broadcasts in range* scans (LE, 30 s) and shows each broadcaster as a card: its name (the
 Broadcast Name), address, Broadcast ID, signal, encrypted and paired; then its streams, one per
-BIS, once BlueZ has read them (location, codec, state). *Listen* syncs to one — a Broadcast Code
+BIS, once BlueZ has read them (location, codec, state, and the Program_Info the broadcaster sends,
+in bold). *Listen* syncs to one — a Broadcast Code
 field comes first on an encrypted one — and it plays on the board's default output; *syncing…*
 until the BIG is up, *receiving* then, with *Listen here* to hear it in the browser, and *Stop*.
 Nothing is retried: a stream that does not sync stays as it is, and Listen again is the retry.
