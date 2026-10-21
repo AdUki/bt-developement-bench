@@ -8,7 +8,7 @@ first when an interface moves.
 | Area | Owns |
 |---|---|
 | system | `yocto/meta-btbench/recipes-core/{images,btbench-base,base-files}/`, `recipes-core/packagegroups/packagegroup-btbench-tools.bb`, `yocto/meta-btbench/wic/`, `tools/target/{btbench-wifi,btbench-gadget,btbench-bdaddr,btbench-data}`, `mk/system.mk`, `docs/system.md` |
-| audio + BlueZ | `recipes-connectivity/bluez5/`, `recipes-multimedia/{pipewire,wireplumber,libfreeaptx,ldacbt,btbench-audio,packagegroups}/`, `tools/target/{btbench-audio,btbench-btsnoop}`, `tools/dev/{bbvars,clangd-gen}`, `mk/dev.mk`, `docs/{audio,dev}.md` |
+| audio + BlueZ | `recipes-connectivity/bluez5/`, `recipes-multimedia/{pipewire,wireplumber,libfreeaptx,ldacbt,btbench-audio,packagegroups}/`, `tools/target/{btbench-audio,btbench-btsnoop}`, `tools/dev/{bbvars,clangd-gen,upstream}`, `mk/dev.mk`, `docs/{audio,dev,upstream}.md` |
 | kernel | `recipes-kernel/`, `dynamic-layers/raspberrypi/recipes-{kernel,bsp}/`, `dynamic-layers/meson/recipes-bsp/`, `boards/dts/`, `boards/*.cfg`, `tools/dev/mkdtb`, `tools/target/btbench-kernel`, `tools/target/btbench-btdebug`, `mk/kernel.mk`, `docs/kernel.md` |
 | btbenchd | `app/` (except `app/src/hci/`, `app/tests/hci/`), `recipes-btbench/`, `tools/bench`, `tools/fake-bluez/`, `mk/app.mk`, `docs/{api,web}.md` |
 | HCI monitor | `app/src/hci/`, `app/tests/hci/`, `docs/monitor.md` |

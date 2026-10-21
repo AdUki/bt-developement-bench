@@ -78,6 +78,10 @@ upstream's new revision and push it (`--force-with-lease`). The kernel's `bench`
 bluetooth-next, which the fork does not track by itself: push the base along with it (it is in
 `bench`'s history, so pushing `bench` does).
 
+A fix that should go upstream leaves `bench` the other way: a branch cut from upstream, with
+the commits picked over, checked against the project's rules and sent from there.
+`make upstream-start` and the other `upstream-*` targets do that, see [upstream.md](upstream.md).
+
 ## Building: `make bluez`, `make pipewire`, `make wireplumber`
 
 All three compile with the **SDK** (`make sdk` installs it into `sdk/<board>`). Its sysroot holds
