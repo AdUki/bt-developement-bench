@@ -18,3 +18,15 @@ TARGET ?= root@10.55.0.1
 
 # Override a dev tree entirely (it is then used as is, not created by `make src`):
 # BLUEZ_SRC ?= $(HOME)/projects/bluez-topic
+
+# Upstream helpers (tools/dev/upstream, make upstream-*; docs/upstream.md). All optional.
+# Where upstream-start makes its worktrees (<dir>/<proj>-<topic>):
+# UPSTREAM_WORKTREES ?= $(HOME)/projects
+# A full kernel clone, so Fixes: tags can be checked from the shallow src/linux:
+# UPSTREAM_LINUX_HISTORY ?= $(HOME)/projects/linux-full
+# The BlueZ tree whose testers and CI kernel configs (doc/ci.config, doc/tester.config) are used
+# (default: upstream master in a worktree of src/bluez, fetched once a day):
+# UPSTREAM_BLUEZ ?= $(HOME)/projects/bluez
+# ELL source for building BlueZ (its internal ELL), and the model named in BlueZ's Assisted-by:
+# UPSTREAM_ELL ?= $(HOME)/projects/ell
+# UPSTREAM_AI_MODEL ?= claude-opus-5-5

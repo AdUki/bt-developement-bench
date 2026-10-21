@@ -348,3 +348,27 @@ logs-pull: ## Copy the board's /tmp/logs to build/logs/<time>/ (and build/logs/l
 	$(SSH) $(TARGET) 'cd /tmp/logs && tar cf - $$(ls *.log *.log.1 2>/dev/null)' | tar xf - -C $$dest; \
 	ln -sfn $$dest $(ROOT)/build/logs/latest; \
 	echo -e "$(BOLD)Logs$(OFF) in $$dest $(DIM)(build/logs/latest; read them with app/build/clog/clog build/logs/latest/bluez.log)$(OFF)"
+
+## ─── upstream ────────────────────────────────────────────────────────────────
+
+# tools/dev/upstream takes a fix from the bench to Linux Bluetooth, BlueZ or PipeWire, with each
+# project's rules checked the way its CI checks them (docs/upstream.md). These targets only wrap
+# it; DIR is the upstream branch's tree (upstream-start prints it), COMP picks the bench tree a
+# new branch is cut from (its *_SRC).
+up_dir = $(or $(DIR),$(error DIR=<tree> is needed: the worktree upstream-start made))
+up_src = $($(shell echo $(COMP) | tr a-z A-Z)_SRC)
+up_flags = $(if $(filter 1,$(AI)),--ai) $(if $(BASE),--base $(BASE))
+
+.PHONY: upstream-start upstream-check upstream-trailers upstream-export
+upstream-start: ## Upstream branch in a worktree: COMP=linux|bluez|pipewire TOPIC=name [FIX=1] [PICK=revs]
+	@$(if $(and $(COMP),$(TOPIC)),,$(error COMP= and TOPIC= are needed)) \
+	tools/dev/upstream start $(COMP) $(TOPIC) --from $(up_src) $(if $(filter 1,$(FIX)),--fix) $(if $(PICK),--pick $(PICK))
+
+upstream-check: ## Check DIR's series like upstream CI: messages, checkpatch; BUILD=1 builds, TEST=1 testers, AI=1
+	@tools/dev/upstream check $(up_dir) $(up_flags) $(if $(filter 1,$(BUILD)),--build) $(if $(filter 1,$(TEST)),--test)
+
+upstream-trailers: ## Fix DIR's trailers for upstream: no Claude lines, no BlueZ sign-off, AI=1 adds Assisted-by
+	@tools/dev/upstream trailers $(up_dir) $(up_flags)
+
+upstream-export: ## DIR's series for the list (build/upstream/out/), never sent; VER=2, SIGNOFF=1; PipeWire: MR steps
+	@tools/dev/upstream export $(up_dir) $(up_flags) $(if $(VER),-v $(VER)) $(if $(filter 1,$(SIGNOFF)),--signoff)

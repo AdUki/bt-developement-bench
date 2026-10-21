@@ -1,0 +1,730 @@
+#!/bin/bash
+# upstream — take a fix from the bench to its upstream: Linux Bluetooth, BlueZ or PipeWire.
+#
+#   tools/dev/upstream start <proj> <topic> [--fix] [--pick REVS] [--from TREE] [--dir DIR]
+#   tools/dev/upstream check    [TREE] [--base REF] [--build] [--test] [--ai] [--strict]
+#   tools/dev/upstream trailers [TREE] [--base REF] [--ai]
+#   tools/dev/upstream export   [TREE] [--base REF] [-v N] [--signoff] [--force]
+#
+# <proj> is linux, bluez or pipewire; TREE is a git tree of one of them (default: the current
+# directory), and the project is told from its files. docs/upstream.md has the rules this checks
+# and where each comes from.
+#
+# start   a branch <topic> off upstream, in a worktree of the bench's tree (src/<proj>, or
+#         --from): ~/projects/<proj>-<topic> by default ($UPSTREAM_WORKTREES). The kernel's base
+#         is bluetooth-next/master, or bluetooth/master with --fix (fixes go to net through
+#         bluetooth.git). --pick cherry-picks bench commits onto it ("a1b2c3,d4e5f6" or "A..B").
+# check   every commit of BASE..HEAD against its project's rules: the commit message (subject
+#         prefix, lengths, trailers, Fixes: tags), checkpatch the way the Bluetooth CI runs it
+#         (BlueZ and kernel), whitespace and spelling (PipeWire). --build builds each commit in a
+#         worktree of its own (warnings the base did not have fail) and runs the unit tests CI
+#         would pick; --test (kernel) boots the tester kernel and runs the testers CI would pick,
+#         with tools/test-runner from a BlueZ tree. --ai: the series was written with an AI
+#         assistant, so the project's disclosure tag must be there (or must not, for PipeWire).
+# trailers  rewrites BASE..HEAD: drops Claude Code's Co-Authored-By/Claude-Session lines,
+#         Signed-off-by for BlueZ (it refuses them), and with --ai adds the project's
+#         Assisted-by. Only for a branch that is not pushed.
+# export  checks, then writes the series for the mailing list (kernel, BlueZ) into
+#         build/upstream/out/<branch>-v<N>/ with To/Cc set and a cover letter for more than one
+#         patch, and prints the git send-email command. It never sends. --signoff adds your
+#         Signed-off-by (the kernel's, which only a human may add). PipeWire takes merge requests
+#         on gitlab.freedesktop.org: export prints the steps instead.
+#
+# Base: --base, else the upstream ref that HEAD is fewest commits ahead of. Cache (CI config,
+# build worktrees, kernels): $UPSTREAM_CACHE, ~/.cache/btbench-upstream; it must be under $HOME
+# for test-runner. Settings in bench.conf (see bench.conf.sample): UPSTREAM_WORKTREES,
+# UPSTREAM_BLUEZ (the BlueZ tree for --test and the kernel CI config), UPSTREAM_ELL,
+# UPSTREAM_LINUX_HISTORY (a full kernel clone, for Fixes: in a shallow tree), UPSTREAM_AI_MODEL.
+
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+# bench.conf is make syntax; its UPSTREAM_* lines are read here too, so the script run by hand sees
+# them (the environment still wins). A leading ~/ and $(HOME) are $HOME.
+if [ -f "$ROOT/bench.conf" ]; then
+	eval "$(sed -n 's/^\(UPSTREAM_[A-Z_]*\) *?*= *\(.*\)$/: "${\1:=\2}"/p' "$ROOT/bench.conf" | sed 's|:="~/|:="$HOME/|; s|\$(HOME)|$HOME|g')"
+fi
+
+CACHE=${UPSTREAM_CACHE:-$HOME/.cache/btbench-upstream}
+WORKTREES=${UPSTREAM_WORKTREES:-$HOME/projects}
+BLUEZ_TREE=${UPSTREAM_BLUEZ:-}
+ELL_TREE=${UPSTREAM_ELL:-$HOME/projects/ell}
+LINUX_HISTORY=${UPSTREAM_LINUX_HISTORY:-}
+AI_MODEL=${UPSTREAM_AI_MODEL:-claude-opus-5-5}
+VIRTIOFSD=${UPSTREAM_VIRTIOFSD:-$HOME/.cache/bluez-functional/bin/virtiofsd}
+JOBS=$(nproc)
+
+LIST=linux-bluetooth@vger.kernel.org
+ACTION_CI=https://github.com/bluez/action-ci
+
+B=$'\e[1m' D=$'\e[2m' R=$'\e[31m' Y=$'\e[33m' G=$'\e[32m' O=$'\e[0m'
+[ -t 1 ] || B= D= R= Y= G= O=
+errors=0 warnings=0
+err()  { echo "  ${R}error${O} $*"; errors=$((errors + 1)); }
+warn() { echo "  ${Y}warn${O}  $*"; warnings=$((warnings + 1)); }
+info() { echo "${B}$*${O}"; }
+die()  { echo "${R}$*${O}" >&2; exit 1; }
+
+usage() { sed -n '3,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+# ─── trees ───────────────────────────────────────────────────────────────────
+
+detect() {
+	local t=$1
+	if [ -d "$t/net/bluetooth" ] && [ -f "$t/MAINTAINERS" ]; then echo linux
+	elif [ -d "$t/src/shared" ] && grep -q 'AC_INIT(bluez' "$t/configure.ac" 2>/dev/null; then echo bluez
+	elif [ -d "$t/spa" ] && grep -q "project('pipewire'" "$t/meson.build" 2>/dev/null; then echo pipewire
+	else die "$t is not a Linux, BlueZ or PipeWire tree"
+	fi
+}
+
+# The remote of a tree whose URL matches a pattern, added under a name if none does.
+# $1 tree, $2 URL regex, $3 name to add, $4 URL to add
+remote_for() {
+	local r
+	r=$(git -C "$1" remote -v | re=$2 awk '$3 == "(fetch)" && $2 ~ ENVIRON["re"] { print $1; exit }')
+	if [ -z "$r" ]; then
+		git -C "$1" remote add "$3" "$4"
+		r=$3
+	fi
+	echo "$r"
+}
+
+# The upstream refs a project's work can be based on, most likely first. Adds the remotes.
+upstream_refs() {
+	local t=$1 p=$2 r
+	case $p in
+	linux)
+		r=$(remote_for "$t" 'bluetooth/bluetooth\.git' bluetooth \
+			https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth.git)
+		echo "$r/master"
+		r=$(remote_for "$t" 'bluetooth/bluetooth-next\.git' bluetooth-next \
+			https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git)
+		echo "$r/master" ;;
+	bluez)
+		r=$(remote_for "$t" '(kernel\.org/pub/scm/bluetooth/bluez|github\.com/bluez/bluez)(\.git)?$' \
+			upstream https://git.kernel.org/pub/scm/bluetooth/bluez.git)
+		echo "$r/master" ;;
+	pipewire)
+		r=$(remote_for "$t" '(gitlab\.freedesktop\.org|github\.com)/[Pp]ipe[Ww]ire/pipewire(\.git)?$' \
+			upstream https://gitlab.freedesktop.org/pipewire/pipewire.git)
+		echo "$r/master" ;;
+	esac
+}
+
+# Fetch a remote ref. A shallow tree (src/linux) gets only the tip: enough to branch off and to
+# cherry-pick onto, while its whole history would be gigabytes.
+fetch_ref() {
+	local t=$1 ref=$2 depth=
+	[ "$(git -C "$t" rev-parse --is-shallow-repository)" = true ] && depth=--depth=1
+	info "fetching $ref"
+	git -C "$t" fetch -q $depth "${ref%%/*}" "${ref#*/}:refs/remotes/$ref"
+}
+
+# BASE: --base, or the upstream ref HEAD is fewest commits ahead of.
+pick_base() {
+	local t=$1 p=$2 best= n bestn=
+	if [ -n "$base" ]; then echo "$base"; return; fi
+	for ref in $(upstream_refs "$t" "$p"); do
+		git -C "$t" rev-parse -q --verify "$ref^{commit}" >/dev/null || continue
+		git -C "$t" merge-base HEAD "$ref" >/dev/null 2>&1 || continue
+		n=$(git -C "$t" rev-list --count "$ref..HEAD")
+		if [ -z "$bestn" ] || [ "$n" -lt "$bestn" ]; then best=$ref bestn=$n; fi
+	done
+	[ -n "$best" ] || die "no upstream ref to compare with in $t: fetch one or pass --base"
+	echo "$best"
+}
+
+# bluez/action-ci holds what the Bluetooth CI runs: its gitlint config and the file mapping that
+# picks the testers (kernel) and unit tests (BlueZ). Refreshed once a day.
+action_ci() {
+	local d=$CACHE/action-ci
+	if [ ! -d "$d/.git" ]; then
+		git clone -q --depth 1 "$ACTION_CI" "$d" >&2
+	elif [ -n "$(find "$d/.git/FETCH_HEAD" -mmin +1440 2>/dev/null)" ] || [ ! -e "$d/.git/FETCH_HEAD" ]; then
+		git -C "$d" fetch -q --depth 1 origin && git -C "$d" reset -q --hard FETCH_HEAD || true
+	fi
+	echo "$d"
+}
+
+# What CI would run for the changed files: kernel testers, or BlueZ unit tests.
+# Prints "__all__", nothing, or a list. $1 kernel|user, the files on stdin (passed on as
+# arguments: python's own stdin is its program).
+ci_select() {
+	local files
+	files=$(cat)
+	python3 -I - "$(action_ci)/config.json" "$1" $files <<'EOF'
+import json, sys
+cfg = json.load(open(sys.argv[1]))["space_details"]
+space = sys.argv[2]
+ci = cfg[space]["ci"]
+mapping = ci["TestRunner"]["file-mapping"] if space == "kernel" else ci["file-mapping"]
+files = sys.argv[3:]
+out, everything = set(), False
+for f in files:
+    area = None
+    for name, a in mapping.items():
+        if name.startswith("_"):
+            continue
+        if any(f.startswith(p) if p.endswith("/") else f == p for p in a["files"]):
+            area = a
+            break
+    if area is None:
+        everything = True
+        continue
+    sel = area.get("testers") if space == "kernel" else area.get("unit_tests", [])
+    if sel == "__all__":
+        everything = True
+    elif sel and sel != "__none__":
+        out.update(sel)
+print("__all__" if everything else " ".join(sorted(out)))
+EOF
+}
+
+checkpatch_of() {
+	local t=$1 cp
+	for cp in "${UPSTREAM_CHECKPATCH:-}" "$t/scripts/checkpatch.pl" "$ROOT/src/linux/scripts/checkpatch.pl" \
+		  "$LINUX_HISTORY/scripts/checkpatch.pl"; do
+		# One that predates Assisted-by: (6.9 and older) flags the tag as unknown.
+		[ -n "$cp" ] && [ -f "$cp" ] && grep -q 'Assisted-by' "$cp" && { echo "$cp"; return; }
+	done
+	die "no checkpatch.pl that knows Assisted-by: set UPSTREAM_CHECKPATCH to a recent kernel's"
+}
+
+# ─── commit messages ─────────────────────────────────────────────────────────
+
+has_commit() {
+	git -C "$1" cat-file -e "$2^{commit}" 2>/dev/null && { echo "$1"; return; }
+	[ -n "$LINUX_HISTORY" ] && git -C "$LINUX_HISTORY" cat-file -e "$2^{commit}" 2>/dev/null &&
+		echo "$LINUX_HISTORY"
+	return 0
+}
+
+# The Fixes: rules of the kernel's verify_fixes.sh (also used by the Bluetooth CI): a SHA of at
+# least 12 digits that exists, then ("its exact subject"), and no blank lines around the tag.
+check_fixes() {
+	local t=$1 c=$2 msg=$3 line sha subj where real
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		if [[ ! "$line" =~ ^Fixes:\ ([0-9a-f]+)\ \(\"(.*)\"\)$ ]]; then
+			err "Fixes: not in the form 'Fixes: <sha> (\"<subject>\")': $line"
+			continue
+		fi
+		sha=${BASH_REMATCH[1]} subj=${BASH_REMATCH[2]}
+		[ ${#sha} -ge 12 ] || err "Fixes: SHA shorter than 12 digits: $sha"
+		where=$(has_commit "$t" "$sha")
+		if [ -z "$where" ]; then
+			if [ "$(git -C "$t" rev-parse --is-shallow-repository)" = true ]; then
+				warn "Fixes: $sha not in this shallow tree (set UPSTREAM_LINUX_HISTORY to check it)"
+			else
+				err "Fixes: $sha is not a commit of this tree"
+			fi
+			continue
+		fi
+		real=$(git -C "$where" log -1 --format=%s "$sha")
+		[ "$real" = "$subj" ] || err "Fixes: $sha is \"$real\", not \"$subj\""
+		[ "$where" = "$t" ] && ! git -C "$t" merge-base --is-ancestor "$sha" "$c" 2>/dev/null &&
+			err "Fixes: $sha is not an ancestor of this commit"
+	done < <(grep -i '^[[:space:]]*Fixes:' <<<"$msg" | grep -v '^Fixes #' || true)
+	if printf '%s\n' "$msg" | tr '\n' '#' | grep -q '##Fixes:[^#]*##'; then
+		err "Fixes: has blank lines on both sides; keep it in the trailer block"
+	fi
+	return 0
+}
+
+check_message() {
+	local t=$1 p=$2 c=$3
+	local msg subj body an ae cn ce dirs sobs sob
+	msg=$(git -C "$t" log -1 --format=%B "$c")
+	# export --signoff adds the user's Signed-off-by; count it as there.
+	[ "$signoff" = 1 ] &&
+		msg+=$'\n'"Signed-off-by: $(git -C "$t" config user.name) <$(git -C "$t" config user.email)>"
+	subj=$(git -C "$t" log -1 --format=%s "$c")
+	body=$(sed '1,/^$/d' <<<"$msg" | grep -v -E '^[A-Za-z-]+: ' || true)
+	an=$(git -C "$t" log -1 --format=%an "$c") ae=$(git -C "$t" log -1 --format=%ae "$c")
+	cn=$(git -C "$t" log -1 --format=%cn "$c") ce=$(git -C "$t" log -1 --format=%ce "$c")
+
+	# Claude Code's own trailers go nowhere upstream: the projects have their own tag for it.
+	grep -q -i -E '^(Co-Authored-By|Co-developed-by): .*(claude|anthropic)' <<<"$msg" &&
+		err "Co-Authored-By/Co-developed-by for an AI: not allowed (run: upstream trailers)"
+	grep -q -E '^Claude-Session:|Generated with \[?Claude' <<<"$msg" &&
+		err "Claude Code session trailer/line (run: upstream trailers)"
+	[[ "$subj" == *. ]] && warn "subject ends with a period"
+	check_fixes "$t" "$c" "$msg"
+
+	case $p in
+	linux)
+		[[ "$subj" == "Bluetooth: "* ]] || err "subject must start with 'Bluetooth: ' (CI SubjectPrefix)"
+		[[ "$subj" =~ ^Bluetooth:\ [A-Za-z0-9_]+:\  ]] ||
+			warn "no component after 'Bluetooth: ' (e.g. 'Bluetooth: hci_sync: ...')"
+		[ ${#subj} -le 80 ] || err "subject is ${#subj} chars (CI gitlint: 80)"
+		[ ${#subj} -le 75 ] || warn "subject is ${#subj} chars (submitting-patches: 70-75)"
+		[ -n "$(tr -d '[:space:]' <<<"$body")" ] || err "empty body (CI gitlint: body-min-length)"
+		# An assistant must not sign off, so a series it prepared lacks the user's Signed-off-by
+		# until export --signoff: with --ai that is expected, not an error.
+		sobs=$(grep -i '^Signed-off-by:' <<<"$msg" || true)
+		sob=err; [ "$ai" = 1 ] && sob=warn
+		grep -q -i -F -e "Signed-off-by: $an <" -e "<$ae>" <<<"$sobs" ||
+			$sob "no Signed-off-by of the author $an <$ae> (the human adds it: export --signoff)"
+		[ "$ce" = "$ae" ] || grep -q -i -F "<$ce>" <<<"$sobs" ||
+			$sob "no Signed-off-by of the committer $cn <$ce> (CI VerifySignedoff; export --signoff)"
+		if grep -q '^Assisted-by:' <<<"$msg"; then
+			grep -q -E '^Assisted-by: LLM( |$)' <<<"$msg" ||
+				warn "Assisted-by: the kernel's form is 'Assisted-by: LLM [tools]' (coding-assistants.rst)"
+		elif [ "$ai" = 1 ]; then
+			err "no 'Assisted-by: LLM' (submitting-patches.rst, coding-assistants.rst; run: upstream trailers --ai)"
+		fi ;;
+	bluez)
+		[[ "$subj" =~ ^[A-Za-z0-9_./+-]+(\ [A-Za-z0-9_./+-]+)?:\  ]] ||
+			err "subject needs a component prefix, as in the files' history ('shared/bap: ...')"
+		[[ "$subj" == Bluetooth:* ]] && err "'Bluetooth:' marks a kernel patch; CI would test this as one"
+		[ ${#subj} -le 80 ] || err "subject is ${#subj} chars (CI gitlint: 80)"
+		[ ${#subj} -le 72 ] || warn "subject is ${#subj} chars (.gitlint, maintainer-guidelines: 72)"
+		[ -n "$(tr -d '[:space:]' <<<"$body")" ] || err "empty body (CI gitlint: body-min-length)"
+		grep -v -E '^(Fixes:|Link:|.*https?://)' <<<"$body" | awk 'length > 80 { exit 1 }' ||
+			err "body line over 80 chars (CI gitlint)"
+		grep -v -E '^(Fixes:|Link:|.*https?://)' <<<"$body" | awk 'length > 72 { exit 1 }' ||
+			warn "body line over 72 chars (maintainer-guidelines)"
+		grep -q '^Signed-off-by:' <<<"$msg" &&
+			err "Signed-off-by: BlueZ does not use it, 'including them is actually an error' (HACKING)"
+		if grep -q '^Assisted-by:' <<<"$msg"; then
+			grep -q -E '^Assisted-by: [A-Za-z]+:[A-Za-z0-9._-]+' <<<"$msg" ||
+				warn "Assisted-by: BlueZ's form is 'Assisted-by: AGENT:MODEL [tools]' (AGENTS.md)"
+		elif [ "$ai" = 1 ]; then
+			err "no 'Assisted-by: Claude:$AI_MODEL' (AGENTS.md; run: upstream trailers --ai)"
+		fi
+		# HACKING rule 3: one top-level directory per patch (doc/, lib/, src/, ...).
+		dirs=$(git -C "$t" diff-tree --no-commit-id --name-only -r "$c" | grep / | cut -d/ -f1 | sort -u | xargs)
+		[ "$(wc -w <<<"$dirs")" -le 1 ] || warn "touches several top-level directories ($dirs): HACKING wants one per patch" ;;
+	pipewire)
+		[[ "$subj" =~ ^[a-z0-9][a-z0-9_.+/-]*(\ [a-z0-9_.+/-]+)?:\  ]] ||
+			warn "subject without a lowercase module prefix, as in history ('bluez5: media-source: ...')"
+		[ ${#subj} -le 72 ] || warn "subject is ${#subj} chars (most of history keeps to 72)"
+		grep -q -i -E '^(Assisted-by|Generated-by):' <<<"$msg" &&
+			err "AI trailer: PipeWire's AGENTS.md forbids them (Co-authored-by and similar)"
+		: ;;
+	esac
+}
+
+# ─── code checks ─────────────────────────────────────────────────────────────
+
+# checkpatch on the series as format-patch writes it, which is what CI checks. BlueZ's own
+# .checkpatch.conf (in the tree) applies when it runs there.
+run_checkpatch() {
+	local t=$1 p=$2 b=$3 cp out f res e w
+	cp=$(checkpatch_of "$t")
+	out=$(mktemp -d)
+	git -C "$t" format-patch -q -M $([ "$signoff" = 1 ] && echo --signoff) -o "$out" "$b..HEAD"
+	info "checkpatch ${D}($cp)${O}"
+	for f in "$out"/*.patch; do
+		if [ "$p" = linux ]; then
+			# Before export --signoff, an --ai series has no Signed-off-by yet (check_message).
+			res=$(cd "$t" && perl "$cp" --ignore UNKNOWN_COMMIT_ID \
+				$([ "$ai$signoff" = 10 ] && echo --no-signoff) ${strict:+--strict} "$f" 2>&1 || true)
+		else
+			res=$(cd "$t" && perl "$cp" ${strict:+--strict} "$f" 2>&1 || true)
+		fi
+		e=$(sed -n 's/^total: \([0-9]*\) errors, \([0-9]*\) warnings.*/\1/p' <<<"$res")
+		w=$(sed -n 's/^total: \([0-9]*\) errors, \([0-9]*\) warnings.*/\2/p' <<<"$res")
+		if [ "${e:-0}" -gt 0 ] || [ "${w:-0}" -gt 0 ]; then
+			echo "${B}$(basename "$f")${O}"
+			grep -E '^(ERROR|WARNING|CHECK):' -A3 <<<"$res" | sed 's/^/    /'
+			[ "${e:-0}" -gt 0 ] && err "checkpatch: $e errors"
+			[ "${w:-0}" -gt 0 ] && warn "checkpatch: $w warnings (CI reports them)"
+		elif grep -q '^CHECK:' <<<"$res"; then
+			warn "checkpatch --strict: $(grep -c '^CHECK:' <<<"$res") checks in $(basename "$f")"
+		fi
+	done
+	rm -rf "$out"
+}
+
+run_pipewire_lint() {
+	local t=$1 b=$2 sh
+	info "whitespace, spelling"
+	git -C "$t" diff --check "$b..HEAD" >/dev/null ||
+		{ git -C "$t" diff --check "$b..HEAD" | head | sed 's/^/    /' || true; err "whitespace errors"; }
+	# The CI spellcheck job fails on "Pipewire".
+	git -C "$t" diff "$b..HEAD" | grep '^+' | grep -q -w Pipewire && err "'Pipewire' in added lines: CI spellcheck wants PipeWire"
+	sh=$(git -C "$t" diff --name-only --diff-filter=d "$b..HEAD" -- '*.sh')
+	if [ -n "$sh" ] && command -v shellcheck >/dev/null; then
+		(cd "$t" && shellcheck $sh) || err "shellcheck"
+	fi
+	return 0
+}
+
+# ─── builds ──────────────────────────────────────────────────────────────────
+
+key() { echo "$1" | md5sum | cut -c1-8; }
+
+# A detached worktree of the tree, kept in the cache, so builds never touch the branch's tree.
+build_worktree() {
+	local t=$1 p=$2 w
+	w=$CACHE/wt/$p-$(key "$t")
+	if [ ! -e "$w/.git" ]; then
+		mkdir -p "$CACHE/wt"
+		git -C "$t" worktree add -q --detach "$w" HEAD
+	fi
+	# BlueZ's internal ELL is found as ../ell from its source dir.
+	[ "$p" = bluez ] && [ ! -e "$CACHE/wt/ell" ] && ln -s "$ELL_TREE" "$CACHE/wt/ell"
+	echo "$w"
+}
+
+# The BlueZ tree the kernel checks take CI's configs and the testers from: UPSTREAM_BLUEZ, or
+# upstream master in a worktree of src/bluez, fetched once a day. Not src/bluez itself: the bench
+# fork lags upstream, and a tester older than the kernel (a test its emulator cannot serve) hangs.
+bluez_tree() {
+	[ -z "$BLUEZ_TREE" ] || return 0
+	local src=$ROOT/src/bluez ref w=$CACHE/wt/bluez-upstream
+	[ -e "$src/.git" ] || die "no src/bluez to take upstream BlueZ from: make src-bluez, or set UPSTREAM_BLUEZ"
+	ref=$(upstream_refs "$src" bluez)
+	if [ ! -e "$w/.git" ] || [ -n "$(find "$w/.git" -maxdepth 0 -mmin +1440)" ]; then
+		fetch_ref "$src" "$ref" >&2
+		mkdir -p "$CACHE/wt"
+		[ -e "$w/.git" ] || git -C "$src" worktree add -q --detach "$w" "$ref"
+		git -C "$w" checkout -q --detach "$ref"
+		touch "$w/.git"
+	fi
+	[ -e "$CACHE/wt/ell" ] || ln -s "$ELL_TREE" "$CACHE/wt/ell"
+	[ -x "$w/configure" ] || (cd "$w" && ./bootstrap >/dev/null 2>&1) || die "BlueZ bootstrap failed in $w"
+	BLUEZ_TREE=$w
+}
+
+kernel_config() {
+	local o=$1 cfg=$2
+	bluez_tree
+	if [ -f "$BLUEZ_TREE/doc/$cfg" ]; then
+		cp "$BLUEZ_TREE/doc/$cfg" "$o/.config"
+	else
+		die "no $BLUEZ_TREE/doc/$cfg (the CI's kernel config): set UPSTREAM_BLUEZ to a BlueZ tree"
+	fi
+}
+
+# Warnings of a build, as "file: message" without line numbers, so a shifted line is not new.
+warnings_of() { grep -E '(warning|error):' "$1" | sed -E 's/:[0-9]+:[0-9]+:/:/' | sort -u; }
+
+build_kernel_series() {
+	local t=$1 b=$2 w o c log=$RUN/build.log new
+	w=$(build_worktree "$t" linux)
+	o=$CACHE/kbuild/ci-$(key "$t")
+	mkdir -p "$o"
+	[ -f "$o/.config" ] || kernel_config "$o" ci.config
+	git -C "$w" checkout -q --detach "$b"
+	info "build $b (baseline, W=1)"
+	make -s -C "$w" O="$o" olddefconfig
+	make -s -C "$w" O="$o" -j"$JOBS" W=1 net/bluetooth/ drivers/bluetooth/ >"$log.base" 2>&1 ||
+		die "the base does not build: $log.base"
+	for c in $(git -C "$t" rev-list --reverse "$b..HEAD"); do
+		git -C "$w" checkout -q --detach "$c"
+		info "build $(git -C "$t" log -1 --format='%h %s' "$c")"
+		if ! make -s -C "$w" O="$o" -j"$JOBS" W=1 net/bluetooth/ drivers/bluetooth/ >"$log" 2>&1; then
+			grep -E 'error' "$log" | head -20 | sed 's/^/    /'
+			err "does not build (CI IncrementalBuild)"
+			continue
+		fi
+		new=$(comm -13 <(warnings_of "$log.base") <(warnings_of "$log"))
+		[ -z "$new" ] || { sed 's/^/    /' <<<"$new"; err "new W=1 warnings (CI CheckAllWarning)"; }
+	done
+	if command -v sparse >/dev/null; then
+		info "sparse (C=1) on the tip"
+		make -s -C "$w" O="$o" -j"$JOBS" C=2 net/bluetooth/ drivers/bluetooth/ >"$log" 2>&1 || true
+		git -C "$w" checkout -q --detach "$b"
+		make -s -C "$w" O="$o" -j"$JOBS" C=2 net/bluetooth/ drivers/bluetooth/ >"$log.base" 2>&1 || true
+		new=$(comm -13 <(warnings_of "$log.base") <(warnings_of "$log"))
+		[ -z "$new" ] || { sed 's/^/    /' <<<"$new"; warn "new sparse warnings (CI CheckSparse)"; }
+	fi
+}
+
+build_bluez_series() {
+	local t=$1 b=$2 w c log=$RUN/build.log tests
+	w=$(build_worktree "$t" bluez)
+	[ -d "$ELL_TREE/ell" ] || die "no ELL at $ELL_TREE (git clone git://git.kernel.org/pub/scm/libs/ell/ell.git; UPSTREAM_ELL)"
+	git -C "$w" checkout -q --detach "$b"
+	info "configure (bootstrap-configure: maintainer mode, -Werror)"
+	(cd "$w" && ./bootstrap-configure --disable-lsan >"$log" 2>&1) || die "configure failed: $log"
+	for c in $(git -C "$t" rev-list --reverse "$b..HEAD"); do
+		git -C "$w" checkout -q --detach "$c"
+		info "build $(git -C "$t" log -1 --format='%h %s' "$c")"
+		make -s -C "$w" -j"$JOBS" >"$log" 2>&1 ||
+			{ grep -E 'error|warning' "$log" | head -20 | sed 's/^/    /'; err "does not build (CI IncrementalBuild)"; }
+	done
+	tests=$(git -C "$t" diff --name-only "$b..HEAD" | ci_select user)
+	if [ -z "$tests" ]; then
+		info "make check: CI skips it for these files"
+	else
+		[ "$tests" = __all__ ] && tests=
+		info "make check ${tests:+TESTS=\"$tests\"}"
+		make -s -C "$w" -j"$JOBS" check ${tests:+TESTS="$tests"} >"$log" 2>&1 ||
+			{ tail -30 "$log" | sed 's/^/    /'; err "make check (CI MakeCheck)"; }
+	fi
+}
+
+build_pipewire_series() {
+	local t=$1 b=$2 w c o log=$RUN/build.log
+	w=$(build_worktree "$t" pipewire)
+	o=$CACHE/pwbuild/$(key "$t")
+	git -C "$w" checkout -q --detach "$b"
+	if [ ! -f "$o/build.ninja" ]; then
+		info "meson setup ${D}(bluez5 enabled: a missing dependency fails here, not silently)${O}"
+		meson setup "$o" "$w" -Dsession-managers=[] -Dbluez5=enabled >"$log" 2>&1 ||
+			{ tail -20 "$log"; die "meson setup failed: install the bluez5 dependencies (sbc, libbluetooth, ...)"; }
+	fi
+	for c in $(git -C "$t" rev-list --reverse "$b..HEAD"); do
+		git -C "$w" checkout -q --detach "$c"
+		info "build $(git -C "$t" log -1 --format='%h %s' "$c")"
+		meson compile -C "$o" >"$log" 2>&1 ||
+			{ grep -E 'error|warning' "$log" | head -20 | sed 's/^/    /'; err "does not build"; }
+	done
+	info "meson test"
+	meson test -C "$o" --no-rebuild >"$log" 2>&1 || { tail -30 "$log" | sed 's/^/    /'; err "meson test"; }
+}
+
+# The testers CI picks for the series, in the tester kernel CI builds (BlueZ's doc/tester.config),
+# with test-runner and the testers from $UPSTREAM_BLUEZ built natively. A tester that hangs is
+# killed after UPSTREAM_TESTER_TIMEOUT seconds (20 minutes; the whole mgmt-tester takes about 3).
+test_kernel_series() {
+	local t=$1 b=$2 w o bt testers x rc log=$RUN/test-build.log
+	testers=${UPSTREAM_TESTERS:-$(git -C "$t" diff --name-only "$b..HEAD" | ci_select kernel)}
+	if [ "$testers" = __all__ ]; then
+		testers=$(python3 -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["space_details"]["kernel"]["ci"]["TestRunner"]["tester-list"]))' "$(action_ci)/config.json")
+	fi
+	[ -n "$testers" ] || { info "testers: CI runs none for these files"; return; }
+	w=$(build_worktree "$t" linux)
+	o=$CACHE/kbuild/tester-$(key "$t")
+	mkdir -p "$o"
+	[ -f "$o/.config" ] || kernel_config "$o" tester.config
+	git -C "$w" checkout -q --detach "$(git -C "$t" rev-parse HEAD)"
+	info "tester kernel"
+	make -s -C "$w" O="$o" olddefconfig
+	make -s -C "$w" O="$o" -j"$JOBS" bzImage >"$log" 2>&1 || { tail -20 "$log"; die "tester kernel build failed"; }
+	bluez_tree
+	# One build of the testers per BlueZ tree, shared by checks of different series: built
+	# under an exclusive lock, used under a shared one, so a rebuild never replaces a running
+	# tester. make is incremental, so a changed tester or emulator is rebuilt.
+	bt=$CACHE/bluez-tools/$(key "$BLUEZ_TREE")
+	mkdir -p "$bt"
+	exec 8>"$bt.lock"
+	flock -x 8
+	info "BlueZ testers from $BLUEZ_TREE"
+	[ -f "$bt/Makefile" ] || (cd "$bt" && "$BLUEZ_TREE/configure" -q --enable-testing --enable-tools \
+		--enable-experimental --enable-deprecated --disable-systemd --disable-cups --disable-manpages >"$log" 2>&1) ||
+		die "BlueZ configure failed: $log"
+	make -s -C "$bt" -j"$JOBS" tools/test-runner $(for x in $testers; do echo "tools/$x"; done) >"$log" 2>&1 ||
+		die "BlueZ tester build failed: $log"
+	flock -s 8
+	for x in $testers; do
+		info "$x"
+		rc=0
+		(cd "$bt" && timeout -k 30 "${UPSTREAM_TESTER_TIMEOUT:-1200}" tools/test-runner ${VIRTIOFSD:+-F"$VIRTIOFSD"} \
+			-k "$o/arch/x86/boot/bzImage" -- "tools/$x" -q </dev/null) >"$RUN/$x.raw" 2>&1 || rc=$?
+		sed 's/\x1b\[[0-9;]*m//g' "$RUN/$x.raw" >"$RUN/$x.log"
+		grep '^Total:' "$RUN/$x.log" | sed 's/^/    /' || true
+		if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+			err "$x timed out (log: $RUN/$x.log)"
+		elif ! grep -q -E '^Total: .*Failed: 0, Not Run: 0' "$RUN/$x.log"; then
+			grep -E ' (Failed|Timed out) ' "$RUN/$x.log" | head -20 | sed 's/^/    /' || true
+			err "$x (log: $RUN/$x.log)"
+		fi
+	done
+	exec 8>&-
+}
+
+# ─── commands ────────────────────────────────────────────────────────────────
+
+cmd_start() {
+	local p=$1 topic=$2 tree=${from:-$ROOT/src/$1} dir=${dir:-$WORKTREES/$1-$2} ref
+	[ -e "$tree/.git" ] || die "no tree at $tree (make src-$p, or --from)"
+	[ "$(detect "$tree")" = "$p" ] || die "$tree is not a $p tree"
+	[ ! -e "$dir" ] || die "$dir exists already"
+	ref=$(upstream_refs "$tree" "$p" | { [ "$p" = linux ] && [ "$fix" != 1 ] && sed -n 2p || head -1; })
+	fetch_ref "$tree" "$ref"
+	git -C "$tree" worktree add -q -b "$topic" "$dir" "$ref"
+	git -C "$dir" branch -q --unset-upstream 2>/dev/null || true
+	echo "${G}$dir${O}: branch $topic on $ref $D($(git -C "$dir" log -1 --format='%h %s'))$O"
+	if [ -n "$pick" ]; then
+		if [[ "$pick" == *..* ]]; then
+			git -C "$dir" cherry-pick "$pick"
+		else
+			git -C "$dir" cherry-pick ${pick//,/ }
+		fi
+	fi
+	[ "$p" = bluez ] && git -C "$dir" config format.subjectprefix "PATCH BlueZ"
+	echo "next: commit there, then $(basename "$0") check $dir"
+}
+
+cmd_check() {
+	local t=$1 p b c n
+	p=$(detect "$t")
+	b=$(pick_base "$t" "$p")
+	# Logs of this tree's checks, and a lock: two checks of one tree would share its build
+	# worktree and output dirs.
+	RUN=$CACHE/run/$p-$(key "$t")
+	mkdir -p "$RUN"
+	exec 9>"$RUN/lock"
+	flock -n 9 || die "another check of $t is running"
+	n=$(git -C "$t" rev-list --count "$b..HEAD")
+	[ "$n" -gt 0 ] || die "nothing between $b and HEAD"
+	[ "$n" -le 30 ] || warn "$n commits on $b: is that the right base?"
+	git -C "$t" rev-list --merges "$b..HEAD" | grep -q . && err "merge commits in $b..HEAD: send a linear series"
+	info "$p: $n commits on $b"
+	for c in $(git -C "$t" rev-list --reverse "$b..HEAD"); do
+		echo "${B}$(git -C "$t" log -1 --format='%h %s' "$c")${O}"
+		check_message "$t" "$p" "$c"
+	done
+	case $p in
+	linux|bluez) run_checkpatch "$t" "$p" "$b" ;;
+	pipewire) run_pipewire_lint "$t" "$b" ;;
+	esac
+	if [ "$build" = 1 ]; then
+		case $p in
+		linux) build_kernel_series "$t" "$b" ;;
+		bluez) build_bluez_series "$t" "$b" ;;
+		pipewire) build_pipewire_series "$t" "$b" ;;
+		esac
+	fi
+	if [ "$test" = 1 ]; then
+		[ "$p" = linux ] && test_kernel_series "$t" "$b" ||
+			info "--test runs the kernel testers; for $p, --build runs what CI runs"
+	fi
+	if command -v gitlint >/dev/null && [ "$p" != pipewire ]; then
+		info "gitlint ${D}(the CI's config)${O}"
+		(cd "$t" && gitlint -C "$(action_ci)/gitlint" \
+			$([ "$p" = linux ] && echo --contrib contrib-body-requires-signed-off-by) \
+			--commits "$b..HEAD") || err "gitlint"
+	fi
+	echo
+	if [ "$errors" -gt 0 ]; then
+		echo "${R}$errors errors${O}, $warnings warnings"; return 1
+	fi
+	echo "${G}ok${O}, $warnings warnings"
+}
+
+cmd_trailers() {
+	local t=$1 p b add=
+	p=$(detect "$t")
+	b=$(pick_base "$t" "$p")
+	[ -z "$(git -C "$t" status --porcelain --untracked-files=no)" ] || die "$t has uncommitted changes"
+	if git -C "$t" branch -r --contains HEAD 2>/dev/null | grep -q .; then
+		die "HEAD is on a remote branch already: not rewriting pushed commits"
+	fi
+	if [ "$ai" = 1 ]; then
+		case $p in
+		linux) add="Assisted-by: LLM" ;;
+		bluez) add="Assisted-by: Claude:$AI_MODEL" ;;
+		pipewire) die "PipeWire's AGENTS.md forbids AI trailers: there is nothing to add" ;;
+		esac
+	fi
+	UP_ADD=$add UP_DROP_SOB=$([ "$p" = bluez ] && echo 1 || true) \
+		git -C "$t" rebase -q "$b" --exec "$(readlink -f "$0") _amend" 2>&1 | grep -v -a 'Executing: ' || true
+	[ "${PIPESTATUS[0]}" = 0 ] || die "the rebase stopped: see git -C $t status"
+	git -C "$t" log --format='%h %s%n%(trailers:only,unfold)' "$b..HEAD"
+}
+
+# Run by cmd_trailers' rebase on each commit: amend the message of HEAD in the current directory.
+# The Assisted-by goes right before the first Signed-off-by, where the kernel's examples put it.
+cmd__amend() {
+	local m
+	m=$(git log -1 --format=%B |
+	    sed -E '/^(Co-Authored-By|Co-developed-by): .*(claude|anthropic)/Id; /^Claude-Session:/d; /Generated with \[?Claude/d')
+	[ -n "${UP_DROP_SOB:-}" ] && m=$(sed '/^Signed-off-by:/d' <<<"$m")
+	if [ -n "${UP_ADD:-}" ] && ! grep -q '^Assisted-by:' <<<"$m"; then
+		if grep -q '^Signed-off-by:' <<<"$m"; then
+			m=$(awk -v a="$UP_ADD" '/^Signed-off-by:/ && !d { print a; d = 1 } { print }' <<<"$m")
+		else
+			m=$(git interpret-trailers --trailer "$UP_ADD" <<<"$m")
+		fi
+	fi
+	git commit -q --amend --no-verify -F - <<<"$m"
+}
+
+cmd_export() {
+	local t=$1 p b n branch out args=() cc
+	p=$(detect "$t")
+	b=$(pick_base "$t" "$p")
+	if [ "$p" = pipewire ]; then
+		cmd_check "$t" || [ "$force" = 1 ] || die "fix the errors first (or --force)"
+		branch=$(git -C "$t" branch --show-current)
+		cat <<-EOF
+
+		${B}PipeWire takes merge requests${O} on gitlab.freedesktop.org/pipewire/pipewire, from a fork there
+		(a new account must ask for fork rights first: a "User verification" issue in
+		freedesktop/freedesktop). Its AGENTS.md: the commit messages and the MR description are
+		yours, not an assistant's; no AI trailers; you must be able to explain every change.
+
+		  git -C $t remote add gitlab git@ssh.gitlab.freedesktop.org:<you>/pipewire.git
+		  git -C $t push gitlab $branch
+		  # then open the MR against pipewire/pipewire master in the web UI
+		EOF
+		return
+	fi
+	cmd_check "$t" || [ "$force" = 1 ] || die "fix the errors first (or --force)"
+	[ "$p" = bluez ] && [ "$signoff" = 1 ] && die "BlueZ does not take Signed-off-by"
+	n=$(git -C "$t" rev-list --count "$b..HEAD")
+	branch=$(git -C "$t" branch --show-current)
+	out=$ROOT/build/upstream/out/${branch:-series}-v${version:-1}
+	[ ! -e "$out" ] || die "$out exists: remove it or bump -v"
+	args=(-M --base="$b" -o "$out" --to="$LIST")
+	[ "$n" -gt 1 ] && args+=(--cover-letter)
+	[ -n "$version" ] && [ "$version" -gt 1 ] && args+=(-v "$version")
+	[ "$signoff" = 1 ] && args+=(--signoff)
+	if [ "$p" = bluez ]; then
+		args+=(--subject-prefix="PATCH BlueZ")
+	else
+		# The maintainers get_maintainer.pl names, not its lists beyond linux-bluetooth.
+		while IFS= read -r cc; do args+=(--cc="$cc"); done < <(
+			git -C "$t" diff --name-only "$b..HEAD" |
+			(cd "$t" && xargs perl scripts/get_maintainer.pl --no-rolestats --no-l --no-git-fallback -f) |
+			grep -v -F "$(git -C "$t" config user.email)" || true)
+	fi
+	git -C "$t" format-patch -q "${args[@]}" "$b..HEAD"
+	echo
+	echo "${G}$out${O} ($n patches on $b)"
+	ls "$out" | sed 's/^/  /'
+	[ "$n" -gt 1 ] && echo "${Y}Write the cover letter${O} ($out/*0000-cover-letter.patch: subject and blurb)."
+	[ -n "$version" ] && [ "$version" -gt 1 ] &&
+		echo "${Y}Add the changes since v$((version - 1))${O} under each patch's '---' (or in the cover letter)."
+	cat <<-EOF
+	Read every patch before sending; then, from a shell of your own:
+
+	  git send-email --dry-run $out/*.patch
+	  git send-email $out/*.patch
+	EOF
+}
+
+# ─── arguments ───────────────────────────────────────────────────────────────
+
+cmd=${1:-}; [ -n "$cmd" ] || usage; shift
+base= build=0 test=0 ai=0 strict= fix=0 pick= from= dir= version= signoff=0 force=0
+pos=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--base) base=$2; shift 2 ;;
+	--base=*) base=${1#*=}; shift ;;
+	--build) build=1; shift ;;
+	--test) test=1; shift ;;
+	--ai) ai=1; shift ;;
+	--strict) strict=1; shift ;;
+	--fix) fix=1; shift ;;
+	--pick) pick=$2; shift 2 ;;
+	--from) from=$(readlink -f "$2"); shift 2 ;;
+	--dir) dir=$2; shift 2 ;;
+	-v) version=$2; shift 2 ;;
+	--signoff) signoff=1; shift ;;
+	--force) force=1; shift ;;
+	-h|--help) usage ;;
+	-*) echo "Unknown option: $1" >&2; usage ;;
+	*) pos+=("$1"); shift ;;
+	esac
+done
+
+case $cmd in
+start)
+	[ ${#pos[@]} -eq 2 ] || usage
+	case ${pos[0]} in linux|bluez|pipewire) ;; *) usage ;; esac
+	cmd_start "${pos[0]}" "${pos[1]}" ;;
+_amend) cmd__amend ;;
+check|trailers|export)
+	tree=$(readlink -f "${pos[0]:-.}")
+	tree=$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null) || die "${pos[0]:-.} is not a git tree"
+	"cmd_$cmd" "$tree" ;;
+*) usage ;;
+esac
