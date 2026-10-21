@@ -37,7 +37,8 @@ RESTART ?= 1
 # --recommend-shallow also holds for fetching the recorded commit when it is not a branch's tip. A src dir
 # other than src/<name> (BLUEZ_SRC=~/projects/bluez-topic, say) is used as it is. The generated
 # compile_commands.json and .clangd go to the tree's info/exclude, so they never show up in git
-# status.
+# status; so do the oe-logs and oe-workdir links bitbake's externalsrc leaves in a tree the image is
+# built from (SRC=local), and the *~ backups autotools' bootstrap leaves.
 define src_submodule
 set -e; name="$(1)"; src="$(2)"; \
 if [ "$$src" != "$(ROOT)/src/$$name" ]; then \
@@ -56,7 +57,7 @@ else \
 fi; \
 if gd=$$(git -C "$$src" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then \
   mkdir -p "$$gd/info"; \
-  for p in compile_commands.json .clangd; do \
+  for p in compile_commands.json .clangd oe-logs oe-workdir '*~'; do \
     grep -qxF "$$p" "$$gd/info/exclude" 2>/dev/null || echo "$$p" >> "$$gd/info/exclude"; \
   done; \
 fi
