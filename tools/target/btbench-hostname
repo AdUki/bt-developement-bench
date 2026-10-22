@@ -33,17 +33,22 @@ burned() {
     echo "$a"
 }
 
-# The Wi-Fi driver (brcmfmac over SDIO) comes up some seconds into the boot: wait for it a little.
+# The Wi-Fi driver (brcmfmac over SDIO) comes up some seconds into the boot: wait for it, and only
+# then settle for another interface. Taking the first one there is would make the name depend on
+# which driver won the race: on a Pi 5 the Ethernet (on the RP1) is up seconds before the Wi-Fi,
+# and the board would answer to one name or the other from boot to boot.
 mac=
-for i in $(seq 1 30); do
+for i in $(seq 1 20); do
     mac=$(burned wlan0) && break
+    sleep 1
+done
+if [ -z "$mac" ]; then
     for n in /sys/class/net/*; do
         n=${n##*/}
         case $n in lo | wlan0 | usb* | p2p*) continue ;; esac
-        mac=$(burned "$n") && break 2
+        mac=$(burned "$n") && break
     done
-    sleep 1
-done
+fi
 if [ -z "$mac" ]; then
     log "no interface with a burned-in MAC address: the name stays $(hostname)"
     exit 0
