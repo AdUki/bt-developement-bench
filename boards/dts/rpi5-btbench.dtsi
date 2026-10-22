@@ -12,6 +12,9 @@
  * the M.2 HAT plugs into (pcie1) and the RP1 behind pcie2 (USB host ports, Ethernet).
  */
 
+#include <dt-bindings/power/raspberrypi-power.h>
+#include <dt-bindings/pwm/pwm.h>
+
 / {
 	/*
 	 * The USB-C port is the power input and, behind it, the BCM2712's own dwc2 controller (not
@@ -43,6 +46,8 @@
 		clock-names = "otg";
 		phys = <&usbphy>;
 		phy-names = "usb2-phy";
+		/* The firmware powers the block on request, as for the downstream kernel's node. */
+		power-domains = <&power RPI_POWER_DOMAIN_USB>;
 		/*
 		 * "peripheral" makes it a device whatever the cable. The board is powered through the
 		 * same port, so the PC's port has to supply it (docs/kernel.md "Raspberry Pi 5").
@@ -71,5 +76,184 @@
 		record-size = <0x20000>;
 		console-size = <0x40000>;
 		pmsg-size = <0x20000>;
+	};
+};
+
+/*
+ * The 40-pin header's UART (GPIO 14/15, pins 8/10): the RP1's uart0, a PL011 behind PCIe. Mainline
+ * has the RP1's pin groups and UART clock but no node for the UART itself; this is the downstream
+ * kernel's (rp1.dtsi), with interrupt 25 of the RP1's own controller. A second console for a
+ * USB-serial adapter on the header when the JST connector has no cable. It comes up only once
+ * pcie2 and the RP1 have probed, so firmware, U-Boot and the kernel's first second print on the
+ * JST connector alone; the console then replays the kernel log from the start.
+ */
+/ {
+	aliases {
+		serial0 = &rp1_uart0;
+		/*
+		 * The firmware writes the board's addresses into the nodes these aliases name, as it
+		 * does for the downstream device tree; mainline has only ethernet0. Without them the
+		 * CYW43455's Bluetooth has no address (it has none of its own: btbcm leaves it
+		 * unconfigured, absent from mgmt) and its Wi-Fi uses the chip's default MAC.
+		 */
+		bluetooth = &bluetooth;
+		wifi0 = &wifi;
+	};
+};
+
+/* The properties the firmware fills in (it updates them, so they have to exist). */
+&bluetooth {
+	local-bd-address = [00 00 00 00 00 00];
+};
+
+&wifi {
+	local-mac-address = [00 00 00 00 00 00];
+};
+
+&rp1_eth {
+	local-mac-address = [00 00 00 00 00 00];
+};
+
+&rp1_gpio {
+	rp1_uart0_14_15: rp1-uart0-14-15-state {
+		function = "uart0";
+		groups = "uart0";
+		bias-disable;
+	};
+};
+
+&pci_ep_bus {
+	rp1_uart0: serial@40030000 {
+		compatible = "arm,pl011", "arm,primecell";
+		reg = <0x0 0x40030000 0x0 0x100>;
+		interrupts = <25 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&rp1_clocks RP1_CLK_UART>, <&rp1_clocks RP1_CLK_SYS>;
+		clock-names = "uartclk", "apb_pclk";
+		/* The crystal, undivided: a rate the baud divisors are worked out from. */
+		assigned-clocks = <&rp1_clocks RP1_CLK_UART>;
+		assigned-clock-rates = <50000000>;
+		/* The RP1 takes 32-bit accesses only. */
+		reg-io-width = <4>;
+		arm,primecell-periphid = <0x00541011>;
+		pinctrl-0 = <&rp1_uart0_14_15>;
+		pinctrl-names = "default";
+	};
+};
+
+/*
+ * Fan control, as the downstream kernel does it. Mainline has neither the SoC's temperature sensor
+ * nor the fan: the fan connector's PWM line (RP1 PWM1 channel 3 on GPIO 45) is left alone and the
+ * fan runs at full speed from power-on. The sensor is the BCM2711's (the AVS monitor, the
+ * bcm2711_thermal driver), the PWM the RP1's (pwm-rp1, a bench commit in src/linux until it is
+ * upstream), the fan pwm-fan.
+ */
+&soc {
+	avs_monitor: avs-monitor@7d542000 {
+		compatible = "brcm,bcm2711-avs-monitor", "syscon", "simple-mfd";
+		reg = <0x7d542000 0xf00>;
+
+		cpu_temp: thermal {
+			compatible = "brcm,bcm2711-thermal";
+			#thermal-sensor-cells = <0>;
+		};
+	};
+};
+
+&rp1_gpio {
+	rp1_pwm1_gpio45: rp1-pwm1-gpio45-state {
+		function = "pwm1";
+		groups = "gpio45";
+		bias-pull-down;
+	};
+};
+
+&pci_ep_bus {
+	rp1_pwm1: pwm@4009c000 {
+		compatible = "raspberrypi,rp1-pwm";
+		reg = <0x0 0x4009c000 0x0 0x100>;
+		#pwm-cells = <3>;
+		clocks = <&rp1_clocks RP1_CLK_PWM1>;
+		assigned-clocks = <&rp1_clocks RP1_CLK_PWM1>;
+		assigned-clock-rates = <50000000>;
+		pinctrl-0 = <&rp1_pwm1_gpio45>;
+		pinctrl-names = "default";
+	};
+};
+
+/ {
+	/*
+	 * The board inverts the PWM line, so duty 0 stops the fan. 41566 ns is the downstream
+	 * kernel's period (about 24 kHz); the levels are its four speeds and off.
+	 */
+	fan: cooling-fan {
+		compatible = "pwm-fan";
+		#cooling-cells = <2>;
+		cooling-levels = <0 75 125 175 250>;
+		pwms = <&rp1_pwm1 3 41566 PWM_POLARITY_INVERTED>;
+	};
+
+	thermal-zones {
+		cpu-thermal {
+			polling-delay-passive = <1000>;
+			polling-delay = <1000>;
+			/* The sensor's raw value to millidegrees, as in the downstream device tree. */
+			coefficients = <(-550) 450000>;
+			thermal-sensors = <&cpu_temp>;
+
+			/* The downstream kernel's steps: off below 50 C, full speed from 75 C. */
+			trips {
+				cpu_tepid: cpu-tepid {
+					temperature = <50000>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+
+				cpu_warm: cpu-warm {
+					temperature = <60000>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+
+				cpu_hot: cpu-hot {
+					temperature = <67500>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+
+				cpu_vhot: cpu-vhot {
+					temperature = <75000>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+
+				cpu_crit: cpu-crit {
+					temperature = <110000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				tepid {
+					trip = <&cpu_tepid>;
+					cooling-device = <&fan 1 1>;
+				};
+
+				warm {
+					trip = <&cpu_warm>;
+					cooling-device = <&fan 2 2>;
+				};
+
+				hot {
+					trip = <&cpu_hot>;
+					cooling-device = <&fan 3 3>;
+				};
+
+				vhot {
+					trip = <&cpu_vhot>;
+					cooling-device = <&fan 4 4>;
+				};
+			};
+		};
 	};
 };

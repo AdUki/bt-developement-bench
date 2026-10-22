@@ -6,7 +6,8 @@
 # Wi-Fi on PCIe (iwlwifi), Bluetooth on the slot's USB pins (btusb + btintel). USB-C is the power
 # input and the BCM2712's dwc2 controller: the gadget link to the PC. Gigabit Ethernet on the RP1.
 #
-# Not booted yet: the image builds. docs/kernel.md "Raspberry Pi 5" has what to check first.
+# Boots with both kernels (a revision 1.0 board, C1). docs/kernel.md "Raspberry Pi 5" has what to
+# check on a first boot.
 
 MACHINE := raspberrypi5
 # meta-lts-mixins' scarthgap/u-boot: U-Boot 2025.04. Scarthgap's own 2024.01 predates the Pi 5;
