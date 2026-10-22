@@ -310,63 +310,91 @@ The good slot is `/boot/Image` and `/boot/meson-sm1-khadas-vim3l.dtb`.
 ## Raspberry Pi 5 (`BOARD=rpi5`)
 
 BCM2712 (four Cortex-A76, arm64), with an Intel BE200 on an M.2 HAT as the bench's second
-adapter. Both kernels, `KERNEL=next` by default. The image builds; it has not been booted yet.
+adapter. Both kernels, `KERNEL=next` by default. Both boot on a revision 1.0 8 GB board (C1).
 
 | | |
 |---|---|
-| defconfig | arm64 `defconfig` + `boards/rpi5.cfg` (every SoC family but Broadcom's off, PCIe and the RP1 built in, iwlwifi with the MLD op mode, no HDMI sound card) |
-| device tree | `broadcom/bcm2712-d-rpi-5-b.dtb` (D0) or `bcm2712-rpi-5-b.dtb` (C1), `RPI5_SOC=d0\|c1`, with `boards/dts/rpi5-btbench.dtsi`: the USB-C port's dwc2 as a peripheral (mainline has no node for it) and a ramoops region |
-| Bluetooth | onboard CYW43455 on `uarta` (8250 bcm7271) with RTS/CTS, `brcm,bcm43438-bt`, hci_uart over serdev: hci0. The BE200 on USB, btusb + btintel: hci1 |
+| defconfig | arm64 `defconfig` + `boards/rpi5.cfg` (every SoC family but Broadcom's off; PCIe, its MSI-X controller and the RP1 with its clocks and pins built in; iwlwifi with the MLD op mode; fan control; no HDMI sound card) |
+| device tree | `broadcom/bcm2712-d-rpi-5-b.dtb` (D0) or `bcm2712-rpi-5-b.dtb` (C1), `RPI5_SOC=d0\|c1`, with `boards/dts/rpi5-btbench.dtsi`: the USB-C port's dwc2 as a peripheral (mainline has no node for it), the aliases the firmware fills the board's addresses in by, the header's UART, fan control and a ramoops region |
+| Bluetooth | onboard CYW43455 on `uarta` (8250 bcm7271) with RTS/CTS, `brcm,bcm43438-bt`, hci_uart over serdev. The BE200 on USB, btusb + btintel. Under bluetooth-next the BE200 probes first and is hci0, the CYW43455 hci1; under the downstream kernel the other way round. `btbench-bdaddr` tells them apart by their bus |
 | Wi-Fi | onboard CYW43455 on SDIO, brcmfmac: `wlan0`, the bench's. The BE200 on PCIe, iwlwifi: `wlpcie0`, unconfigured |
 | gadget | dwc2, `1000480000.usb`, on the USB-C port that also powers the board |
-| console | the 3-pin JST "UART" connector between the HDMI ports, 3.3 V, 115200 8N1 (`ttyAMA10`; the Raspberry Pi Debug Probe fits it) |
+| console | the 3-pin JST "UART" connector between the HDMI ports, 3.3 V, 115200 8N1 (`ttyAMA10`; the Raspberry Pi Debug Probe fits it): firmware, U-Boot, the kernel's log. A login also on the header's GPIO 14/15, pins 8/10 (`ttyAMA0`, the RP1's uart0) |
+| fan | the fan connector on RP1 PWM1 channel 3, `pwm-fan` stepped by the SoC's temperature: off below 50 C, full from 75 C (the downstream kernel's steps) |
 | Ethernet | RP1 (macb), DHCP through systemd-conf's `80-wired.network` |
 
 **The SoC stepping.** The D0 moved the pin controllers and the debug UART's interrupt, and mainline
 has a dts for each stepping. config.txt has no filter for the stepping, so `boards/rpi5.mk` picks
 the dtb with `RPI5_SOC` (default `d0`) and the board conf names it in `device_tree=`. All 2 GB and
-16 GB boards and later 4 GB and 8 GB ones are D0; the first 4 GB and 8 GB boards (revision 1.0)
-are C1. With the wrong one the firmware and U-Boot print on the debug UART, and the kernel prints
-nothing. Rebuild with `make image BOARD=rpi5 RPI5_SOC=c1`, or put `RPI5_SOC := c1` in
-`bench.conf`. `KERNEL=rpi` leaves the choice to the firmware.
+16 GB boards and later 4 GB and 8 GB ones are D0; the first 4 GB and 8 GB boards (revision 1.0,
+`Revision : c04170`/`d04170`) are C1. With the wrong one the firmware and U-Boot print on the
+debug UART, the kernel prints nothing and its panic reboots the board after 10 s, over and over:
+the fan spins up and stops. Put `RPI5_SOC ?= c1` in `bench.conf`. Under the downstream kernel,
+`grep . /proc/device-tree/soc@107c000000/pinctrl@7d504100/compatible` says which one a board is
+(`brcm,bcm2712-pinctrl` C1, `brcm,bcm2712d0-pinctrl` D0). `KERNEL=rpi` leaves the choice to the
+firmware (the image ships both its dtbs).
 
 **The boot chain.** The firmware lives in the board's EEPROM, not on the card. It reads
 `config.txt` and loads U-Boot as `kernel_2712.img`. That U-Boot is 2025.04 from meta-lts-mixins'
 `scarthgap/u-boot` branch (`rpi_arm64_defconfig`), because scarthgap's own 2024.01 predates the
 Pi 5. `make` clones the layer for this board only, and meta-raspberrypi recommends it. U-Boot runs
 the same `boot.scr` as on the other Pis, with the firmware's device tree and command line.
+`config.txt` has `os_check=0` (the bootloader would otherwise check the partition for a device
+tree by the firmware's own names, which mainline's are not) and `uart_2ndstage=1` (the firmware's
+log on the JST connector).
+
+**The header's UART.** GPIO 14/15 is the RP1's uart0, behind PCIe. It works once the RP1 driver
+has probed, about 4 s into the boot; firmware and U-Boot never print there. It carries a login
+(a getty on `ttyAMA0`) but not the kernel's log: the PL011 driver has one console for all its ports,
+and `ttyAMA10` has it. It cannot be an earlycon either: an access to 0x1f00030000 before the
+kernel's PCIe driver has set the link up stalls the bus, silently, even with the firmware's
+`enable_rp1_uart=1`. Mainline describes no RP1 UART; the dtsi's node needs the bench's amba commit
+in `src/linux` (an AMBA device inside a PCI BAR was refused with -EBUSY).
 
 **The M.2 HAT.** The Pi 5's PCIe FFC connector carries PCIe alone, and the BE200 is two devices:
 the Wi-Fi on PCIe, and the Bluetooth as a USB device on the M.2 slot's USB pins. A HAT that only
-wires PCIe gives you `wlpcie0` and no hci1. A HAT for E-key cards that takes USB from one of the
-board's USB-A ports (a cable or a pogo-pin bridge) gives you both. The Pi 5 powers the HAT
-through the FFC and the header: give the board its 5 V/5 A supply. Over a PC's USB-C port the
+wires PCIe gives you `wlpcie0` and no BE200 Bluetooth. A HAT for E-key cards that takes USB from
+one of the board's USB-A ports (a cable or a pogo-pin bridge) gives you both. The Pi 5 powers the
+HAT through the FFC and the header: give the board its 5 V/5 A supply. Over a PC's USB-C port the
 gadget link works, but a Pi 5 with a busy M.2 card may brown out (`in0_lcrit_alarm`). Ethernet,
 or Wi-Fi with the supply on USB-C, is then the way in.
 
-**First boot, what to check** (in this order, on the debug UART):
+**First boot, what to check:**
 
-1. Firmware, then `U-Boot 2025.04`, then the kernel's first lines on `ttyAMA10`. Kernel silent:
-   wrong `RPI5_SOC`.
-2. The root mounts (`root=PARTUUID=b7be4c4e-02`, sdhci-brcmstb), and `usb0` comes up when the
-   USB-C port is on a PC (`/sys/class/udc/1000480000.usb`).
+1. On the JST connector: firmware, then `U-Boot 2025.04`, then the kernel. Without a cable there:
+   the header's login after about 10 s, or the board on Wi-Fi as `btbench-<last 3 bytes of the
+   Wi-Fi MAC>.local`.
+2. `btmgmt info` lists both adapters, the CYW43455 with the board's own address (`2c:cf:67:...`,
+   from the firmware through the `bluetooth` alias). `43:45:C0:00:1F:AC` there is the chip's
+   default: btbcm has to know it as one (a bench commit in `src/linux`) to use the firmware's.
 3. `lspci`: the RP1 (`1de4:0001`) and the BE200 (`8086:272b`). No BE200: check the FFC cable, and
    for `brcm-pcie` errors in `dmesg`.
 4. `dmesg | grep -e iwlwifi -e Bluetooth`: iwlwifi loads `iwlwifi-gl-c0-fm-c0-c107.ucode` and the
-   `.pnvm`, btintel `intel/ibt-0291-0291.sfi`; `btmgmt info` lists hci0 (the CYW43455) and hci1.
-5. `ip link`: `wlan0` (brcmfmac) and `wlpcie0` (iwlwifi).
+   `.pnvm`, btintel `intel/ibt-0291-0291.sfi`.
+5. `ip link`: `wlan0` (brcmfmac) and `wlpcie0` (iwlwifi); `/sys/class/thermal/cooling_device0` is
+   `pwm-fan`, 0 when the SoC is cool.
 
 **Kernel trials** work as on the other Pis (`TRY_METHOD=uboot-oneshot`, `tryboot` with
-`KERNEL=rpi`). U-Boot keeps its environment in `/boot/uboot.env` on mmc 0, the SD card. `boot.scr`
-also tries the BCM2712's watchdog (`watchdog@7d200000`), but U-Boot 2025.04 may have no driver
-for it. If it has none, a test kernel that hangs before the kernel's `bcm2835_wdt` takes over is
-not reset, and you power-cycle the board to get back to the good kernel. Whether the ramoops
-region survives the Pi 5's reset is also untested.
+`KERNEL=rpi`). U-Boot keeps its environment in `/boot/uboot.env` on mmc 0, the SD card. U-Boot
+2025.04 has no driver for the BCM2712's watchdog (`fw_printenv bench_wdt` says `none` after a
+trial), so a test kernel that hangs is not reset: power-cycle the board to get back to the good
+kernel. One that panics reboots warm, and the ramoops region survives that: the boot after a trial
+copies it to `/boot/bench/test/ramoops.bin` before the good kernel runs, where pstore's console
+zone holds the trial's whole log.
 
-**Room for the kernel.** U-Boot loads `Image` at `kernel_addr_r` (0x80000), and a trial boot then
-loads its `board.dtb` at `fdt_addr_r` (0x2600000). That leaves 37.5 MB for the kernel. The image's
-is 37.3 MB, trimmed to Broadcom by `boards/rpi5.cfg`. A config that grows it past that limit
-breaks trial boots, because the dtb is loaded over the kernel's tail. Check the size of a
-`make linux` build before `linux-test`.
+A trial of a mainline kernel on an image of the downstream kernel needs `cma=64M@0-1G` in
+`bench_bootargs`. U-Boot copies `/reserved-memory/linux,cma`'s `size` from the firmware's device
+tree into the one it boots, and the downstream tree's has one cell to mainline's two. The kernel
+rejects the node, puts CMA at 4 GiB, and the VideoCore cannot reach the mailbox buffers there:
+every firmware request "returned status 0x00000000", and with them the firmware clocks, the power
+domains and PCIe are gone. On a bluetooth-next image the firmware's tree is mainline's, and the
+copy is harmless.
+
+**Room for the kernel.** bluetooth-next's Image occupies 38.2 MB once its BSS is counted (the
+header's `image_size`), more than U-Boot's layout (`rpi.env`) keeps free below `scriptaddr`
+(0x02400000) for a kernel loaded at 0x80000 and moved to 0x200000. `boot.scr` loads an arm64
+Image at 256 MiB (0x10000000, 2 MiB-aligned: `booti` leaves it there) and a trial's `board.dtb` at
+128 MiB, both clear of each other, of the ramoops region at 176 MiB and of the firmware's device
+tree (near 750 MiB).
 
 The good slot is `/boot/Image` and `/boot/bcm2712-d-rpi-5-b.dtb` (or the C1's).
