@@ -319,7 +319,7 @@ adapter. Both kernels, `KERNEL=next` by default. Both boot on a revision 1.0 8 G
 | Bluetooth | onboard CYW43455 on `uarta` (8250 bcm7271) with RTS/CTS, `brcm,bcm43438-bt`, hci_uart over serdev. The BE200 on USB, btusb + btintel. Under bluetooth-next the BE200 probes first and is hci0, the CYW43455 hci1; under the downstream kernel the other way round. `btbench-bdaddr` tells them apart by their bus |
 | Wi-Fi | onboard CYW43455 on SDIO, brcmfmac: `wlan0`, the bench's. The BE200 on PCIe, iwlwifi: `wlpcie0`, unconfigured |
 | gadget | dwc2, `1000480000.usb`, on the USB-C port that also powers the board |
-| console | the 3-pin JST "UART" connector between the HDMI ports, 3.3 V, 115200 8N1 (`ttyAMA10`; the Raspberry Pi Debug Probe fits it): firmware, U-Boot, the kernel's log. A login also on the header's GPIO 14/15, pins 8/10 (`ttyAMA0`, the RP1's uart0) |
+| console | the 3-pin JST "UART" connector between the HDMI ports, 3.3 V, 115200 8N1 (`ttyAMA10`; the Raspberry Pi Debug Probe fits it): firmware and U-Boot. The header's GPIO 14/15, pins 8/10 (`ttyAMA0`, the RP1's uart0): bluetooth-next's log, replayed from the start once the RP1 is up. A login on both |
 | fan | the fan connector on RP1 PWM1 channel 3, `pwm-fan` stepped by the SoC's temperature: off below 50 C, full from 75 C (the downstream kernel's steps) |
 | Ethernet | RP1 (macb), DHCP through systemd-conf's `80-wired.network` |
 
@@ -344,9 +344,13 @@ tree by the firmware's own names, which mainline's are not) and `uart_2ndstage=1
 log on the JST connector).
 
 **The header's UART.** GPIO 14/15 is the RP1's uart0, behind PCIe. It works once the RP1 driver
-has probed, about 4 s into the boot; firmware and U-Boot never print there. It carries a login
-(a getty on `ttyAMA0`) but not the kernel's log: the PL011 driver has one console for all its ports,
-and `ttyAMA10` has it. It cannot be an earlycon either: an access to 0x1f00030000 before the
+has probed, about half a second into the boot; firmware and U-Boot never print there. It carries
+bluetooth-next's log (`console=ttyAMA0`), which it replays from the start when it comes up, and a
+login. The PL011 driver has one console for all its ports, so the JST connector then has none
+(firmware, U-Boot and a login only); `console=ttyAMA10,115200 earlycon` in `cmdline.txt` moves the
+log there, from the kernel's first instructions. An earlycon next to `console=ttyAMA0` would cost
+the replay: printk takes the boot console for the same device and skips it. The header cannot be
+an earlycon either: an access to 0x1f00030000 before the
 kernel's PCIe driver has set the link up stalls the bus, silently, even with the firmware's
 `enable_rp1_uart=1`. Mainline describes no RP1 UART; the dtsi's node needs the bench's amba commit
 in `src/linux` (an AMBA device inside a PCI BAR was refused with -EBUSY).
@@ -361,9 +365,9 @@ or Wi-Fi with the supply on USB-C, is then the way in.
 
 **First boot, what to check:**
 
-1. On the JST connector: firmware, then `U-Boot 2025.04`, then the kernel. Without a cable there:
-   the header's login after about 10 s, or the board on Wi-Fi as `btbench-<last 3 bytes of the
-   Wi-Fi MAC>.local`.
+1. On the header (pins 8/10): the kernel's log from about half a second in, then a login. On the
+   JST connector: firmware and `U-Boot 2025.04`. Or the board on Wi-Fi as `btbench-<last 3 bytes
+   of the Wi-Fi MAC>.local`.
 2. `btmgmt info` lists both adapters, the CYW43455 with the board's own address (`2c:cf:67:...`,
    from the firmware through the `bluetooth` alias). `43:45:C0:00:1F:AC` there is the chip's
    default: btbcm has to know it as one (a bench commit in `src/linux`) to use the firmware's.
