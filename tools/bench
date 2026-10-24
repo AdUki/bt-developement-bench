@@ -426,33 +426,38 @@ cmd_auracast() {
            + (if .node != null then "  node " + .node else "" end)
            + (if .program_info then "  ♪ " + .program_info else "" end)))' ;;
     start)
-      # bench auracast start [PRESET] [mono|stereo] [CODE]
-      local preset=48_2_1 ch=2 code=""
+      # bench auracast start [PRESET] [mono|left|right|stereo] [CODE]
+      local preset=48_2_1 ch=2 loc="" code=""
       shift
       for a in "$@"; do
         case "$a" in
-          mono) ch=1 ;; stereo) ch=2 ;;
+          mono|left) ch=1 loc=left ;; right) ch=1 loc=right ;; stereo) ch=2 loc="" ;;
           [0-9]*_[0-9]_[12]) preset=$a ;;
           *) code=$a ;;
         esac
       done
-      post /api/le-audio/broadcasts "$(jq -nc --arg p "$preset" --argjson c "$ch" --arg k "$code" \
-          '{preset: $p, channels: $c, code: $k}')" \
+      post /api/le-audio/broadcasts "$(jq -nc --arg p "$preset" --argjson c "$ch" --arg l "$loc" --arg k "$code" \
+          '{preset: $p, channels: $c, code: $k} + (if $l == "" then {} else {location: $l} end)')" \
         | show '"BIG " + (.big | tostring) + " ready: play into it (bench auracast) to go on air"' ;;
     stop)
       [ $# -ge 2 ] || die "usage: bench auracast stop BIG"
       del "/api/le-audio/broadcasts/$2" >/dev/null && echo "BIG $2 stopped" ;;
     listen|leave)
-      # A source's address takes its first stream; a stream's path names one.
+      # A source's address takes all its streams (linked: one BIG sync with every BIS, a left and
+      # a right one together); a stream's path names one.
       [ $# -ge 2 ] || die "usage: bench auracast $1 ADDR|PATH [CODE]"
-      local path=$2
+      local path=$2 links='[]'
       if [ "${path#/}" = "$path" ]; then
-        path=$(get /api/le-audio | jq -r --arg a "${2^^}" '[.sources[] | select(.address == $a) | .streams[].path][0] // empty')
+        local all
+        all=$(get /api/le-audio | jq -c --arg a "${2^^}" '[.sources[] | select(.address == $a) | .streams[].path]')
+        path=$(jq -r '.[0] // empty' <<<"$all")
+        links=$(jq -c '.[1:]' <<<"$all")
         [ -n "$path" ] || die "no broadcast stream from $2 (bench auracast: is it found and read?)"
       fi
       put /api/le-audio/streams "$(jq -nc --arg p "$path" --argjson r "$([ "$1" = listen ] && echo true || echo false)" \
-          --arg k "${3-}" '{path: $p, receive: $r, code: $k}')" >/dev/null && echo "$1: $path" ;;
-    *) die "usage: bench auracast [ls] | start [PRESET] [mono|stereo] [CODE] | stop BIG | listen|leave ADDR|PATH [CODE]" ;;
+          --arg k "${3-}" --argjson l "$links" '{path: $p, receive: $r, code: $k, links: $l}')" >/dev/null \
+        && echo "$1: $path$(jq -r 'if length > 0 then " + " + (map(sub(".*/"; "")) | join(" + ")) else "" end' <<<"$links")" ;;
+    *) die "usage: bench auracast [ls] | start [PRESET] [mono|left|right|stereo] [CODE] | stop BIG | listen|leave ADDR|PATH [CODE]" ;;
   esac
 }
 
@@ -1016,7 +1021,7 @@ ${bold}LE${off}
   adv [ls] | start FILE.json | stop [ID]   LE advertisements (fields: see /api)
   adv le-audio                    advertise as an LE Audio receiver (phones stream to the board)
   auracast                        LE Audio broadcasts: the board's own and the ones in range
-  auracast start [PRESET] [mono|stereo] [CODE]   a broadcast (48_2_1 stereo): play into its node
+  auracast start [PRESET] [mono|left|right|stereo] [CODE]   a broadcast (48_2_1 stereo; right: one channel, the right one): play into its node
   auracast stop BIG | listen|leave ADDR|PATH [CODE]   end one / receive one found by a scan
 ${bold}Audio${off}
   audio [restart [--restart-bt]]         show the audio stack, or restart PipeWire + WirePlumber

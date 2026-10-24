@@ -130,9 +130,12 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
     send_ok(res);
   });
 
-  // Body: {path: a broadcaster's stream (sources[].streams[].path), receive: true|false, code}.
-  // true selects it (BlueZ syncs to the BIG when PipeWire takes it; an encrypted one needs `code`
-  // first), false lets it go.
+  // Body: {path: a broadcaster's stream (sources[].streams[].path), receive: true|false, code,
+  // links}. true selects it (BlueZ syncs to the BIG when PipeWire takes it; an encrypted one needs
+  // `code` first), false lets it go. `links`: the broadcaster's other streams to receive with it —
+  // a BIG sync names its BISes once, when PipeWire takes the first one selected, so a BIS selected
+  // after that is never synced; linked first (MediaTransport1.Links, as bluetoothctl's
+  // transport.select does with several), they are synced together, and each is selected here.
   svr.Put("/api/le-audio/streams", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     const std::string path = j.value("path", std::string{});
     const auto objs = d.bt.objects();
@@ -155,9 +158,38 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
       }, kCallTimeoutMs);
       if (!r.ok) return call_error(res, r);
     }
-    const BtCallResult r = d.bt.call(path, "org.bluez.MediaTransport1", on ? "Select" : "Unselect",
-                                     [](sd_bus_message*) { return 0; }, kCallTimeoutMs);
-    if (!r.ok) return call_error(res, r);
+    std::vector<std::string> links;
+    if (j.contains("links")) {
+      if (!j["links"].is_array()) return send_error(res, 400, "links is a list of the broadcaster's other streams");
+      for (const json& l : j["links"]) {
+        const std::string lp = l.is_string() ? l.get<std::string>() : std::string{};
+        if (lp == path) continue;
+        if (!objs->contains(lp) || !(*objs)[lp].contains("org.bluez.MediaTransport1") || lp.find("/sid") == std::string::npos)
+          return send_error(res, 404, "no such broadcast stream: " + lp);
+        links.push_back(lp);
+      }
+    }
+    if (on && !links.empty()) {
+      const BtCallResult r = d.bt.call(path, "org.freedesktop.DBus.Properties", "Set", [&links](sd_bus_message* m) {
+        int r = sd_bus_message_append(m, "ss", "org.bluez.MediaTransport1", "Links");
+        if (r >= 0) r = sd_bus_message_open_container(m, 'v', "ao");
+        if (r >= 0) r = sd_bus_message_open_container(m, 'a', "o");
+        for (const std::string& l : links)
+          if (r >= 0) r = sd_bus_message_append(m, "o", l.c_str());
+        if (r >= 0) r = sd_bus_message_close_container(m);
+        if (r >= 0) r = sd_bus_message_close_container(m);
+        return r;
+      }, kCallTimeoutMs);
+      if (!r.ok) return call_error(res, r);
+    }
+    // The linked ones first: the first path's Select is what PipeWire acquires the BIG on.
+    std::vector<std::string> all = links;
+    all.push_back(path);
+    for (const std::string& t : all) {
+      const BtCallResult r = d.bt.call(t, "org.bluez.MediaTransport1", on ? "Select" : "Unselect",
+                                       [](sd_bus_message*) { return 0; }, kCallTimeoutMs);
+      if (!r.ok) return call_error(res, r);
+    }
     d.bt.touch();
     send_ok(res);
   }));

@@ -28,6 +28,13 @@ void test_config() {
   CHECK_EQ(c.capabilities[5], uint8_t(0));  // 7.5 ms
   CHECK_EQ(c.sdu, uint16_t(30));
   CHECK(c.encrypted);
+  // One channel: front left, or the right one when said (the allocation LTV's first byte).
+  LeBcastConfig m;
+  CHECK(le_bcast_config_from_json(json{{"preset", "48_2_1"}, {"channels", 1}, {"location", "right"}}, 0, &m, &err));
+  CHECK_EQ(m.capabilities[8], uint8_t(2));
+  CHECK(le_bcast_config_from_json(json{{"preset", "48_2_1"}, {"channels", 1}}, 0, &m, &err));
+  CHECK_EQ(m.capabilities[8], uint8_t(1));
+  CHECK(!le_bcast_config_from_json(json{{"preset", "48_2_1"}, {"channels", 2}, {"location", "right"}}, 0, &m, &err));
   CHECK_EQ(c.code[0], uint8_t('b'));
   CHECK_EQ(c.code[15], uint8_t(0));
   CHECK(!le_bcast_config_from_json(json{{"preset", "44_1_1"}}, 0, &c, &err));

@@ -41,7 +41,8 @@ const std::vector<LeBcastPreset>& le_bcast_presets();
 // of each BIS of one BIG.
 struct LeBcastConfig {
   LeBcastPreset preset;
-  unsigned channels = 2;   // 1 (front left) or 2 (front left + right) in the BIS
+  unsigned channels = 2;   // 1 (front left, or right) or 2 (front left + right) in the BIS
+  bool right = false;      // a one-channel BIS that carries the right channel
   uint8_t big = 0;
   bool encrypted = false;
   std::vector<uint8_t> code = std::vector<uint8_t>(16, 0);  // the Broadcast Code, zeros for none
@@ -51,7 +52,7 @@ struct LeBcastConfig {
   uint16_t sdu = 0;
   uint32_t interval_us = 0;
 };
-// {preset ("48_2_1"), channels (1|2), code ("" none; text of up to 16 bytes, or 0x and 32 hex
+// {preset ("48_2_1"), channels (1|2), location ("left" | "right", for one channel), code ("" none; text of up to 16 bytes, or 0x and 32 hex
 // digits), presentation_delay_us}. `big` is the BIG handle to use (the caller picks a free one).
 bool le_bcast_config_from_json(const nlohmann::json& j, uint8_t big, LeBcastConfig* out, std::string* err);
 // A Broadcast Code: the text as UTF-8 padded with zeros (as Auracast apps take it), or 0x + 32 hex

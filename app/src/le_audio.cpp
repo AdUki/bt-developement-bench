@@ -156,6 +156,14 @@ bool le_bcast_config_from_json(const json& j, uint8_t big, LeBcastConfig* out, s
     *err = "channels is 1 or 2";
     return false;
   }
+  // One channel is front left unless it is said to be the right one: two such broadcasts, a left
+  // and a right, are one stereo programme for a receiver that takes both (the route's L/R input).
+  const std::string location = j.value("location", std::string(c.channels == 1 ? "left" : ""));
+  if (c.channels == 1 ? location != "left" && location != "right" : !location.empty()) {
+    *err = "location is left or right, for one channel";
+    return false;
+  }
+  c.right = location == "right";
   const std::string code = j.value("code", std::string{});
   if (!le_bcast_code(code, &c.code, err)) return false;
   c.encrypted = !code.empty();
@@ -167,7 +175,7 @@ bool le_bcast_config_from_json(const json& j, uint8_t big, LeBcastConfig* out, s
   c.big = big;
   put_ltv(&c.capabilities, 0x01, lc3_rate_code(c.preset.rate), 1);
   put_ltv(&c.capabilities, 0x02, c.preset.frame_us == 7500 ? 0 : 1, 1);
-  put_ltv(&c.capabilities, 0x03, c.channels == 1 ? 0x1 : 0x3, 4);
+  put_ltv(&c.capabilities, 0x03, c.channels == 1 ? (c.right ? 0x2 : 0x1) : 0x3, 4);
   put_ltv(&c.capabilities, 0x04, c.preset.octets, 2);
   put_ltv(&c.metadata, 0x02, 0x0004, 2);  // Streaming_Audio_Contexts: media
   c.sdu = static_cast<uint16_t>(c.preset.octets * c.channels);
