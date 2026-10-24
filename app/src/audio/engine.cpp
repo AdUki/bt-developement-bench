@@ -409,6 +409,17 @@ bool stream_spec_from_json(const json& j, StreamSpec* out, std::string* err) {
       src.monitor = sj.value("monitor", false);
       if (src.monitor && (src.backend != "pipewire" || src.target.empty()))
         throw std::invalid_argument("monitor captures what goes to a PipeWire sink: give its target");
+      // A left/right pair: two PipeWire sources named (the default source is the loopback card,
+      // never half of a broadcast), each captured mono, so the stream is stereo. A stream asked
+      // for in mono is refused rather than made stereo behind its back: the answer would not say
+      // what was asked, and the sinks and listeners would get twice the channels they were told.
+      src.target_right = str(sj, "target_right", "");
+      if (!src.target_right.empty()) {
+        if (!endpoint_id_ok(src.target_right)) throw std::invalid_argument("bad source target_right");
+        if (src.backend != "pipewire" || src.monitor || src.target.empty())
+          throw std::invalid_argument("target_right pairs two PipeWire sources: give target (the left) too, without monitor");
+        if (s.channels != 2) throw std::invalid_argument("a left/right pair is a stereo stream: channels 2");
+      }
       src.title = str(sj, "title", "").substr(0, 120);
     } else {
       throw std::invalid_argument("source type is tone, sweep, noise, silence, url or capture");
@@ -442,6 +453,7 @@ json stream_spec_json(const StreamSpec& s) {
                    {"repeat", src.repeat_mode}, {"shuffle", src.shuffle}});
   } else if (src.type == "capture") {
     sj.update(json{{"backend", src.backend}, {"target", src.target}, {"monitor", src.monitor},
+                   {"target_right", src.target_right.empty() ? json(nullptr) : json(src.target_right)},
                    {"title", src.title}});
   }
   json sinks = json::array();
@@ -470,8 +482,12 @@ std::string default_label(const StreamSpec& s) {
     what = "silence";
   } else if (src.type == "url") {
     what = !src.title.empty() ? src.title : src.url;
+  } else if (!src.title.empty()) {
+    what = src.title;
+  } else if (!src.target_right.empty()) {
+    what = "capture " + src.target + " + " + src.target_right + " (L/R)";
   } else {
-    what = !src.title.empty() ? src.title : (src.monitor ? "monitor of " : "capture ") + (src.target.empty() ? "default" : src.target);
+    what = (src.monitor ? "monitor of " : "capture ") + (src.target.empty() ? "default" : src.target);
   }
   std::string to;
   for (const SinkSpec& k : s.sinks) to += (to.empty() ? "" : " + ") + (k.target.empty() ? std::string("default sink") : k.target);
@@ -719,14 +735,21 @@ bool write_some(int fd, std::string* buf, size_t* took) {
 }
 
 // Reads until *out holds `want` bytes, the fd hits EOF (returns false; *out keeps what came), or
-// `stop` is raised (false). Waits in kPollMs steps.
-bool read_some(int fd, std::string* out, size_t want, const std::atomic<bool>& stop, bool* eof) {
+// `stop` is raised (false). Waits in kPollMs steps. `also`, when given, is watched meanwhile (a
+// left/right pair's right capture, which must not fill up, nor end unnoticed, while the left one
+// is waited on): `on_also` empties it whenever it is readable, and returns false once it has
+// ended, which ends the wait too (false, *eof untouched).
+bool read_some(int fd, std::string* out, size_t want, const std::atomic<bool>& stop, bool* eof, int also = -1,
+               const std::function<bool()>& on_also = nullptr) {
   char buf[8192];
   while (out->size() < want) {
-    pollfd pf{fd, POLLIN, 0};
-    const int r = poll(&pf, 1, kPollMs);
+    pollfd pf[2] = {{fd, POLLIN, 0}, {also, POLLIN, 0}};
+    const int r = poll(pf, also >= 0 ? 2 : 1, kPollMs);
     if (stop.load()) return false;
     if (r <= 0) continue;
+    if (also >= 0 && pf[1].revents && !on_also()) return false;
+    // The fd is a blocking one: read only when poll said so.
+    if (!pf[0].revents) continue;
     const ssize_t n = read(fd, buf, std::min(sizeof(buf), want - out->size() + 4096));
     if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
     if (n <= 0) {
@@ -1034,7 +1057,6 @@ void AudioEngine::Stream::run() {
   }
   const int rate = sp.rate, ch = sp.channels;
   const size_t frames_per_chunk = static_cast<size_t>(rate * kChunkMs / 1000);
-  const size_t chunk_bytes = frames_per_chunk * ch * sizeof(int16_t);
   const size_t level_frames = static_cast<size_t>(rate * kLevelMs / 1000);
   std::vector<int16_t> buf(frames_per_chunk * ch);
   std::string err;
@@ -1046,6 +1068,16 @@ void AudioEngine::Stream::run() {
   WavStripper strip;
   std::string pending;  // source bytes not yet a whole chunk
   const std::string& type = sp.source.type;
+  // A left/right pair (SourceSpec::target_right): `src` captures the left channel and `src_r` the
+  // right, both mono; the pump interleaves them. What the source hands over is then a mono chunk.
+  const bool pair = type == "capture" && !sp.source.target_right.empty();
+  const int src_ch = pair ? 1 : ch;
+  const size_t src_chunk_bytes = frames_per_chunk * src_ch * sizeof(int16_t);
+  Child src_r;
+  WavStripper strip_r;
+  std::string right_q;  // the right capture's samples not yet interleaved
+  bool right_ended = false;
+  std::vector<int16_t> left(pair ? frames_per_chunk : 0);
   if (type == "tone") {
     gen = std::make_unique<ToneGen>(rate, ch, sp.source.freq, sp.source.freq_right, sp.source.level_db);
   } else if (type == "sweep") {
@@ -1114,7 +1146,7 @@ void AudioEngine::Stream::run() {
         });
       }
     } else {
-      ok = capture_argv(sp.source, rate, ch, sp.latency_ms, node_name + "-in", *tools, &argv, &err);
+      ok = capture_argv(sp.source, rate, pair ? 1 : ch, sp.latency_ms, node_name + "-in", *tools, &argv, &err);
     }
     if (!ok || !src.start(argv, false, [this](const std::string& l) { on_source_line(l); }, &err)) {
       abandon(err);
@@ -1122,6 +1154,19 @@ void AudioEngine::Stream::run() {
     }
     // A capture keeps up with the graph; a decoder only has to stay ahead, and stays below audio.
     if (type == "capture") set_process_fifo(src.pid(), kAudioRtPrio);
+    if (pair) {
+      SourceSpec rs = sp.source;
+      rs.target = rs.target_right;
+      if (!capture_argv(rs, rate, 1, sp.latency_ms, node_name + "-in-r", *tools, &argv, &err) ||
+          !src_r.start(argv, false, nullptr, &err)) {
+        src.stop();
+        abandon(err);
+        return;
+      }
+      set_process_fifo(src_r.pid(), kAudioRtPrio);
+      // Read for what it has, never waited on: the left capture is the clock.
+      fcntl(src_r.out_fd(), F_SETFL, fcntl(src_r.out_fd(), F_GETFL) | O_NONBLOCK);
+    }
   }
 
   // The sinks: the ones the stream started with, then whatever PUT {"sinks"} made of them. Each
@@ -1207,6 +1252,7 @@ void AudioEngine::Stream::run() {
     // None of the sinks it was started with would open: the stream has failed. Some: it plays on those.
     if (!sp.sinks.empty() && outs.empty()) {
       src.stop();
+      src_r.stop();
       abandon(first_err);
       return;
     }
@@ -1221,7 +1267,26 @@ void AudioEngine::Stream::run() {
   bool ended = false;
   std::string fail;
 
-
+  // A pair's right capture, emptied into right_q as it has samples. Beyond 200 ms queued (what
+  // jitter between two nodes of one graph never reaches) the oldest go, so a left capture that
+  // stalls a while cannot leave the right channel behind for good. False once it has ended.
+  const size_t right_max = static_cast<size_t>(rate / 5);
+  uint64_t right_dropped = 0;
+  const auto drain_right = [&]() -> bool {
+    char b[8192];
+    for (;;) {
+      const ssize_t n = read(src_r.out_fd(), b, sizeof(b));
+      if (n > 0) {
+        strip_r.feed(reinterpret_cast<const uint8_t*>(b), static_cast<size_t>(n), &right_q);
+        right_dropped += drop_backlog(&right_q, right_max, frames_per_chunk);
+        continue;
+      }
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && errno == EAGAIN) return true;
+      right_ended = true;
+      return false;
+    }
+  };
 
   // A sink gone (a speaker turned off) goes alone: the others play on, and the last one leaves the
   // stream playing on its own clock until it is stopped or given another output.
@@ -1344,16 +1409,36 @@ void AudioEngine::Stream::run() {
     } else {
       bool eof = false;
       std::string raw;
-      while (pending.size() < chunk_bytes && !stop.load() && !eof) {
+      while (pending.size() < src_chunk_bytes && !stop.load() && !eof && !right_ended) {
         raw.clear();
-        read_some(src.out_fd(), &raw, chunk_bytes - pending.size(), stop, &eof);
+        if (pair) read_some(src.out_fd(), &raw, src_chunk_bytes - pending.size(), stop, &eof, src_r.out_fd(), drain_right);
+        else read_some(src.out_fd(), &raw, src_chunk_bytes - pending.size(), stop, &eof);
         strip.feed(reinterpret_cast<const uint8_t*>(raw.data()), raw.size(), &pending);
       }
       if (stop.load()) break;
-      const size_t usable = std::min(pending.size(), chunk_bytes) / (ch * sizeof(int16_t)) * (ch * sizeof(int16_t));
-      std::memcpy(buf.data(), pending.data(), usable);
+      const size_t src_frame = src_ch * sizeof(int16_t);
+      const size_t usable = std::min(pending.size(), src_chunk_bytes) / src_frame * src_frame;
+      got_frames = usable / src_frame;
+      if (pair) {
+        // What the right capture has by now, the left's chunk being here: the same graph cycles.
+        if (!right_ended) drain_right();
+        std::memcpy(left.data(), pending.data(), usable);
+        right_dropped += interleave_pair(left.data(), got_frames, &right_q, right_max, buf.data()).dropped;
+        if (right_dropped) {
+          LOG_INFO("audio: stream {}: the right capture got {} ms ahead of the left; dropped", id,
+                   right_dropped * 1000 / static_cast<uint64_t>(rate));
+          right_dropped = 0;
+        }
+      } else {
+        std::memcpy(buf.data(), pending.data(), usable);
+      }
       pending.erase(0, usable);
-      got_frames = usable / (ch * sizeof(int16_t));
+      if (right_ended && fail.empty() && !eof) {
+        // Either half gone ends the stream, as a lone capture whose source went away does.
+        const int st = src_r.stop();
+        const std::string why = src_r.last_line();
+        fail = src_r.name() + " (the right channel) ended" + (why.empty() ? " (exit " + std::to_string(st) + ")" : ": " + why);
+      }
       if (eof) {
         const int st = src.stop();
         const std::string why = src.last_line();
@@ -1470,6 +1555,7 @@ void AudioEngine::Stream::run() {
     for (const auto& o : outs)
       if (o->proc) o->proc->close_stdin();
   src.stop();
+  src_r.stop();
   for (const auto& o : outs)
     if (o->proc) o->proc->stop();
   const bool stopped = stop.load();

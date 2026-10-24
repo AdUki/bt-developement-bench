@@ -18,6 +18,10 @@ namespace btb::audio {
 // has two nodes of one node.name, and those have their object.serial as `id` and the adapter in
 // the label. An LE Audio broadcast's node (one per BIS: the board's own, or one received) has its
 // BlueZ transport as `transport` (null for the rest) and a label that says what it is.
+// A coordinated set's (CSIP) endpoints have `set`, the BlueZ DeviceSet1 path (null for others),
+// and `set_leader`: true on the one combined node PipeWire makes for the set, which has address
+// null and `members`, the member devices' addresses; its members' own nodes stay in the list,
+// set_leader false, for a client to hide or to play to one member alone.
 
 // pw-dump's stdout → one array of objects. pw-dump prints the dump as a JSON array, and when
 // objects change while it runs it prints more arrays after it (the updates, keyed by id, with

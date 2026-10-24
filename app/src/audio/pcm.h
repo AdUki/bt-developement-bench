@@ -103,6 +103,24 @@ void apply_gain(int16_t* s, size_t samples, double gain);
 // Stereo → mono in place (the average of the two); returns the number of mono samples.
 size_t downmix(int16_t* s, size_t frames);
 
+// Two mono captures made one stereo stream: an LE Audio broadcast's left and right channels arrive
+// as two PipeWire nodes. The left capture paces the pump, as a lone capture does; the right one is
+// whatever its pipe held, queued in `right` as mono S16LE bytes. interleave_pair writes `frames`
+// stereo frames to `out`: the left from `left`, the right from the front of the queue, silence for
+// what it lacks (the right node starting later, or a quantum late). A queue left with more than
+// `max_frames` (the right capture got ahead: the left one stalled a while) is cut to the newest
+// `frames`, not to `max_frames`: whatever stays queued is latency between the two channels, for
+// good, so after a jump they are put back in step rather than kept apart by the limit.
+struct PairMix {
+  size_t padded = 0;   // right-channel frames that were silence
+  size_t dropped = 0;  // right-channel frames thrown away
+};
+PairMix interleave_pair(const int16_t* left, size_t frames, std::string* right, size_t max_frames, int16_t* out);
+// The cut of interleave_pair on its own, for the queue as the pipe is emptied into it: beyond
+// `max_frames`, the oldest go and `keep_frames` stay. A trailing odd byte (half a sample read) is
+// kept. Returns the frames dropped.
+size_t drop_backlog(std::string* q, size_t max_frames, size_t keep_frames);
+
 // Peak and RMS per channel since the last take(), in dBFS (-120 for silence). The pump adds every
 // chunk; the publisher takes a reading four times a second.
 class LevelMeter {

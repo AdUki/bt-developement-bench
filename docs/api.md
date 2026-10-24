@@ -610,7 +610,7 @@ are not local: any number of them run beside it.
 | `noise` | `color`: `white`, `pink` or `brown`; `level_db` is the RMS (default -20) |
 | `silence` | — |
 | `url` | `url` (http/https: a stream, a file, a `.pls`/`.m3u` playlist — its first entry is played — or a UPnP item), `decoder` `auto\|mpg123\|ffmpeg` (auto: mpg123 for MP3 when installed, ffmpeg for the rest — AAC, Ogg, FLAC; a URL whose extension does not say is told by its first bytes, docs/audio.md), `title` (a name for the label), `playlist`: `[{url, title, artist, album, duration_ms, art}, ...]` (up to 500; all but `url` optional, what a media server said about the track, for the board's player to tell remotes; `art` the cover's http(s) URL) played one after another — `url` is its first entry, given or not; without one it is `[{url, title}]`; `repeat` `off\|track\|all` (default off) and `shuffle` (the list put in a random order, the first first) |
-| `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
+| `capture` | `backend` `pipewire\|alsa`, `target` (a source endpoint id; "" the default source), `target_right` (PipeWire: a second source, recorded as the right channel while `target`, recorded mono, is the left — a left and a right broadcast as one stereo stream; `null` for one source), `monitor: true` (PipeWire: capture what goes *to* the sink `target`), `title` |
 
 `sinks` is a list of up to 4 sinks, each played the same audio: `[]` (listeners only),
 `{"type": "pipewire", "target": ""}` (a node name, "" the default sink) or `{"type": "alsa",
@@ -699,6 +699,18 @@ snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to captur
 node (PipeWire makes one per BIS) has its BlueZ transport as `transport` (`null` on the others) and
 says what it is: `Auracast broadcast` (the board's own, `address` null) or `Auracast from
 AA:BB:...` (one received); PipeWire's own name for it is a made-up `00 00 00 00 00 00.3986`.
+
+Every endpoint has `set` and `set_leader`. PipeWire makes one node of a coordinated set (a pair of
+earbuds), and of an LE Audio device's left and right streams, that combines its members' nodes:
+that node has `set` (the set's path: BlueZ's set, or the device's own path for one device's two
+streams), `set_leader: true`, `address: null` and `members` (their addresses); the members' own
+nodes (PipeWire's `Audio/Sink/Internal`, `Audio/Source/Internal`) are listed with `set` and
+`set_leader: false`, for a client to leave out. What the board records from in a role where
+PipeWire offers a loopback of an internal node (a call's audio over HFP, an LE Audio microphone)
+carries that node's `profile` and `codec`. In the roles where PipeWire's Bluetooth node is a stream
+rather than a device — what a device sends the board (A2DP sink, a received LE Audio stream), and
+what the board sends as the HFP hands-free unit or an LE Audio earbud — the node is a source
+(`Stream/Output/Audio`) or a sink (`Stream/Input/Audio`) all the same.
 
 ### Bluetooth codecs
 

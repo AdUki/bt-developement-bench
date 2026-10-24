@@ -1,8 +1,9 @@
 // The audio streams' decisions: the generators' levels and continuity, the meter, the WAV
 // framing, what a stream body may say and the command lines it becomes, the endpoint lists made
-// from pw-dump and from BlueZ's transports, and the UPnP parsers. The pump's sinks are exercised
-// against fake aplay/arecord processes (test_engine_sinks); the rest of the pumping with `make run`
-// against the desktop's PipeWire and a radio stream.
+// from pw-dump and from BlueZ's transports, and the UPnP parsers. The pump's sinks, and a
+// left/right pair's two captures, are exercised against fake aplay/arecord/pw-cat processes
+// (test_engine_sinks); the rest of the pumping with `make run` against the desktop's PipeWire and
+// a radio stream.
 #include <unistd.h>
 
 #include <algorithm>
@@ -231,6 +232,30 @@ void test_specs() {
   CHECK_EQ(back["source"]["target"].get<std::string>(), std::string("bluez_input.5C_E9_1E_22_40_01.2"));
   CHECK_EQ(back["rate"].get<int>(), 44100);
   CHECK_EQ(back["sink"]["target"].get<std::string>(), std::string("bluez_output.F8_DF_15_0A_11_3C.1"));
+  CHECK(back["source"]["target_right"].is_null());
+
+  // A left/right pair: two PipeWire sources, a stereo stream; it round-trips.
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"bluez_input.big0.bis1",
+      "target_right":"bluez_input.big0.bis2"}})"), &s, &err));
+  CHECK_EQ(s.source.target_right, std::string("bluez_input.big0.bis2"));
+  CHECK_EQ(default_label(s), std::string("capture bluez_input.big0.bis1 + bluez_input.big0.bis2 (L/R) → listeners"));
+  StreamSpec again;
+  CHECK(stream_spec_from_json(stream_spec_json(s), &again, &err));
+  CHECK_EQ(again.source.target_right, std::string("bluez_input.big0.bis2"));
+  CHECK_EQ(stream_spec_json(again)["source"]["target_right"].get<std::string>(), std::string("bluez_input.big0.bis2"));
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"a","target_right":null}})"), &s, &err));
+  CHECK(s.source.target_right.empty());
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"a","target_right":"-x"}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"a","target_right":"b c"}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"a","target_right":5}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target_right":"b"}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","backend":"alsa","target":"hw:A",
+      "target_right":"hw:B"}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"a","target_right":"b",
+      "monitor":true}})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"a","target_right":"b"},
+      "channels":1})"), &s, &err));
+  CHECK(err.find("channels") != std::string::npos);
 
   // Several sinks: each once, none left out; "sink" in the answer is the first.
   CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[
@@ -363,6 +388,74 @@ void test_argv() {
   for (const std::string& x : a)
     if (x.find("stream.capture.sink = true") != std::string::npos) mon = true;
   CHECK(mon);
+
+  // A pair is two mono captures, each of its own target and node; capture_argv ignores target_right.
+  const auto arg_after = [](const std::vector<std::string>& v, const std::string& k) {
+    const auto it = std::find(v.begin(), v.end(), k);
+    return it == v.end() || it + 1 == v.end() ? std::string() : *(it + 1);
+  };
+  const auto has = [](const std::vector<std::string>& v, const std::string& part) {
+    return std::any_of(v.begin(), v.end(), [&](const std::string& x) { return x.find(part) != std::string::npos; });
+  };
+  s.monitor = false;
+  s.target = "bluez_input.l";
+  s.target_right = "bluez_input.r";
+  CHECK(capture_argv(s, 48000, 1, 50, "btbench-stream-2-in", t, &a, &err));
+  CHECK_EQ(arg_after(a, "--channels"), std::string("1"));
+  CHECK_EQ(arg_after(a, "--target"), std::string("bluez_input.l"));
+  CHECK(has(a, "node.name = \"btbench-stream-2-in\""));
+  CHECK(!has(a, "bluez_input.r"));
+  SourceSpec r = s;
+  r.target = r.target_right;
+  CHECK(capture_argv(r, 48000, 1, 50, "btbench-stream-2-in-r", t, &a, &err));
+  CHECK_EQ(arg_after(a, "--channels"), std::string("1"));
+  CHECK_EQ(arg_after(a, "--target"), std::string("bluez_input.r"));
+  CHECK(has(a, "node.name = \"btbench-stream-2-in-r\""));
+  CHECK(has(a, "node.dont-fallback = true"));
+}
+
+std::string mono_bytes(std::initializer_list<int16_t> v) {
+  std::string s;
+  for (const int16_t x : v) s.append(reinterpret_cast<const char*>(&x), sizeof(x));
+  return s;
+}
+
+void test_pair_mix() {
+  // The right channel from the queue's front; silence for what it lacks.
+  const int16_t left[4] = {1, 2, 3, 4};
+  int16_t out[8];
+  std::string q = mono_bytes({10, 20});
+  PairMix m = interleave_pair(left, 4, &q, 100, out);
+  const int16_t want[8] = {1, 10, 2, 20, 3, 0, 4, 0};
+  CHECK(std::equal(out, out + 8, want));
+  CHECK_EQ(m.padded, size_t(2));
+  CHECK_EQ(m.dropped, size_t(0));
+  CHECK(q.empty());
+
+  // Enough queued: none padded, the rest kept for the next chunk.
+  q = mono_bytes({10, 20, 30, 40, 50, 60});
+  m = interleave_pair(left, 4, &q, 100, out);
+  CHECK_EQ(out[7], int16_t(40));
+  CHECK_EQ(m.padded, size_t(0));
+  CHECK_EQ(q, mono_bytes({50, 60}));
+
+  // Over the limit: cut to the newest chunk's worth (here 2), not to the limit.
+  q = mono_bytes({10, 20, 30, 40, 50, 60, 70, 80, 90, 100});
+  m = interleave_pair(left, 2, &q, 5, out);
+  CHECK_EQ(out[1], int16_t(10));
+  CHECK_EQ(out[3], int16_t(20));
+  CHECK_EQ(m.dropped, size_t(6));
+  CHECK_EQ(q, mono_bytes({90, 100}));
+
+  // Half a sample read stays at the end, still the start of the next one.
+  q = mono_bytes({10, 20, 30, 40, 50, 60, 70}) + std::string(1, '\x7f');
+  CHECK_EQ(drop_backlog(&q, 5, 2), size_t(5));
+  CHECK_EQ(q, mono_bytes({60, 70}) + std::string(1, '\x7f'));
+  CHECK_EQ(drop_backlog(&q, 5, 2), size_t(0));
+  q = std::string(1, '\x7f');
+  m = interleave_pair(left, 1, &q, 5, out);
+  CHECK_EQ(out[1], int16_t(0));
+  CHECK_EQ(q.size(), size_t(1));
 }
 
 void test_endpoints() {
@@ -711,6 +804,27 @@ while True:
     n += len(b)
 )";
 
+// pw-cat --record as a pair's capture runs it: 10 ms chunks at the rate it is asked, every sample
+// 1000 for target "L", -2000 for "R"; target "gone" ends at once with an error, as a node that is
+// not there does.
+const char* kFakePwCat = R"(#!/usr/bin/env python3
+import os, struct, sys, time
+a = sys.argv
+t = a[a.index('--target') + 1] if '--target' in a else ''
+if t == 'gone':
+    sys.stderr.write('error: target gone\n')
+    sys.exit(1)
+per = int(a[a.index('--rate') + 1]) // 100 * int(a[a.index('--channels') + 1])
+chunk = struct.pack('<h', {'L': 1000, 'R': -2000}.get(t, 0)) * per
+t0, n = time.monotonic(), 0
+while True:
+    if (time.monotonic() - t0) * 100 < n:
+        time.sleep(0.002)
+        continue
+    os.write(1, chunk)
+    n += 1
+)";
+
 std::string sink_state(const json& st, const std::string& target) {
   for (const json& k : st["sinks_status"])
     if (k["target"] == target) return k["state"].get<std::string>();
@@ -747,8 +861,13 @@ void test_engine_sinks() {
     std::ofstream f(dir + "/bin/arecord");
     f << "#!/bin/sh\nexec sleep 60\n";
   }
+  {
+    std::ofstream f(dir + "/bin/pw-cat");
+    f << kFakePwCat;
+  }
   chmod((dir + "/bin/aplay").c_str(), 0755);
   chmod((dir + "/bin/arecord").c_str(), 0755);
+  chmod((dir + "/bin/pw-cat").c_str(), 0755);
   const std::string path = getenv("PATH") ? getenv("PATH") : "/usr/bin:/bin";
   setenv("PATH", (dir + "/bin:" + path).c_str(), 1);
   {
@@ -807,10 +926,92 @@ void test_engine_sinks() {
     CHECK(wait_for(e, two, 2000, [](const json& st) { return st["sinks_status"].empty() && st["sinks"].empty(); }));
     CHECK_EQ(e.get(two)["state"].get<std::string>(), std::string("running"));
 
+    // A left/right pair: two mono captures, heard as one stereo stream, left from target and
+    // right from target_right.
+    CHECK(e.create(json::parse(R"({"source":{"type":"capture","target":"L","target_right":"R"}})"), &out, &err, &status));
+    const int lr = out["id"];
+    CHECK_EQ(out["source"]["target_right"].get<std::string>(), std::string("R"));
+    AudioEngine::ListenerPtr l = e.listen(lr, false, &err, &status);
+    CHECK(l != nullptr);
+    std::string heard, piece;
+    for (int i = 0; i < 20 && heard.size() < 44 + 48000 * 4 / 2; ++i)
+      if (l && AudioEngine::take(*l, &piece, 200)) heard += piece;
+    CHECK(heard.size() >= 44 + 4);
+    if (heard.size() >= 44 + 4) {
+      // The newest frame: by now the right capture runs too (the first frames may be its silence).
+      int16_t f[2];
+      std::memcpy(f, heard.data() + 44 + (heard.size() - 44) / 4 * 4 - 4, sizeof(f));
+      CHECK_EQ(f[0], int16_t(1000));
+      CHECK_EQ(f[1], int16_t(-2000));
+    }
+    if (l) e.unlisten(lr, l);
+    CHECK_EQ(e.get(lr)["state"].get<std::string>(), std::string("running"));
+
+    // Its right half gone ends it, as a capture whose source went away ends.
+    CHECK(e.create(json::parse(R"({"source":{"type":"capture","target":"L","target_right":"gone"}})"), &out, &err, &status));
+    const int half = out["id"];
+    CHECK(wait_for(e, half, 3000, [](const json& st) { return st["state"] == "failed"; }));
+    const std::string why = e.get(half)["error"];
+    CHECK(why.find("right") != std::string::npos && why.find("target gone") != std::string::npos);
+
     e.stop_all();
   }
   setenv("PATH", path.c_str(), 1);
   std::filesystem::remove_all(dir);
+}
+
+// A coordinated set (CSIP earbuds): the leader, the combined node WirePlumber makes (without
+// api.bluez5.set.members), and its two members' internal nodes; then the SPA plugin's own leader,
+// which still names its members.
+void test_endpoint_sets() {
+  const json dump = json::parse(R"([
+    {"id": 90, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink",
+      "node.name": "bluez_output.set_8b1c2d", "device.api": "bluez5", "api.bluez5.address": "C0:00:00:00:00:01",
+      "api.bluez5.set": "/org/bluez/hci0/set_8b1c2d", "api.bluez5.set.leader": true}}},
+    {"id": 91, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink/Internal",
+      "node.name": "bluez_output.C0_00_00_00_00_01.1", "device.api": "bluez5", "api.bluez5.address": "C0:00:00:00:00:01",
+      "node.description": "Bud L", "api.bluez5.set": "/org/bluez/hci0/set_8b1c2d", "api.bluez5.internal": "true",
+      "object.path": "/org/bluez/hci0/set_8b1c2d/C0:00:00:00:00:01-1"}}},
+    {"id": 92, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink/Internal",
+      "node.name": "bluez_output.C0_00_00_00_00_02.1", "device.api": "bluez5", "api.bluez5.address": "C0:00:00:00:00:02",
+      "node.description": "Bud R", "api.bluez5.set": "/org/bluez/hci0/set_8b1c2d", "api.bluez5.internal": "true"}}},
+    {"id": 93, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink/Internal",
+      "node.name": "internal-other"}}}
+  ])");
+  const json s = endpoints_from_pw_dump(dump)["sinks"];
+  CHECK_EQ(s.size(), size_t(3));  // an internal node of no set is not an endpoint
+  const json* leader = nullptr;
+  for (const json& e : s) {
+    CHECK_EQ(e["set"].get<std::string>(), std::string("/org/bluez/hci0/set_8b1c2d"));
+    if (e["set_leader"].get<bool>()) leader = &e;
+    else CHECK(e["address"].is_string() && !e.contains("members"));
+  }
+  CHECK(leader);
+  if (leader) {
+    CHECK((*leader)["address"].is_null());
+    CHECK_EQ((*leader)["members"], json::parse(R"(["C0:00:00:00:00:01", "C0:00:00:00:00:02"])"));
+    CHECK_EQ((*leader)["label"].get<std::string>(), std::string("Bud L · set"));
+    CHECK_EQ((*leader)["id"].get<std::string>(), std::string("bluez_output.set_8b1c2d"));
+  }
+
+  const json spa = json::parse(R"([
+    {"id": 90, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink",
+      "node.name": "bluez_output.set_8b1c2d", "node.description": "Buds", "api.bluez5.set": "/org/bluez/hci0/set_8b1c2d",
+      "api.bluez5.set.leader": "true",
+      "api.bluez5.set.members": "[{\"object.path\":\"/org/bluez/hci0/set_8b1c2d/C0:00:00:00:00:02-1\",\"channels\":[\"FR\"]},{\"object.path\":\"/org/bluez/hci0/set_8b1c2d/C0:00:00:00:00:01-1\",\"channels\":[\"FL\"]}]"}}},
+    {"id": 94, "type": "PipeWire:Interface:Node", "info": {"props": {"media.class": "Audio/Sink",
+      "node.name": "bluez_output.F8_DF_15_0A_11_3C.1", "device.api": "bluez5", "api.bluez5.address": "F8:DF:15:0A:11:3C"}}}
+  ])");
+  const json t = endpoints_from_pw_dump(spa)["sinks"];
+  CHECK_EQ(t.size(), size_t(2));
+  for (const json& e : t) {
+    if (e["set_leader"].get<bool>()) {
+      CHECK_EQ(e["members"], json::parse(R"(["C0:00:00:00:00:02", "C0:00:00:00:00:01"])"));
+      CHECK_EQ(e["label"].get<std::string>(), std::string("Buds"));
+    } else {
+      CHECK(e["set"].is_null());
+    }
+  }
 }
 
 }  // namespace
@@ -823,6 +1024,7 @@ int main() {
   test_playlists();
   test_specs();
   test_argv();
+  test_pair_mix();
   test_endpoints();
   test_pw_dump_parse();
   test_play_order();
@@ -830,5 +1032,6 @@ int main() {
   test_xml();
   test_upnp();
   test_engine_sinks();
+  test_endpoint_sets();
   return report("test_audio");
 }

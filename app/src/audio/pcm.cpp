@@ -187,6 +187,31 @@ size_t downmix(int16_t* s, size_t frames) {
   return frames;
 }
 
+size_t drop_backlog(std::string* q, size_t max_frames, size_t keep_frames) {
+  const size_t have = q->size() / sizeof(int16_t);
+  if (have <= max_frames) return 0;
+  const size_t drop = have - std::min(keep_frames, have);
+  // Whole samples from the front: a trailing odd byte stays the first half of the next sample.
+  q->erase(0, drop * sizeof(int16_t));
+  return drop;
+}
+
+PairMix interleave_pair(const int16_t* left, size_t frames, std::string* right, size_t max_frames, int16_t* out) {
+  PairMix r;
+  const size_t have = std::min(frames, right->size() / sizeof(int16_t));
+  for (size_t i = 0; i < frames; ++i) {
+    out[2 * i] = left[i];
+    int16_t v = 0;
+    // memcpy: the queue's bytes need not be aligned for int16_t.
+    if (i < have) std::memcpy(&v, right->data() + i * sizeof(int16_t), sizeof(v));
+    out[2 * i + 1] = v;
+  }
+  right->erase(0, have * sizeof(int16_t));
+  r.padded = frames - have;
+  r.dropped = drop_backlog(right, max_frames, frames);
+  return r;
+}
+
 void LevelMeter::add(const int16_t* s, size_t frames, int channels) {
   ch_ = std::clamp(channels, 1, kMaxChannels);
   for (size_t i = 0; i < frames; ++i) {

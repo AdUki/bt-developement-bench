@@ -118,6 +118,10 @@ struct SourceSpec {
   std::string backend = "pipewire";  // pipewire | alsa
   std::string target;
   bool monitor = false;  // PipeWire: capture what goes *to* sink `target` (its monitor)
+  // PipeWire, "" for none: a second source, the right channel to `target`'s left. LE Audio hands
+  // a stereo broadcast over as two nodes (one per BIS, or two one-channel broadcasts); each is
+  // captured mono and the pump makes them one stereo stream (pcm.h interleave_pair).
+  std::string target_right;
 };
 
 struct SinkSpec {
@@ -148,7 +152,8 @@ std::string default_label(const StreamSpec& s);
 inline bool is_local(const SourceSpec& s) { return s.type != "capture"; }
 
 // The command lines (pure, tested). `node_name` names the PipeWire stream ("btbench-stream-3"), so
-// it can be told apart in wpctl / pw-top.
+// it can be told apart in wpctl / pw-top. capture_argv captures `target` and ignores
+// `target_right`: a left/right pair is two of them, each mono, the right one with its target.
 // `kind` is what the stream turned out to be ("mp3" or "other", pcm.h sniff_audio), "" for unknown:
 // the URL's extension decides then.
 bool decoder_argv(const SourceSpec& s, const std::string& url, int rate, int channels,
