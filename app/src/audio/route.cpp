@@ -503,7 +503,10 @@ void AudioRoute::run() {
             for (const json& t : ts.is_array() ? ts : json::array()) there = there || upper(str(t, "address")) == d.address;
           if (!there) {
             wait_until_ = 0;
-            set_input_state("failed", who_locked(ts) + " disconnected: connect it, then pick it again");
+            // A broadcast has no link to connect: it ended, or the board lost its sync.
+            const bool bcast = !devices_.empty() && devices_[0].kind == "broadcast";
+            set_input_state("failed", who_locked(ts) + (bcast ? " stopped broadcasting: pick it again once it is back"
+                                                              : " disconnected: connect it, then pick it again"));
           }
         } else if (mono_ms() > wait_until_) {
           wait_until_ = 0;
