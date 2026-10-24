@@ -6,7 +6,7 @@
 // Auracast broadcast, or a left and a right one as one stereo input; a call's audio over HFP) —
 // on any number of outputs at once: the board's sound card, Bluetooth speakers and earbuds, its
 // Auracast broadcasts, and this browser. The input and the outputs are the daemon's route
-// (/api/audio/route, audio/route.h), the same for every browser; Library → Inputs picks the input,
+// (/api/audio/route, audio/route.h), the same for every browser; Inputs picks the input,
 // "Play to" turns each output on or off. Devices that are not the input play nowhere and are left
 // alone. The bench views (Audio) stay for everything else.
 //
@@ -22,7 +22,7 @@ const pl = {
   route: null,         // GET /api/audio/route, the "audio.route" topic: the input and the outputs
   players: {},         // a device's address → the player of it picked (it has several)
   boardId: null,       // the stream this view started last
-  lib: lsGet('btbench.pl.lib') || '',  // queue | inputs | phone | radio | upnp | signals; '' = inputs
+  lib: lsGet('btbench.pl.lib') || '',  // phone | radio | upnp | signals; '' = the first
   libPath: [],         // the library's breadcrumbs: [{id, title}] (UPnP), or folders (phone)
   libItems: [],
   upnpServer: null,
@@ -261,7 +261,7 @@ const outStream = () => routeStream();
 
 function renderNowPlaying() {
   const c = current();
-  // The input is picked in Library → Inputs; here, a device with several players (Spotify and the
+  // The input is picked in Inputs; here, a device with several players (Spotify and the
   // phone's own music app, an LE Audio device's media control) has a chip each, named after the
   // player.
   // Two of one name (a board's AVRCP player and its LE Audio media control are both "btbench") say
@@ -374,7 +374,8 @@ function renderNowPlaying() {
     (c.kind === 'phone' && !c.p.input ? modeButtons('np-btn', btRepeat(c.p.repeat), c.p.shuffle == null ? null : c.p.shuffle !== 'off')
       : c.kind === 'board' && isUrl(c.s) && (c.s.source.playlist || []).length > 1 ? modeButtons('np-btn', boardRepeat(c.s.source.repeat), !!c.s.source.shuffle) : '') +
     (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : '') + '</div>');
-  // The library page's bar: the track, and play/pause and next, to skip without leaving the list.
+  // The bar under Inputs, Library and Up next: the track, and play/pause and next, to skip without
+  // leaving the list.
   $('np-mini').hidden = c.kind === 'none';
   setText($('np-mini-title'), title);
   setText($('np-mini-sub'), sub || sub2);
@@ -385,7 +386,7 @@ function renderNowPlaying() {
   setMediaSession();
   renderOuts();
   renderQueue(c);
-  if (pl.lib === 'inputs' && currentTab === 'player') renderInputs();
+  if (currentTab === 'player') renderInputs();
 }
 
 // Which way the music flows, said above the title the same way for both: into the board from a
@@ -682,9 +683,10 @@ function renderQueue(c) {
     note = c.p.browsable || c.p.input ? '' : 'This player does not share its list';
   }
   setText($('np-q-note'), note);
+  $('np-q-head').hidden = !note;
   const waiting = c.kind === 'phone' && c.p.browsable && pl.queueBusy && !pl.queueItems.length;
   setHTML($('np-queue'), rows || (waiting ? '<div class="empty-line loading-line"><span class="dots"></span>Getting the phone’s list…</div>'
-    : `<div class="empty-line">${c.kind === 'none' ? 'Nothing playing: pick an input in Inputs, or something from Radio, Media servers or Test signals.' : 'Nothing queued.'}</div>`));
+    : `<div class="empty-line">${c.kind === 'none' ? 'Nothing playing: pick an input in Inputs, or something in Library.' : 'Nothing queued.'}</div>`));
 }
 
 // ---------------------------------------------------------------- inputs
@@ -695,7 +697,7 @@ function devSvg(address) {
   return d ? DEV_SVG[devKind(d).kind] : PL_SVG.bt;
 }
 
-// Library → Inputs: what the board plays, one at a time — its own music (what the library loaded:
+// Inputs: what the board plays, one at a time — its own music (what the library loaded:
 // a station, the queue, a test signal) or one Bluetooth device's audio. A row picked is the route's
 // input; what was before goes quiet (a playlist pauses, keeping its queue). A single-channel
 // broadcast can be the other channel of the one picked (a left and a right broadcast are one
@@ -703,7 +705,6 @@ function devSvg(address) {
 // its row. A device that stops sending stays the input and plays again when it resumes; one that
 // failed or disconnected is not retried by itself, picking it again is the retry.
 function renderInputs() {
-  setHTML($('np-crumbs'), '');
   const inp = pl.route ? pl.route.input : {type: 'none', devices: [], state: 'idle'};
   const ls = loadedStream();
   const stateText = on => !on ? '' : inp.state === 'waiting' ? (inp.error ? 'not sending' : 'waiting for its audio…') : inp.state === 'failed' ? 'failed' : 'the input';
@@ -732,7 +733,7 @@ function renderInputs() {
     return row(`data-in="${i}"`, on, r.kind === 'broadcast' ? PL_SVG.bt : r.kind === 'hfp' ? PL_SVG.phone : devSvg(r.address),
       r.name, sub, on ? stateText(on) : r.state, pair) + err(on);
   }).join('') || '<div class="empty-line">No Bluetooth device sends the board audio: connect one in Devices (the board as its speaker), or scan for broadcasts in Audio → LE Audio.</div>';
-  setHTML($('np-lib'), html);
+  setHTML($('np-inputs'), html);
   pl.inRows = rows;
 }
 
@@ -769,18 +770,13 @@ function inputClick(e) {
 
 // ---------------------------------------------------------------- the library
 
-// The tabs: Up next (what plays now's queue, see renderQueue), Inputs (what the board plays: its
-// own music or a Bluetooth device), then the library's sources. With none picked, Inputs.
+// The tabs: the library's sources, a browsable phone's first. With none picked, the first.
 function renderLibTabs() {
-  const tabs = [['inputs', 'Inputs'], ['radio', 'Radio'], ['upnp', 'Media servers'], ['signals', 'Test signals']];
-  if (phones().some(p => p.browsable)) tabs.splice(1, 0, ['phone', 'Phone']);
-  if (!tabs.some(t => t[0] === pl.lib) && pl.lib !== 'queue') pl.lib = tabs[0][0];
-  tabs.unshift(['queue', 'Up next']);
+  const tabs = [['radio', 'Radio'], ['upnp', 'Media servers'], ['signals', 'Test signals']];
+  if (phones().some(p => p.browsable)) tabs.unshift(['phone', 'Phone']);
+  if (!tabs.some(t => t[0] === pl.lib)) pl.lib = tabs[0][0];
   setHTML($('np-lib-tabs'), tabs.map(([k, l]) => `<button class="seg${pl.lib === k ? ' on' : ''}" data-lib="${k}">${l}</button>`).join(''));
   $('np-search-row').hidden = !(pl.lib === 'phone' && phones().some(p => p.searchable));
-  const q = pl.lib === 'queue';
-  $('np-queue').hidden = $('np-q-note').hidden = !q;
-  $('np-lib').hidden = $('np-crumbs').hidden = q;
 }
 
 function openLib(kind, chosen) {
@@ -796,13 +792,8 @@ function openLib(kind, chosen) {
   libDropBack(0);
   pl.libPath = [];
   renderLibTabs();
-  if (kind === 'queue') {
-    setHTML($('np-crumbs'), '');
-  } else if (kind === 'inputs') {
-    renderInputs();
-    // HFP's and a set's nodes are only in the endpoints, which follow the transports otherwise.
-    api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
-  } else if (kind === 'radio') {
+  kind = pl.lib;  // a tab gone (an old Inputs or Up next remembered, a phone left): the first one
+  if (kind === 'radio') {
     setHTML($('np-crumbs'), '');
     api('/audio/radio').then(renderStations)
       .catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
@@ -1638,8 +1629,8 @@ function setupPlayer() {
     if (pl.lib === 'upnp') upnpFolder(pl.upnpServer, c.id, c.title, false);
     else phoneFolder(phones().find(p => p.browsable), c.id, c.title, false);
   };
+  $('np-inputs').onclick = inputClick;
   $('np-lib').onclick = e => {
-    if (pl.lib === 'inputs' && inputClick(e)) return;
     if (e.target.closest('[data-lib-search]')) return upnpServers(true);
     if (e.target.closest('[data-lib-more]')) return libMoreLoad();
     const all = e.target.closest('[data-lib-all]');
@@ -1703,6 +1694,10 @@ registerTab('player', {
     }, 500);
   },
   hide() { clearInterval(pl.tick); pl.tick = null; },
+  pane(p) {
+    // HFP's and a set's nodes are only in the endpoints, which follow the transports otherwise.
+    if (p === 'inputs' && currentTab === 'player') api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
+  },
   onMessage(topic, data) {
     if (currentTab !== 'player') return;
     if (topic === 'media') {

@@ -56,20 +56,31 @@
       </div>
     </div>
     </div>
-    <!-- The library on a page of its own: long folders get the screen, and the bar at the bottom
-         keeps what plays in reach while browsing. -->
+    <!-- What the board plays: its own music or one Bluetooth device's audio. -->
+    <div class="pane" data-pane="inputs">
+      <div class="card np-libcard">
+        <div id="np-inputs" class="tracklist ld"></div>
+      </div>
+    </div>
+    <!-- The library on a page of its own: long folders get the screen. -->
     <div class="pane" data-pane="library">
       <div class="card np-libcard" data-full>
-        <div class="card-head"><div class="segs" id="np-lib-tabs"></div><span id="np-q-note" class="small muted" hidden></span></div>
+        <div class="card-head"><div class="segs" id="np-lib-tabs"></div></div>
         <div class="row" id="np-search-row" hidden><input type="search" id="np-search" class="grow" placeholder="Search the phone"></div>
         <div id="np-crumbs" class="small crumbs"></div>
         <div id="np-lib" class="tracklist ld"></div>
-        <div id="np-queue" class="tracklist" hidden></div>
       </div>
-      <div class="np-mini card" id="np-mini" hidden>
-        <a href="#player/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
-        <div class="np-mini-ctl" id="np-mini-ctl"></div>
+    </div>
+    <div class="pane" data-pane="queue">
+      <div class="card np-libcard" data-full>
+        <div class="card-head" id="np-q-head" hidden><span id="np-q-note" class="small muted"></span></div>
+        <div id="np-queue" class="tracklist"></div>
       </div>
+    </div>
+    <!-- Under Inputs, Library and Up next: the track, play/pause and next in reach while browsing. -->
+    <div class="np-mini card" id="np-mini" hidden>
+      <a href="#player/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
+      <div class="np-mini-ctl" id="np-mini-ctl"></div>
     </div>
   </section>
 

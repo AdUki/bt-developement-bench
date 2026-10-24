@@ -779,9 +779,10 @@ td.acts > * { margin-right: 0.25rem; }
 .np-out-status.bad { color: var(--bad); }
 .np-out-status.bad .dot { background: var(--bad); }
 .np-out-status .dots { margin: 0.55em 0 0; }
-/* The library's page: its list grows with the page instead of scrolling in a box, and the bar
-   with what plays stays at the bottom of the screen. */
-.np-libcard #np-lib, .np-libcard #np-queue { max-height: none; }
+/* Inputs, Library and Up next: the list grows with the page instead of scrolling in a box, and
+   the bar with what plays stays at the bottom of the screen (not under Now playing, which is it). */
+.np-libcard .tracklist { max-height: none; }
+#player:has(> .pane[data-pane="now"]:not([hidden])) > #np-mini { display: none; }
 .np-libcard .card-head { justify-content: flex-start; }
 .np-mini { position: sticky; bottom: 0.6rem; z-index: 5; display: flex; align-items: center; gap: 0.8rem; padding: 0.55rem 0.7rem; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18); }
 .np-mini-t { flex: 1; min-width: 0; display: flex; flex-direction: column; color: inherit; text-decoration: none; }
@@ -1108,17 +1109,21 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 .gr-chart > h4:first-child { margin-top: 0; }
 #gr-charts > .gr-chart.is-full { margin: 0; }
 
-/* Listen on a wide screen (app.js updateFit): Now playing and the library side by side, both
-   views shown whichever was picked, each column scrolling on its own and the page not at all. */
+/* Listen on a wide screen (app.js updateFit): Now playing always on the left, and Inputs, Library
+   or Up next beside it (Library while Now playing is the one picked), each column scrolling on its
+   own and the page not at all. */
 @media (min-width: 1400px) and (min-height: 560px) {
   body.fit-player { overflow: hidden; }
   html:has(body.fit-player) { scrollbar-gutter: auto; }
   body.fit-player #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
   body.fit-player main { flex: 1; min-height: 0; max-width: none; display: flex; padding-bottom: 0; }
-  /* Both views are on screen: their buttons would choose nothing. */
-  body.fit-player #views { display: none; }
-  #player.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 560px) minmax(0, 1fr); gap: 0 1rem; }
-  #player > .pane, #player > .pane[hidden] { display: block !important; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
+  /* Now playing is always on screen: its button would choose nothing. */
+  body.fit-player #views .view[data-view="player/now"] { display: none; }
+  body.fit-player #views:has(.view.active[data-view="player/now"]) .view[data-view="player/library"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 550; }
+  #player.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 560px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0 1rem; }
+  #player > .pane { grid-row: 1; grid-column: 2; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
+  #player > .pane[data-pane="now"], #player > .pane[data-pane="now"][hidden] { display: block !important; grid-column: 1; }
+  #player:has(> .pane[data-pane="now"]:not([hidden])) > .pane[data-pane="library"] { display: block !important; }
   #player #np-mini { display: none !important; }
   #player .tracklist { max-height: none; }
   /* The playing column is narrow: the cover over the title and controls, as a player's is. */

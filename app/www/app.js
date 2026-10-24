@@ -202,7 +202,9 @@ function registerTab(name, def) { tabs[name] = def; }
 const NAV = [
   {id: 'listen', label: 'Listen', icon: 'M12 21a9 9 0 100-18 9 9 0 000 18zM10 8.5v7l6-3.5z', views: [
     {tab: 'player', pane: 'now', label: 'Now playing'},
-    {tab: 'player', pane: 'library', label: 'Library'}]},
+    {tab: 'player', pane: 'inputs', label: 'Inputs'},
+    {tab: 'player', pane: 'library', label: 'Library'},
+    {tab: 'player', pane: 'queue', label: 'Up next'}]},
   {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [
     {tab: 'devices', label: 'Devices'},
     {tab: 'hid', label: 'Input devices'}]},
@@ -355,6 +357,8 @@ function showPane(name, pane) {
   panes[name] = pane;
   lsSet('btbench.pane.' + name, pane);
   all.forEach(p => { p.hidden = p.dataset.pane !== pane; });
+  const t = tabs[name];
+  if (t && t.pane) t.pane(pane);
 }
 
 function showTab(name, pane) {

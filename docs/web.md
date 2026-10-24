@@ -42,7 +42,8 @@ questions from a terminal.
 
 **Listen** — the console as a music player, for using the board rather than testing it. The
 board plays one **input** at a time on any **outputs** picked: the route (`/api/audio/route`),
-the same for every browser and kept by the board with the page closed. Two views.
+the same for every browser and kept by the board with the page closed. Four views: *Now playing*,
+*Inputs*, *Library* and *Up next*.
 
 *Now playing* shows the input: a connected phone (its AVRCP player — track, cover art, progress,
 previous / play / pause / next / stop, repeat and shuffle when the player has them, the link's
@@ -57,10 +58,7 @@ audio over HFP). Above the title it says which way the music flows: *Receiving �
 the board, the board is waiting for it, or why it failed), or *Playing from the board* · Internet
 radio, Media server or Test signal; then the path, source → this board → where it plays.
 
-*Library*, a page of its own so long folders get the screen, has *Up next* first — the phone's
-now-playing list (read again when its shuffle changes or the phone says the list changed), or the
-board's queue with each track's artist and length and **×** to take a track out; shuffled, it is in
-the order it plays; a click plays that track. Then **Inputs**: *This board* — what the library
+*Inputs*: *This board* — what the library
 loaded (a station, the queue, a test signal, paused while a device is the input), or nothing — and
 every Bluetooth input, one row a device and a kind of audio (a phone's A2DP and its HFP call audio
 are two rows; a coordinated set, a pair of earbuds, is one), with its codec, what a broadcast plays,
@@ -71,7 +69,10 @@ received yet is received first, a phone that is not playing is asked once to pla
 says when the board waits for the device's audio (15 s at most) and why it failed; nothing is
 retried by itself, tapping it again is the retry. A broadcast that carries one channel offers
 *+ as left* / *+ as right* on the other channel's broadcasts while it is the input: the two are then
-one stereo input. Then the phone's own folders and search (for a browsable player), the radio
+one stereo input.
+
+*Library*, a page of its own so long folders get the screen: the phone's own folders and search
+(for a browsable player), the radio
 stations, the media servers on the LAN, and *Test signals* (tones, a left/right check, a sweep,
 pink and white noise, silence, and a tone of any frequency and level): a station plays on its own,
 a track plays with the rest of its folder after it as the queue, **+** adds a track to the end of
@@ -82,9 +83,15 @@ removes it. Media servers show their covers: a folder of albums is a grid of the
 year), an album opens with its cover, artist, year, genre, track count and length, *Play all*,
 *Play next* and *Add all*, and its tracks by number with their format (`FLAC 24/96`, `MP3 44.1 kHz`);
 a track without a cover of its own shows its album's in Now playing. Covers load from the server
-itself, so a browser on another network than the server shows the plain icons. On a wide screen
-both views are on screen side by side, so the two view buttons are not shown. A bar at the bottom
-of the library keeps the track playing, play/pause and next in reach.
+itself, so a browser on another network than the server shows the plain icons.
+
+*Up next*: the phone's now-playing list (read again when its shuffle changes or the phone says the
+list changed), or the board's queue with each track's artist and length and **×** to take a track
+out; shuffled, it is in the order it plays; a click plays that track.
+
+On a wide screen Now playing stays on the left and Inputs, Library or Up next is beside it (Library
+until one is picked), so Now playing has no view button there. On a narrow one a bar at the bottom
+of Inputs, Library and Up next keeps the track playing, play/pause and next in reach.
 
 *Play to* is one list of buttons, each on or off by itself: *This browser* (this browser listens to
 the input: its own choice, remembered by the browser), the board's sound card (the loopback card),
