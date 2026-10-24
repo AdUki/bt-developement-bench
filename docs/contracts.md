@@ -69,6 +69,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     rotated the same way.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
+  - `/data/btbench/route.json` — the route's outputs (Listen's "Play to"), `{"outputs":[{"type",
+    "target"}]}` as a stream's sinks; the input is not kept.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
   - `/data/btbench/hid-remote.json` — the HID remote's, `{"enabled": true, "name": "btbench remote"}`.
   - `/data/btbench/player.json` — whether btbenchd offers its AVRCP player, and the repeat and
@@ -144,6 +146,9 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
   `/tmp/btsnoop`) `--no-bluetooth`
   `--hci-replay FILE.btsnoop` (feed the HCI monitor from a capture, paced in real time).
 - WebSocket `/api/ws?topics=a,b` — messages `{"topic":"...","data":{...}}`.
+- The route (`/api/audio/route`, `app/src/audio/route.h`) plays one input on the outputs picked;
+  it relies on WirePlumber linking no received Bluetooth audio by itself (`node.autoconnect =
+  false` on `bluez_input.*`: the image's `50-btbench.conf`, Setup's `Node.node.autoconnect`).
 - OBEX (`/api/obex`, `app/src/obex/`): btbenchd runs `/usr/libexec/bluetooth/obexd -n -s -r
   /tmp/btbench/obex` on first use (bluez5-obex; `-s` puts `org.bluez.obex` on the system bus,
   which BlueZ's `obex.conf` allows root), unless the name is owned already.

@@ -30,6 +30,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 | `gatt.notify` | `{address, path, handle, uuid, value, text, ts}` | every value change BlueZ reports: notifications, indications, and the result of reads |
 | `obex` | the body of `GET /api/obex` | on a change (a session, a transfer's progress, an incoming push), at most 4 Hz |
 | `audio.streams` | the body of `GET /api/audio/streams` (levels, titles) | 4 Hz while a stream runs, once more when the last ends |
+| `audio.route` | the body of `GET /api/audio/route` | on a change of the input, its state or the outputs |
 | `gatt.server` | `{op: "read\|write\|notify-on\|notify-off", path, uuid, value, offset, device}` | a remote device using the local GATT server (or the HID remote's) |
 | `hid.input` | `{address, device, event, type: "key\|rel\|abs", code, name, value, ts}` | an input event of a Bluetooth keyboard, remote or mouse connected to the board (`value` 1 down, 0 up, 2 repeat) |
 | `system` | the body of `GET /api/system/health` | 1 Hz |
@@ -588,7 +589,8 @@ as the loopback card; `mpg123` or `ffmpeg` for URLs). With PipeWire stopped only
 are there to play into or capture from. At most 4 run at once.
 
 One **local** stream plays to an output at a time: a test signal or a URL (what the board plays of
-its own). A new one takes the place of those playing to any of its sinks, and of those with no sink
+its own). Listen starts them through the route (`POST /api/audio/route/play`, below), which keeps
+to one. A new one takes the place of those playing to any of its sinks, and of those with no sink
 (only browsers hear them), which are stopped and forgotten as `DELETE` would; it does not inherit
 their sinks, the request names them. Local streams on other outputs play on beside it (a broadcast's
 programme and music on a speaker). Captures (what devices send the board, two phones at once say)
@@ -676,6 +678,43 @@ to the last.
 | `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; with `"at": "next"`, right after the track playing), `{"remove": <item id>}` (any track but the one playing), `{"repeat": "all"}`, `{"shuffle": true}` (the list in a random order, the track playing first; `false`: back as listed), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sinks": [...]}` (or one `{"sink": {...} \| null}`) changes its sinks without stopping the source: the ones kept play on untouched, new ones open, the others close; `[]` leaves its listeners only. The answer's `sink_req` numbers the request, and `sink_seq` says which one `sinks_status` answers |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
+
+### The route
+
+What the board plays: one **input** on a set of **outputs** (Listen in the console). The input is
+the board's own (a test signal, a station, a media server's tracks: one local stream) or what one
+Bluetooth device sends it; the outputs are the sinks it plays on, any number up to 4, and they
+stay when the input changes. Devices that are not the input play nowhere (WirePlumber links no
+received audio by itself on the bench) and are left alone: not paused, not disconnected. Two
+devices are one input only as two single-channel broadcasts, a left and a right one (recorded as
+one stereo stream, `target_right`); a coordinated set is one device, recorded from PipeWire's node
+of the set.
+
+`GET /api/audio/route`:
+
+```json
+{"input": {"type": "bluetooth", "devices": [{"address": "5C:E9:1E:22:40:01", "kind": "a2dp"}],
+           "state": "playing", "error": "", "since_ms": 1792838088039},
+ "outputs": [{"type": "pipewire", "target": "bluez_output.F8_DF_15_0A_11_3C.1"}],
+ "stream": 7, "local": 4}
+```
+
+`input.type`: `none`, `local` (the board's own stream) or `bluetooth`; `kind` is what of the
+device's audio: `a2dp`, `bap` (LE Audio unicast), `broadcast`, `hfp`, or `""` for whichever it sends
+(A2DP first). `state`: `idle` (nothing to play), `waiting` (the device's node is not there yet: it
+has not started sending; waited for 15 s), `playing`, `failed` (`error` says why: nothing came
+within 15 s, its audio went away, two broadcasts that are not a left and a right one). Nothing is
+retried: the same input put again is the retry. `stream` is the stream playing the input (a
+capture the route made of the device, or the local stream), `null` without; `local` the board's own
+stream loaded, playing or paused while a device is the input.
+
+| route | what |
+|---|---|
+| `PUT /api/audio/route` | `{"input": {"type": "bluetooth", "devices": [{"address", "kind"}]}}`, `{"input": {"type": "local"}}` (the local stream again, resumed) or `{"input": {"type": "none"}}`, and/or `{"outputs": [sinks]}` (as a stream's `sinks`). A new input takes the place of the one before: the route's capture goes, and the local stream steps aside — a URL stream (with its queue) is paused off its sinks, a test signal stopped. New outputs apply to the stream playing at once (`PUT /api/audio/streams/{id} {"sinks"}`: the kept ones play on untouched); the answer then has that stream as `updated` (its `sink_req`). 400 for an input or outputs that are not valid |
+| `POST /api/audio/route/play` | the board's own input: a `POST /api/audio/streams` body (not a capture) without its sinks — it plays on the route's outputs, in the place of every other local stream and of the route's capture (201, the stream) |
+
+The outputs are kept in `/data/btbench/route.json` across restarts; the input is not. A browser
+listening is the browser's own (`GET /api/audio/streams/{stream}/listen`).
 
 ### Endpoints
 

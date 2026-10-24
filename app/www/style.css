@@ -746,12 +746,11 @@ td.acts > * { margin-right: 0.25rem; }
 .np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 100%; }
 .np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .np-vol input { flex: 1; }
-/* Where the board plays (player.js renderOuts): its outputs as buttons, this browser as a
-   checkbox, and a line saying what the board is doing about it. */
+/* Where the board plays (player.js renderOuts): its outputs and this browser as buttons, each on
+   or off by itself, and a line saying what the board is doing about them. */
 .np-out { flex: 1 1 100%; min-width: 0; font-size: 0.85rem; text-align: left; }
 .np-out-head { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
 .np-out-label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; }
-.np-listen { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
 .np-outs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .st-outs { margin-top: 0.5rem; }
 .st-play-to { display: grid; gap: 0.4rem; margin-bottom: 0.6rem; }
@@ -798,6 +797,13 @@ td.acts > * { margin-right: 0.25rem; }
 .tr-n svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .tr.now .tr-n svg { fill: currentColor; stroke: none; }
 .tr-t { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+/* Library → Inputs: the board's own music, then the Bluetooth inputs; the one picked is marked
+   with the accent, its icon kept as a line drawing (a device's outline filled is a blob). */
+.in-head { padding: 0.6rem 0.4rem 0.2rem; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; font-weight: 600; }
+.in-row { box-shadow: inset 3px 0 0 transparent; }
+.in-row.now { box-shadow: inset 3px 0 0 var(--accent); background: var(--well); }
+.in-row.now .tr-n svg { fill: none; stroke: currentColor; }
+.in-err { padding-top: 0; padding-left: 2.7rem; }
 .tr-t .muted { font-size: 0.8rem; }
 .tr-d { color: var(--muted); font-size: 0.8rem; }
 .tr .chev { flex: none; }

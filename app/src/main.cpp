@@ -270,12 +270,17 @@ int main(int argc, char** argv) {
   }
   bt.add_user(&player);
 
+  // The route: the one input the board plays and the outputs it plays on (Listen).
+  btb::audio::AudioRoute route(audio, publish, [&bt] { return btb::model_media(*bt.objects())["transports"]; },
+                               data_dir + "/route.json");
+
   btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,
-                 player, dbus_log};
+                 player, dbus_log, route};
   btb::WebServer server(deps, wopt);
-  bt.on_change([&server, &hid_host](bool request) {
+  bt.on_change([&server, &hid_host, &route](bool request) {
     server.publish_bt(request);
     hid_host.poke();
+    route.poke();
   });
 
 #ifdef BTB_HAVE_HCI

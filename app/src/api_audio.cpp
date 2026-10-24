@@ -31,6 +31,26 @@ void install_audio_routes(httplib::Server& svr, Deps& d) {
     send_json(res, a.endpoints(query(req, "fresh") == "1"));
   });
 
+  // The route: one input (the board's own music, or a Bluetooth device) on a set of outputs.
+  audio::AudioRoute& r = d.route;
+  svr.Get("/api/audio/route", [&r](const httplib::Request&, httplib::Response& res) { send_json(res, r.get()); });
+
+  svr.Put("/api/audio/route", json_route([&r](const json& j, const httplib::Request&, httplib::Response& res) {
+    json out;
+    std::string err;
+    int status = 400;
+    if (!r.put(j, &out, &err, &status)) return send_error(res, status, err);
+    send_json(res, out);
+  }));
+
+  svr.Post("/api/audio/route/play", json_route([&r](const json& j, const httplib::Request&, httplib::Response& res) {
+    json out;
+    std::string err;
+    int status = 400;
+    if (!r.play(j, &out, &err, &status)) return send_error(res, status, err);
+    send_json(res, out, 201);
+  }));
+
   svr.Get("/api/audio/streams", [&a](const httplib::Request&, httplib::Response& res) {
     send_json(res, a.list());
   });

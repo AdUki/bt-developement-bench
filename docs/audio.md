@@ -179,8 +179,26 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
 
 - **Tunnel.** A capture of one device into a sink of another: a phone playing to the board
   (A2DP sink) relayed to a speaker (the board as A2DP source). In PipeWire the phone's stream is
-  a node `bluez_input.<addr>.…` once it plays; WirePlumber also links it to the default sink
-  (the loopback card) as usual.
+  a node `bluez_input.<addr>.…` once it plays. WirePlumber does not link it anywhere by itself on
+  the bench (`node.autoconnect = false` on `bluez_input.*` in `50-btbench.conf`; Setup's
+  "Received audio plays by itself" undoes it): what plays is what was picked. Upstream links every
+  one to the default sink, so two phones, a received broadcast and the radio all played at once.
+  `bluez5.media-source-role = "input"` would not do: it covers A2DP only, PipeWire decides LE
+  Audio's node class itself.
+- **The route** (`/api/audio/route`, Listen): one input at a time — the board's own stream, or a
+  capture the route makes of the device picked, waited for up to 15 s until its node appears — on
+  the outputs picked, which are that stream's sinks. Changing the input moves no output; changing
+  an output touches only that sink. Two single-channel broadcasts, a left and a right one, are one
+  input: two mono `pw-cat --record`, one each channel, interleaved by the pump (`target_right`); the
+  left one paces, the right one is padded with silence when short, and cut back to its newest 20 ms
+  once more than 200 ms of it waits (what stays queued is an offset between the two). A coordinated set (a pair of earbuds, or an LE Audio device's left and right
+  streams) is recorded from and played into PipeWire's combined node of it.
+- **Roles that are streams.** Where PipeWire's Bluetooth node is a stream rather than a device —
+  what a device sends the board, and what the board sends as HFP hands-free unit or LE Audio
+  earbud (`bluez_output.…`, `Stream/Input/Audio`, which PipeWire would fill from the default
+  microphone) — pw-cat records from it or plays into it all the same, by name. A call's audio and
+  an LE Audio microphone on the gateway side are WirePlumber loopbacks (`bluez_input.AA:BB:…`) of an
+  internal node; the endpoint list gives them that node's profile and codec.
 - **Rates.** A stream has one rate. PipeWire resamples on both ends; the loopback takes any.
 - **Decoders.** `mpg123` (MP3: most internet radio) and `ffmpeg` (everything else: AAC streams,
   HLS, FLAC/WAV/M4A from a media server) are on the image. OE flags ffmpeg `commercial`; the
@@ -216,7 +234,8 @@ finds free and advertises the Broadcast ID only: there is no Broadcast Name.
 Receiving is BlueZ's: while the adapter scans, BAP syncs to a broadcaster's periodic advertising
 for a moment, reads its BASE and makes an endpoint and a transport per BIS
 (`dev_.../sid0/bis1/fd0`). `MediaTransport1.Select` marks one to receive; PipeWire acquires it, BlueZ
-syncs to the BIG, and the audio is a `bluez_input` stream that plays to the default output.
+syncs to the BIG, and the audio is a `bluez_input` stream, which the route records when the
+broadcast is its input (WirePlumber links it nowhere by itself).
 
 Both need an adapter whose controller has the ISO broadcaster and sync receiver features (`btmgmt
 info`: `iso-broadcaster sync-receiver`): the VIM3L's BE200 (with the DDC entry of

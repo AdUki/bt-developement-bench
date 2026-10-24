@@ -9,6 +9,7 @@
 #include "adv.h"
 #include "audio/engine.h"
 #include "audio/pwtop.h"
+#include "audio/route.h"
 #include "bench_player.h"
 #include "obex/obex.h"
 #include "bluetooth.h"
@@ -59,6 +60,7 @@ struct Deps {
   Setup& setup;
   BenchPlayer& player;
   DbusLog& dbus_log;
+  audio::AudioRoute& route;
 };
 
 // Route installers, one per file (api_*.cpp).

@@ -93,6 +93,7 @@ add_library(btbench_core STATIC
   src/audio/endpoints.cpp
   src/avdtp/probe.cpp
   src/audio/engine.cpp
+  src/audio/route.cpp
   src/audio/pcm.cpp
   src/audio/pwtop.cpp
   src/audio/upnp.cpp

@@ -46,10 +46,10 @@ function renderEndpoints(ep) {
   setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'PipeWire is not running'}` +
     `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
   // With nothing chosen before, the first connected speaker or car is where things play, else
-  // PipeWire's default.
+  // the board's sound card (the loopback card).
   if (!au.outs) {
-    const bt = ep.sinks.find(e => e.kind === 'bluetooth');
-    au.outs = bt ? [`${ep.backend === 'alsa' ? 'alsa' : 'pipewire'}:${bt.id}`] : ep.backend === 'pipewire' ? ['default'] : [];
+    const first = ep.sinks.find(e => e.kind === 'bluetooth' && !(e.set && !e.set_leader)) || ep.sinks[0];
+    au.outs = first ? [`${ep.backend === 'alsa' ? 'alsa' : 'pipewire'}:${first.id}`] : [];
   }
   renderNewOuts();
   const caps = ep.sources.map(e => ({value: `${e.backend}:${e.id}`, label: epLabel(e)}));
@@ -60,15 +60,16 @@ function renderEndpoints(ep) {
 }
 
 // The outputs new streams start on, as Listen's values (player.js outSink): from before there
-// were several, the one select's value ("" nowhere, "pipewire:" the default output). Null until
+// were several, the one select's value ("" nowhere; "pipewire:", the default output that is no
+// longer offered, nowhere too). Null until
 // the endpoints are known, when the first Bluetooth sink is taken.
 au.outs = (() => {
   try {
     const v = JSON.parse(lsGet('btbench.au.outs') || 'null');
-    if (Array.isArray(v)) return v;
+    if (Array.isArray(v)) return v.filter(x => x !== 'default' && x !== 'none');
   } catch (e) { /* the old choice */ }
   const one = lsGet('btbench.au.sink');
-  return one == null ? null : one === '' ? [] : one === 'pipewire:' ? ['default'] : [one];
+  return one == null ? null : one === '' || one === 'pipewire:' ? [] : [one];
 })();
 
 // The form's outputs: Listen's buttons, each one on or off by itself.
