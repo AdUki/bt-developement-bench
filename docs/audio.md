@@ -385,11 +385,11 @@ has a play state and nothing else.
   previous go round it, and a track that ends (the sweep, a station that drops) is followed by
   the next (repeat one: by itself; repeat all: round again). Shuffle puts the list itself in a
   random order, the track playing first (off: back as listed), so the now playing list a remote
-  browses is the order it plays in; repeating all, each round is a new order. Pause and stop end the stream; play starts the track again. A station's ICY title
+  browses is the order it plays in; repeating all, each round is a new order. Its buttons do what Listen's do on the board's stream: pause holds the stream where it is (a station, a test signal) and play plays it on, stop ends it and leaves nothing playing (no track, no now playing list), whoever stopped it: the remote, or Listen. A station's ICY title
   becomes the track's title (its "Artist - " part the artist), the station its album.
 - **Other streams.** Playing nothing itself, the player tells the remote about the board's input
   when it is the board's own (a station, a media server's folder, a test signal picked in Listen),
-  wherever it plays; audio the board receives from a device is not the board's to pause: its
+  wherever it plays, and its buttons act on that stream the same way; audio the board receives from a device is not the board's to pause: its
   track with the artist, album and length the media server gave, the position, and the stream's
   repeat and shuffle, which the remote can change. The remote's buttons act on that stream. A
   URL stream's playlist is then the now playing list the remote browses (items

@@ -897,7 +897,7 @@ struct AudioEngine::Stream {
   int track = 0;     // a URL stream's playlist position
   PlayOrder order{static_cast<uint32_t>(std::random_device{}())};  // which track follows which
   uint64_t track_frames = 0;  // frames played of the current track
-  bool paused = false;  // a URL stream: silence goes out, and the decoder waits on its pipe
+  bool paused = false;  // silence goes out; a URL stream's decoder waits on its pipe
   int jump_to = -1;  // a track asked for (next, previous, a row), taken by the pump
   // PUT {"sinks"}: the pump closes the sink processes no longer in spec.sinks and opens the new
   // ones, the others, the source and the listeners carrying on. Raised, it also frees the pump
@@ -1731,7 +1731,9 @@ bool AudioEngine::update(int id, const json& body, json* out, std::string* err, 
       if (s->state != "starting" && s->state != "running") throw std::invalid_argument("the stream has stopped");
     }
     if (body.contains("paused")) {
-      if (sp.source.type != "url") throw std::invalid_argument("only a URL stream pauses");
+      // What the board plays pauses (a station, a playlist, a test signal: silence goes out
+      // meanwhile); a capture is a device's audio, not the board's to hold.
+      if (sp.source.type == "capture") throw std::invalid_argument("a capture does not pause");
       s->paused = body["paused"].get<bool>();
     }
     const int n = static_cast<int>(sp.source.playlist.size());

@@ -333,9 +333,10 @@ function renderNowPlaying() {
     const round = s.source.repeat === 'all' || s.source.shuffle;
     can = {prev: round ? list.length > 1 : s.track > 0, next: round ? list.length > 1 : s.track + 1 < list.length, play: true, stop: true};
   } else if (c.kind === 'board') {
-    // A test signal or a capture: it runs until stopped (no pause, no tracks).
+    // A test signal pauses and plays on like a station; a capture (a device's audio the board
+    // plays on) has no pause. Neither has tracks.
     const s = c.s, src = s.source;
-    playing = s.state === 'running';
+    playing = s.state === 'running' && !s.paused;
     title = streamTitle(s);
     sub = TEST_SIGNALS.includes(src.type)
       ? [src.type === 'silence' ? '' : `${src.level_db} dBFS ${src.type === 'noise' ? 'RMS' : 'peak'}`,
@@ -344,7 +345,7 @@ function renderNowPlaying() {
     sub2 = `${s.rate / 1000} kHz · ${s.channels === 1 ? 'mono' : 'stereo'} · ${fmtMs(s.seconds * 1000)}`;
     ph = streamKind(s).icon;
     art = svg(ph, 'ph');
-    can = {prev: false, next: false, play: false, stop: true};
+    can = {prev: false, next: false, play: src.type !== 'capture', stop: true};
   }
   // An image: loading until it arrived (or failed: then the note stays).
   if (artSrc) {
@@ -365,7 +366,6 @@ function renderNowPlaying() {
   // Play and pause both, all the buttons alike, and the state said in words: a phone reports its
   // status late or not at all, and buttons that change with it then offer the wrong one.
   const status = c.kind === 'phone' ? (c.p.status || 'unknown') : c.kind === 'board' ? (c.s.paused ? 'paused' : c.s.state === 'running' ? 'playing' : c.s.state) : '';
-  // A test signal cannot pause: its transport is the stop button alone.
   // Two rows, so the buttons keep their width on a phone: the transport, then repeat, shuffle and
   // the state.
   setHTML($('np-ctl'), '<div class="np-row">' + btn('previous', PL_SVG.previous, can.prev) +
@@ -500,7 +500,7 @@ function npAction(a) {
     if (pl.hearId === s.id) hearStop();
     return del(`/audio/streams/${s.id}`).then(refreshPlayerStreams).catch(fail);
   }
-  if (!isUrl(s)) return;  // a test signal or a capture has no pause or tracks
+  if (s.source.type === 'capture' || (!isUrl(s) && a !== 'play' && a !== 'pause')) return;  // tracks: a URL stream's
   const body = a === 'play' ? {paused: false} : a === 'pause' ? {paused: true} : {[a]: true};
   // Heard here: the element pauses with the board, and plays again from a fresh connection (what
   // it buffered while paused is stale silence).

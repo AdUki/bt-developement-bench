@@ -491,8 +491,9 @@ plays nothing itself, it tells remotes about the route's input when that is the 
 `mirror` is that stream's id, `track` its title — a radio's ICY title (split into `Artist` and
 `Title` at its " - ") with the station as `Album`; a playlist's item with the `Artist`, `Album` and
 `Duration` its playlist entry carries, and `Number`/`NumberOfTracks`; a test signal by name — and
-`status` playing or paused. A remote's buttons then act on that stream: pause and play pause a URL
-stream (they end a test signal, which has no pause), stop ends it, next and previous move through
+`status` playing or paused. A remote's buttons then act on that stream as Listen's do: pause and
+play pause it in place (a station, a playlist, a test signal), stop ends it and the player then
+plays nothing (no track, `stopped`), next and previous move through
 its playlist, and repeat and shuffle are the stream's own (`source.repeat`, `source.shuffle`).
 
 | route | body | what |
@@ -677,7 +678,7 @@ to the last.
 | route | what |
 |---|---|
 | `GET /api/audio/streams/{id}` | one stream |
-| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; with `"at": "next"`, right after the track playing), `{"remove": <item id>}` (any track but the one playing), `{"repeat": "all"}`, `{"shuffle": true}` (the list in a random order, the track playing first; `false`: back as listed), `{"paused": true}` (silence goes to the sink, which stays open, and the decoder waits). Any stream: `{"sinks": [...]}` (or one `{"sink": {...} \| null}`) changes its sinks without stopping the source: the ones kept play on untouched, new ones open, the others close; `[]` leaves its listeners only. The answer's `sink_req` numbers the request, and `sink_seq` says which one `sinks_status` answers |
+| `PUT /api/audio/streams/{id}` | `{"gain_db": -6}` at any time; `{"source": {"freq": 440, "freq_right": null, "level_db": -20}}` for a tone, `{"source": {"level_db": ...}}` for noise — live, without a click. A URL stream: `{"next": true}`, `{"previous": true}`, `{"track": 3}`, `{"enqueue": [{url, title, ...}]}` (appended to the playlist; with `"at": "next"`, right after the track playing), `{"remove": <item id>}` (any track but the one playing), `{"repeat": "all"}`, `{"shuffle": true}` (the list in a random order, the track playing first; `false`: back as listed). Any stream but a capture: `{"paused": true}` (silence goes to the sink, which stays open; a URL stream's decoder waits, a test signal holds). Any stream: `{"sinks": [...]}` (or one `{"sink": {...} \| null}`) changes its sinks without stopping the source: the ones kept play on untouched, new ones open, the others close; `[]` leaves its listeners only. The answer's `sink_req` numbers the request, and `sink_seq` says which one `sinks_status` answers |
 | `DELETE /api/audio/streams/{id}` | stop it (and forget it) |
 | `GET /api/audio/streams/{id}/listen` | the stream as an endless WAV (`audio/wav`, chunked): `curl -sN http://<board>/api/audio/streams/3/listen \| aplay`. `?mono=1` halves a stereo stream's bandwidth. A listener that falls behind loses its oldest second; 3 at most per stream |
 

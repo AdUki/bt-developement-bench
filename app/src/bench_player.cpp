@@ -1056,6 +1056,8 @@ void BenchPlayer::emit_changes(sd_bus* bus) {
 
 bool BenchPlayer::action(const std::string& what, std::string* err) {
   std::unique_lock<std::mutex> lk(m_);
+  // Stopped stays stopped: there is nothing to pause.
+  if (what == "pause" && status_ == Status::stopped) return true;
   // Telling another stream's track: the remote's buttons are for that stream.
   if (mirroring_locked() && (what == "play" || what == "pause" || what == "stop" || what == "next" ||
                              what == "previous")) {
@@ -1075,10 +1077,14 @@ bool BenchPlayer::action(const std::string& what, std::string* err) {
       if (shuffle_) shuffle_queue_locked(true);
       lk.unlock();
       changed(true, false, true);
-    } else {
-      lk.unlock();
+      queue_cmd(Cmd::play);
+      return true;
     }
-    queue_cmd(Cmd::play);
+    // Its stream plays on where it was (playing, nothing changes), as Listen's play; else the
+    // track starts.
+    const bool resume = stream_ != 0;
+    lk.unlock();
+    queue_cmd(resume ? Cmd::resume : Cmd::play);
     return true;
   }
   if (what == "pause" || what == "stop") {
@@ -1242,6 +1248,21 @@ json BenchPlayer::pick_sink() {
   return json{{"type", "pipewire"}, {"target", first}};
 }
 
+// Stopped: nothing playing, the same whoever stopped it (a remote, Listen): no track and no now
+// playing list, so a remote shows nothing.
+void BenchPlayer::stopped() {
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    status_ = Status::stopped;
+    queue_.clear();
+    listed_.clear();
+    pos_ = -1;
+    icy_title_.clear();
+    art_.clear();
+  }
+  changed(true, true, true);
+}
+
 void BenchPlayer::stop_stream() {
   int id;
   {
@@ -1369,6 +1390,14 @@ void BenchPlayer::mirror_poll() {
       if (id && id != mirror_) LOG_INFO("player: telling remotes about stream {}", id);
     }
     const Status st = !id ? (mirror_ ? Status::stopped : status_) : paused ? Status::paused : Status::playing;
+    if (!id && mirror_) {
+      // The told stream ended (a stop, here or in Listen): nothing plays, so nothing is said to,
+      // not the library's queue from before, which is not what stopped.
+      queue_.clear();
+      listed_.clear();
+      pos_ = -1;
+      track = playlist = true;
+    }
     if (st != status_) status = true;
     const json& src = !pick.is_null() && pick.contains("source") && pick["source"].is_object() ? pick["source"] : json::object();
     const bool url = src.value("type", std::string{}) == "url";
@@ -1399,8 +1428,8 @@ void BenchPlayer::mirror_poll() {
   }
 }
 
-// A remote's button on another stream: a radio or a playlist pauses and moves on in place; a test
-// signal has no pause, so pause and stop end it.
+// A remote's button on another stream, as Listen's: pause and play pause it in place (a radio, a
+// playlist, a test signal), stop ends it, and next and previous move through a playlist.
 void BenchPlayer::mirror_cmd(const json& body) {
   int id;
   {
@@ -1417,10 +1446,10 @@ void BenchPlayer::mirror_cmd(const json& body) {
   json out;
   std::string err;
   int status = 0;
-  if (op == "stop" || (op == "pause" && !url)) {
+  if (op == "stop") {
     audio_.remove(id);
   } else if (op == "pause" || op == "play") {
-    if (url) audio_.update(id, json{{"paused", op == "pause"}}, &out, &err, &status);
+    audio_.update(id, json{{"paused", op == "pause"}}, &out, &err, &status);
   } else if (op == "track" && url) {
     audio_.update(id, json{{"track", body.value("track", 0)}, {"paused", false}}, &out, &err, &status);
   } else if ((op == "next" || op == "previous") && url) {
@@ -1452,18 +1481,34 @@ void BenchPlayer::run_worker() {
       case Cmd::play:
         start_stream();
         break;
-      case Cmd::stop:
+      case Cmd::resume:
       case Cmd::pause: {
-        stop_stream();
+        // As Listen's buttons: its stream pauses and plays on in place; resumed with none, the
+        // track starts.
+        int id;
         {
           std::lock_guard<std::mutex> lk(m_);
-          // Stopped forgets where it was in the track (a tone has no "where"); either way the
-          // next play starts the track again.
-          status_ = c.kind == Cmd::pause ? Status::paused : Status::stopped;
+          id = stream_;
         }
-        changed(false, true, false);
+        json out;
+        std::string err;
+        int st = 0;
+        const bool pause = c.kind == Cmd::pause;
+        if (id && audio_.update(id, json{{"paused", pause}}, &out, &err, &st)) {
+          {
+            std::lock_guard<std::mutex> lk(m_);
+            status_ = pause ? Status::paused : Status::playing;
+          }
+          changed(false, true, false);
+        } else if (!pause) {
+          start_stream();
+        }
         break;
       }
+      case Cmd::stop:
+        stop_stream();
+        stopped();
+        break;
       case Cmd::mirror:
         mirror_cmd(c.body);
         break;
@@ -1480,6 +1525,15 @@ void BenchPlayer::run_worker() {
         const json s = audio_.get(id);
         const std::string st = s.is_null() ? "gone" : s.value("state", std::string{});
         if (st == "running" || st == "starting") {
+          // Paused or played on from Listen: said as the remote's own buttons would.
+          const Status now = s.value("paused", false) ? Status::paused : Status::playing;
+          bool moved = false;
+          {
+            std::lock_guard<std::mutex> lk(m_);
+            moved = now != status_;
+            status_ = now;
+          }
+          if (moved) changed(false, true, false);
           const std::string title = s.is_null() ? "" : s["meta"].value("title", std::string{});
           const std::string art = s.is_null() ? "" : s["meta"].value("art", std::string{});
           bool track = false;
@@ -1511,6 +1565,15 @@ void BenchPlayer::run_worker() {
             LOG_INFO("player: a Bluetooth sink is back, moving to it");
             start_stream();
           }
+          break;
+        }
+        if (st == "gone") {
+          // Stopped from Listen (or Audio → Streams): nothing playing, as after its own stop.
+          {
+            std::lock_guard<std::mutex> lk(m_);
+            stream_ = 0;
+          }
+          stopped();
           break;
         }
         // It ended by itself (a sweep's end, a radio gone): the next track, as a player at the

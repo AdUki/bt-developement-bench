@@ -149,7 +149,7 @@ class BenchPlayer : public BusUser {
  private:
   enum class Status { stopped, playing, paused };
   struct Cmd {
-    enum Kind { play, stop, pause, poll, mirror } kind;
+    enum Kind { play, resume, stop, pause, poll, mirror } kind;  // play: the track from its start
     nlohmann::json body;  // mirror: {op: pause|play|stop|next|previous|settings, repeat, shuffle}
   };
 
@@ -187,6 +187,7 @@ class BenchPlayer : public BusUser {
   void mirror_cmd(const nlohmann::json& body);
   bool mirroring_locked() const { return stream_ == 0 && mirror_ != 0; }
   void stop_stream();
+  void stopped();
   nlohmann::json pick_sink();
 
   BtManager& bt_;
