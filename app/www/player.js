@@ -405,7 +405,7 @@ function npFrom(c) {
     const to = routeOuts().map(v => lower(outName(v))).concat(s && pl.hearId === s.id ? ['this browser'] : []);
     const bc = c.p.input && c.p.broadcast;
     const state = inp.state === 'failed' ? inp.error
-      : inp.state === 'waiting' ? (bc ? 'syncing to it…' : 'waiting for its audio…')
+      : inp.state === 'waiting' ? (inp.error ? 'stopped sending: play brings it back' : bc ? 'syncing to it…' : 'waiting for its audio…')
       : on || s ? (bc ? 'received by the board' : 'streaming into the board')
       : bc ? (c.p.status === 'syncing' ? 'syncing to it…' : 'in range: play receives it')
       : ts.length ? 'connected, not streaming' : 'remote control only, no audio link';
@@ -700,12 +700,13 @@ function devSvg(address) {
 // input; what was before goes quiet (a playlist pauses, keeping its queue). A single-channel
 // broadcast can be the other channel of the one picked (a left and a right broadcast are one
 // stereo input). How the input does — waiting for the device's audio, why it failed — is said in
-// its row; nothing is retried by itself, picking it again is the retry.
+// its row. A device that stops sending stays the input and plays again when it resumes; one that
+// failed or disconnected is not retried by itself, picking it again is the retry.
 function renderInputs() {
   setHTML($('np-crumbs'), '');
   const inp = pl.route ? pl.route.input : {type: 'none', devices: [], state: 'idle'};
   const ls = loadedStream();
-  const stateText = on => !on ? '' : inp.state === 'waiting' ? 'waiting for its audio…' : inp.state === 'failed' ? 'failed' : 'the input';
+  const stateText = on => !on ? '' : inp.state === 'waiting' ? (inp.error ? 'not sending' : 'waiting for its audio…') : inp.state === 'failed' ? 'failed' : 'the input';
   const row = (attrs, on, icon, title, sub, state, extra) => `<div class="tr lib in-row${on ? ' now' : ''}" ${attrs}>
       <span class="tr-n tr-art">${svg(icon)}</span>
       <span class="tr-t">${esc(title)}${sub ? `<span class="muted">${esc(sub)}</span>` : ''}</span>

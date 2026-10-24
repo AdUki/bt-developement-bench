@@ -704,9 +704,11 @@ of the set.
 `input.type`: `none`, `local` (the board's own stream) or `bluetooth`; `kind` is what of the
 device's audio: `a2dp`, `bap` (LE Audio unicast), `broadcast`, `hfp`, or `""` for whichever it sends
 (A2DP first). `state`: `idle` (nothing to play), `waiting` (the device's node is not there yet: it
-has not started sending; waited for 15 s), `playing`, `failed` (`error` says why: nothing came
-within 15 s, its audio went away, two broadcasts that are not a left and a right one). Nothing is
-retried: the same input put again is the retry. `stream` is the stream playing the input (a
+has not started sending, waited for 15 s; or it stopped sending, `error` "… stopped sending audio",
+waited for as long as BlueZ has a transport of it, so its play button brings the audio back),
+`playing`, `failed` (`error` says why: nothing came within 15 s, it disconnected while stopped, two
+broadcasts that are not a left and a right one). A failed input is not retried: the same input put
+again is the retry. `stream` is the stream playing the input (a
 capture the route made of the device, or the local stream), `null` without; `local` the board's own
 stream loaded, playing or paused while a device is the input.
 

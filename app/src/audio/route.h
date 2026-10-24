@@ -89,6 +89,8 @@ class AudioRoute {
   nlohmann::json json_locked() const;
   void publish_locked();
   bool stream_alive(int id) const;
+  // The devices as the devices list names them, from BlueZ's transports ts.
+  std::string who_locked(const nlohmann::json& ts) const;
 
   AudioEngine& engine_;
   Publish publish_;
@@ -107,7 +109,9 @@ class AudioRoute {
   std::string state_ = "idle";  // idle | waiting | playing | failed
   std::string error_;
   int64_t since_ms_ = 0;
-  int64_t wait_until_ = 0;  // steady ms; 0 while not waiting
+  int64_t wait_until_ = 0;  // steady ms; 0 while not waiting, kUntilBack with no deadline
+  // A device that stopped sending is waited for as long as it stays connected.
+  static constexpr int64_t kUntilBack = INT64_MAX;
   int capture_ = 0;         // the capture the route made for a Bluetooth input
   int paused_ = 0;          // the board's stream paused for a Bluetooth input, resumed for local
 };

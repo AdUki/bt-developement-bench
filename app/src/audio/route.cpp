@@ -302,6 +302,17 @@ bool AudioRoute::stream_alive(int id) const {
   return !s.is_null() && live(s);
 }
 
+std::string AudioRoute::who_locked(const json& ts) const {
+  std::string who;
+  for (const RouteDevice& d : devices_) {
+    std::string name = d.address;
+    for (const json& t : ts.is_array() ? ts : json::array())
+      if (upper(str(t, "address")) == d.address && !str(t, "device_name").empty()) name = str(t, "device_name");
+    who += (who.empty() ? "" : " and ") + name;
+  }
+  return who;
+}
+
 int AudioRoute::local_stream() const {
   if (stream_alive(paused_)) return paused_;
   const json l = engine_.list();
@@ -483,27 +494,32 @@ void AudioRoute::run() {
     poked_ = false;
     const json before = json_locked();
     if (type_ == "bluetooth" && wait_until_) {
-      if (!bind_locked() && mono_ms() > wait_until_) {
-        wait_until_ = 0;
-        // Named as the devices list names them, when BlueZ has a transport of the device.
+      if (!bind_locked()) {
         const json ts = transports_ ? transports_() : json::array();
-        std::string who;
-        for (const RouteDevice& d : devices_) {
-          std::string name = d.address;
-          for (const json& t : ts.is_array() ? ts : json::array())
-            if (upper(str(t, "address")) == d.address && !str(t, "device_name").empty()) name = str(t, "device_name");
-          who += (who.empty() ? "" : " and ") + name;
+        if (wait_until_ == kUntilBack) {
+          // Gone from BlueZ altogether: said, and nothing reconnects it.
+          bool there = false;
+          for (const RouteDevice& d : devices_)
+            for (const json& t : ts.is_array() ? ts : json::array()) there = there || upper(str(t, "address")) == d.address;
+          if (!there) {
+            wait_until_ = 0;
+            set_input_state("failed", who_locked(ts) + " disconnected: connect it, then pick it again");
+          }
+        } else if (mono_ms() > wait_until_) {
+          wait_until_ = 0;
+          set_input_state("failed", who_locked(ts) + " sent the board no audio within " + std::to_string(kWaitMs / 1000) +
+                                        " s: start playing on it, then pick it again");
         }
-        set_input_state("failed", who + " sent the board no audio within " + std::to_string(kWaitMs / 1000) +
-                                      " s: start playing on it, then pick it again");
       }
-    } else if (type_ == "bluetooth" && capture_ && state_ != "failed" && !stream_alive(capture_)) {
-      // Its audio went away (the device stopped, disconnected, or remade its node for another
-      // codec): said, not reopened. The failed capture stays in the streams with its error until
-      // the next input takes its place and removes it.
-      const json s = engine_.get(capture_);
-      const std::string why = s.is_null() ? "the capture was stopped" : str(s, "error");
-      set_input_state("failed", "its audio went away" + (why.empty() ? std::string{} : ": " + why) + ": pick it again");
+    } else if (type_ == "bluetooth" && capture_ && !stream_alive(capture_)) {
+      // Its audio went away: the device paused or stopped (its node goes with the stream), remade
+      // its node for another codec, or disconnected. The input stays that device, waited for while
+      // it is connected: its play button (here or on it) brings the audio back without a pick.
+      engine_.remove(capture_);
+      capture_ = 0;
+      LOG_INFO("route: input stopped sending; waiting for it");
+      set_input_state("waiting", who_locked(transports_ ? transports_() : json::array()) + " stopped sending audio");
+      wait_until_ = kUntilBack;
     }
     if (json_locked() != before) publish_locked();
   }
