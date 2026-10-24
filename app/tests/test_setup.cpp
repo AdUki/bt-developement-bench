@@ -91,6 +91,14 @@ void test_args_and_wireplumber() {
   CHECK(has(wn, "bluez5.decode-buffer.latency = 4096\n"));
   CHECK(has(wn, "bluez5.auto-connect = [ a2dp_sink hfp_hf ]\n"));
   CHECK_EQ(wn.find("monitor.bluez.rules"), wn.rfind("monitor.bluez.rules"));
+  // Received audio not linked by itself: a rule for the received nodes alone, which still run.
+  const std::string wr = wireplumber_roles_conf({"a2dp_sink"}, {{"Node.node.autoconnect", false}});
+  CHECK(has(wr, "matches = [ { node.name = \"~bluez_input.*\" } ]\n"));
+  CHECK(has(wr, "node.autoconnect = false\n        node.always-process = true\n"));
+  CHECK(!has(wr, "bluez_output"));
+  const std::string wa = wireplumber_roles_conf({"a2dp_sink"}, {{"Node.node.autoconnect", true}});
+  CHECK(has(wa, "node.autoconnect = true\n"));
+  CHECK(!has(wa, "always-process"));
   CHECK_EQ(obexd_noplugin({"ftp", "pcsuite"}), std::string("ftp,pcsuite"));
 }
 

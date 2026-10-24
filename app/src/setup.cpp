@@ -125,6 +125,8 @@ const std::vector<Setting>& settings_table() {
                 {"hsp_ag", "HSP AG"}, {"bap_sink", "LE Audio sink"}, {"bap_source", "LE Audio source"}}},
       {"Node.bluez5.media-source-role", "Received audio", "What audio the board receives (A2DP sink, LE Audio sink) is: a stream played to the default output, or a source to record from.",
        "enum", {{"playback", "Played (PipeWire's default)"}, {"input", "A source to record"}}},
+      {"Node.node.autoconnect", "Received audio plays by itself", "Whether PipeWire links what a device sends the board to the default output on its own. Off on the bench (the image's 50-btbench.conf): the board plays one input, the one picked in Listen; the other devices keep streaming to the board, which plays them nowhere.",
+       "bool", {}},
       {"Node.bluez5.decode-buffer.latency", "Receive buffer", "Samples buffered after the decoder of received audio: more rides out longer radio gaps, at that much latency. 0: PipeWire sizes it from the link's jitter.",
        "number", {}, 0, 96000, "samples", 1},
       {"Monitor.bluez5.dummy-avrcp-player", "Dummy AVRCP player", "Register an AVRCP player with no media, for devices whose volume or playback buttons only work with one.", "bool", {}},
@@ -846,13 +848,19 @@ std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const 
   std::string roles;
   for (const std::string& r : roles_table())
     if (roles_on.count(r)) roles += r + " ";
-  std::string monitor, device, node, wps;
+  std::string monitor, device, node, received, wps;
   for (const auto& [k, v] : settings) {
     if (v.is_null()) continue;
     const std::string prop = k.substr(k.find('.') + 1);
     // A list replaces the image's (fragments would otherwise add to it).
     if (starts_with(k, "Monitor.")) monitor += "  " + std::string(v.is_array() ? "override." : "") + prop + " = " + spa_value(v) + "\n";
     else if (starts_with(k, "Device.")) device += "        " + prop + " = " + spa_value(v) + "\n";
+    // Whether received audio plays by itself is the received nodes' alone (bluez_input): not linked,
+    // a node is still run (node.always-process), so the device's stream is acquired and keeps
+    // streaming while another input plays, and becomes the input at once when picked. On a sink
+    // it would keep a speaker's link or the board's broadcast streaming silence.
+    else if (k == "Node.node.autoconnect") received += "        node.autoconnect = " + spa_value(v) + "\n" +
+                                                     (v.is_boolean() && !v.get<bool>() ? "        node.always-process = true\n" : "");
     else if (starts_with(k, "Node.")) node += "        " + prop + " = " + spa_value(v) + "\n";
     else if (starts_with(k, "Settings.")) wps += "  " + prop + " = " + spa_value(v) + "\n";
   }
@@ -868,6 +876,9 @@ std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const 
   if (!node.empty())
     rules += "  {\n    matches = [ { node.name = \"~bluez_input.*\" } { node.name = \"~bluez_output.*\" } ]\n"
              "    actions = {\n      update-props = {\n" + node + "      }\n    }\n  }\n";
+  if (!received.empty())
+    rules += "  {\n    matches = [ { node.name = \"~bluez_input.*\" } ]\n"
+             "    actions = {\n      update-props = {\n" + received + "      }\n    }\n  }\n";
   if (!rules.empty()) out += "monitor.bluez.rules = [\n" + rules + "]\n";
   if (!wps.empty()) out += "wireplumber.settings = {\n" + wps + "}\n";
   return out;

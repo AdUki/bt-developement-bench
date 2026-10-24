@@ -943,7 +943,8 @@ and `BR.LinkSupervisionTimeout` (ms), `LE.MinConnectionInterval` / `LE.MaxConnec
 `Monitor.bluez5.enable-msbc`, `Monitor.bluez5.enable-hw-volume`, `Monitor.bluez5.hfphsp-backend`,
 `Monitor.bluez5.default.rate`, `Monitor.bluez5.dummy-avrcp-player`, `Device.bluez5.a2dp.ldac.quality`,
 `Device.bluez5.a2dp.aac.bitratemode`, `Device.bluez5.auto-connect` and `Device.bluez5.hw-volume` (lists
-of roles), `Node.bluez5.media-source-role` `playback|input`, `Node.bluez5.decode-buffer.latency`
+of roles), `Node.bluez5.media-source-role` `playback|input`, `Node.node.autoconnect` (whether received audio
+is linked to the default output by itself; the image says no), `Node.bluez5.decode-buffer.latency`
 (samples, 0: PipeWire's own), `Settings.bluetooth.autoswitch-to-headset-profile`,
 `Settings.bluetooth.use-persistent-storage`, `Settings.device.restore-profile`; and
 those the sources above add (main.conf's other keys, WirePlumber's other `bluetooth.*` settings).
