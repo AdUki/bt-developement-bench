@@ -257,9 +257,15 @@ int main(int argc, char** argv) {
                    [&obex](const std::string& noplugin) { obex.set_noplugin(noplugin); });
   obex.set_noplugin(setup.obex_noplugin());
 
-  // The board's own AVRCP player, for what it plays to (a car, a speaker): its library plays
-  // through the audio streams.
+  // The route: the one input the board plays and the outputs it plays on (Listen). Made before
+  // the player, which plays through it, so it outlives the player's worker.
+  btb::audio::AudioRoute route(audio, publish, [&bt] { return btb::model_media(*bt.objects())["transports"]; },
+                               data_dir + "/route.json");
+
+  // The board's own AVRCP player, for what it plays to (a car, a speaker): its library is the
+  // board's input, played on the route's outputs.
   btb::BenchPlayer player(bt, audio, data_dir + "/player.json");
+  player.set_route(&route);
   // Its cover art, for a controller that shows what the board plays (AVRCP 1.6 Cover Art): a BIP
   // responder on an L2CAP PSM of its own, offered in BlueZ's target record.
   btb::CoverArtServer cover_art("/tmp/btbench-cover");
@@ -269,10 +275,6 @@ int main(int argc, char** argv) {
     else LOG_WARN("cover art: not offered: {}", err);
   }
   bt.add_user(&player);
-
-  // The route: the one input the board plays and the outputs it plays on (Listen).
-  btb::audio::AudioRoute route(audio, publish, [&bt] { return btb::model_media(*bt.objects())["transports"]; },
-                               data_dir + "/route.json");
 
   btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,
                  player, dbus_log, route};

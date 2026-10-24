@@ -377,18 +377,19 @@ has a play state and nothing else.
   2 kHz right, a 10 s sweep from 20 Hz to 20 kHz (a track that ends, so the remote sees the next
   one start), pink and white noise, silence, and a *Levels* folder (1 kHz from 0 to −60 dBFS).
   *Radio*: the stations of the Listen page (`/data/btbench/radio.json`, read at start).
-- **Playing.** Playing an entry starts an audio stream (above) into the Bluetooth sink: PipeWire's
-  default sink when it is a Bluetooth one, else the first Bluetooth sink, else the default sink.
-  The folder the entry is in (or the folder played) becomes the now playing list; next and
+- **Playing.** Playing an entry makes it the board's input (the route, "The route" above): it
+  takes the place of whatever the board played, and plays on the outputs picked in Listen's Play
+  to. With none on, the Bluetooth sink the player would pick is turned on there (PipeWire's
+  default sink when it is a Bluetooth one, else the first Bluetooth sink, else the default sink),
+  so a car that pressed play hears it. The folder the entry is in (or the folder played) becomes the now playing list; next and
   previous go round it, and a track that ends (the sweep, a station that drops) is followed by
   the next (repeat one: by itself; repeat all: round again). Shuffle puts the list itself in a
   random order, the track playing first (off: back as listed), so the now playing list a remote
-  browses is the order it plays in; repeating all, each round is a new order. Pause and stop end the stream; play starts the track again. A speaker that drops and comes back
-  gets the music back: while the player plays to something else it looks for a Bluetooth sink
-  every 5 s and moves its stream there. A station's ICY title
+  browses is the order it plays in; repeating all, each round is a new order. Pause and stop end the stream; play starts the track again. A station's ICY title
   becomes the track's title (its "Artist - " part the artist), the station its album.
-- **Other streams.** Playing nothing itself, the player tells the remote about the newest stream
-  that plays to a Bluetooth sink (the console's Listen, a radio, a media server's folder): its
+- **Other streams.** Playing nothing itself, the player tells the remote about the board's input
+  when it is the board's own (a station, a media server's folder, a test signal picked in Listen),
+  wherever it plays; audio the board receives from a device is not the board's to pause: its
   track with the artist, album and length the media server gave, the position, and the stream's
   repeat and shuffle, which the remote can change. The remote's buttons act on that stream. A
   URL stream's playlist is then the now playing list the remote browses (items

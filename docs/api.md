@@ -484,8 +484,10 @@ while the status is Playing. The player sends MPRIS `Seeked` when the track's re
 than 1.5 s from that count (a stream joined midway, a pause the count missed), and a track's
 `Duration` (`mpris:length`) when it has one, which the remote needs for a progress bar.
 
-While the player plays nothing itself, it tells remotes what another stream plays to a Bluetooth
-sink (one of its sinks, or PipeWire's default sink when that is a Bluetooth one; the newest if several):
+What the player plays is the board's input: `POST /api/audio/route/play` with the entry, on the
+route's outputs (turning on the Bluetooth sink it would pick when none is on). While the player
+plays nothing itself, it tells remotes about the route's input when that is the board's own
+(`input.type` local, the route's `local` stream):
 `mirror` is that stream's id, `track` its title — a radio's ICY title (split into `Artist` and
 `Title` at its " - ") with the station as `Album`; a playlist's item with the `Artist`, `Album` and
 `Duration` its playlist entry carries, and `Number`/`NumberOfTracks`; a test signal by name — and

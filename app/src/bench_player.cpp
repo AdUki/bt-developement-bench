@@ -9,6 +9,7 @@
 #include <fstream>
 
 #include "audio/engine.h"
+#include "audio/route.h"
 #include "dbus_util.h"
 #include "obex/cover_art.h"
 #include "util/log.h"
@@ -1262,12 +1263,30 @@ void BenchPlayer::start_stream() {
     source = it.source;
     name = it.name;
   }
-  const json sink = pick_sink();
-  json body{{"source", source}, {"sink", sink}, {"label", "player: " + name}};
   json out;
   std::string err;
   int status = 0;
-  const bool ok = audio_.create(body, &out, &err, &status);
+  bool ok;
+  json sink;
+  audio::AudioRoute* route = route_.load();
+  if (route) {
+    // The board's input, on the outputs picked in Listen. With none on, the remote that pressed
+    // play still hears it: the Bluetooth sink the player would pick is turned on, shown in Play to
+    // like any other output.
+    json outputs = route->get()["outputs"];
+    if (outputs.empty()) {
+      outputs = json::array({pick_sink()});
+      json r;
+      int st = 0;
+      if (!route->put(json{{"outputs", outputs}}, &r, &err, &st)) LOG_WARN("player: outputs: {}", err);
+      err.clear();
+    }
+    sink = outputs[0];
+    ok = route->play(json{{"source", source}, {"label", "player: " + name}}, &out, &err, &status);
+  } else {
+    sink = pick_sink();
+    ok = audio_.create(json{{"source", source}, {"sink", sink}, {"label", "player: " + name}}, &out, &err, &status);
+  }
   {
     std::lock_guard<std::mutex> lk(m_);
     if (ok) {
@@ -1312,9 +1331,17 @@ void BenchPlayer::mirror_poll() {
     }
     if (pw) live.push_back(st);
   }
+  // With the route, the remote is told about the board's input, wherever it plays; a device's
+  // audio the board receives is not the board's to pause or skip.
+  audio::AudioRoute* route = route_.load();
+  int route_local = 0;
+  if (route) {
+    const json r = route->get();
+    if (r["input"].value("type", std::string{}) == "local" && r["local"].is_number()) route_local = r["local"].get<int>();
+  }
   // pw-dump is the costly part on a Zero W: asked when a new stream plays to the default sink, then
   // every 30 s while one does (in case the default moves).
-  if (newest_default && (newest_default != mirror_default_for_ || ++mirror_polls_ % 30 == 0)) {
+  if (!route && newest_default && (newest_default != mirror_default_for_ || ++mirror_polls_ % 30 == 0)) {
     mirror_default_for_ = newest_default;
     std::string def_bt;
     const json ep = audio_.endpoints(false);
@@ -1330,7 +1357,7 @@ void BenchPlayer::mirror_poll() {
     if (stream_) return;  // its own play started meanwhile
     json pick = nullptr;  // the list is newest first
     for (const json& st : live)
-      if (stream_to_bluetooth(st, mirror_default_bt_)) {
+      if (route ? st.value("id", 0) == route_local : stream_to_bluetooth(st, mirror_default_bt_)) {
         pick = st;
         break;
       }
@@ -1477,7 +1504,8 @@ void BenchPlayer::run_worker() {
           bool look;
           {
             std::lock_guard<std::mutex> lk(m_);
-            look = sink_.compare(0, 13, "bluez_output.") != 0 && ++sink_polls_ % 5 == 0;
+            // With the route, where it plays is what Listen's Play to says.
+            look = !route_.load() && sink_.compare(0, 13, "bluez_output.") != 0 && ++sink_polls_ % 5 == 0;
           }
           if (look && pick_sink().value("target", std::string{}).compare(0, 13, "bluez_output.") == 0) {
             LOG_INFO("player: a Bluetooth sink is back, moving to it");

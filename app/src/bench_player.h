@@ -9,8 +9,8 @@
 // plays.
 //
 // The library: test signals (tones, a sweep, noise, silence, and a folder of levels) and the radio
-// stations of the Listen page. Playing an item starts an audio stream (audio/engine.h) into the
-// Bluetooth sink; the folder it came from, or what was added to it, is the now playing list that
+// stations of the Listen page. Playing an item makes it the board's input (audio/route.h), on the
+// outputs picked in Listen; the folder it came from, or what was added to it, is the now playing list that
 // next and previous move through. A radio stream's ICY title becomes the track's title.
 //
 // The D-Bus side follows BlueZ's target role documents: the player object implements
@@ -19,6 +19,7 @@
 // thread; starting and stopping streams (which runs pw-dump and spawns processes) runs on a worker
 // of its own, so a slow PipeWire never stalls the pairing agent.
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -40,6 +41,7 @@ namespace btb {
 
 namespace audio {
 class AudioEngine;
+class AudioRoute;
 }
 class CoverArtServer;
 
@@ -118,6 +120,10 @@ class BenchPlayer : public BusUser {
   // track's cover goes out as an image handle while a controller is connected to it. Set before
   // the bus opens; the track is told again whenever that connection comes or goes.
   void set_cover_art(CoverArtServer* cover);
+  // The route (audio/route.h), set before the bus opens: what the player plays is the board's
+  // input, played on the outputs picked in Listen, and what it tells a remote about is that
+  // input. Without one it plays to a Bluetooth sink of its own choosing (pick_sink).
+  void set_route(audio::AudioRoute* route) { route_.store(route); }
 
   // BusUser
   void bus_opened(sd_bus* bus) override;
@@ -185,6 +191,7 @@ class BenchPlayer : public BusUser {
 
   BtManager& bt_;
   audio::AudioEngine& audio_;
+  std::atomic<audio::AudioRoute*> route_{nullptr};  // set once, read by the worker
   const std::string state_file_;
 
   mutable std::mutex m_;
