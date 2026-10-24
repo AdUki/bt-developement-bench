@@ -474,9 +474,35 @@ function stableOrder(list, view) {
   return out;
 }
 
-// Updates the rows in place, [key, html] in order: only a row that changed is rebuilt, the rest
-// keep their DOM (and with it hover, focus and text selection). A rebuilt row keeps its open
-// <details>, and a change of state (connected, paired, busy) is flashed rather than jumped to.
+// Updates the rows in place, [key, html] in order: only a row that changed is touched, the rest
+// keep their DOM (and with it hover, focus and text selection). Within a changed row only the
+// parts that changed are replaced: an open row's link is read every 2 s, and a button rebuilt
+// between a finger's touch and its release takes no click, so a phone could not tap Disconnect.
+// A replaced part keeps its open <details>, and a change of state (connected, paired, busy) is
+// flashed rather than jumped to.
+const fromHTML = html => {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+};
+// Makes live (built from prev) look like next, keeping every element whose markup is the same.
+// Elements are kept down to `depth` levels; below that a changed element is replaced whole.
+function patchEl(live, prev, next, depth) {
+  if (prev.outerHTML === next.outerHTML) return live;
+  const [lc, pc, nc] = [live, prev, next].map(x => [...x.childNodes]);
+  const keep = depth > 0 && prev.tagName === next.tagName && pc.length === nc.length && lc.length === pc.length &&
+    pc.every((n, i) => n.nodeType === 1 ? nc[i].nodeType === 1 : n.isEqualNode(nc[i]));
+  if (!keep) {
+    const opened = [...live.querySelectorAll('details')].map(x => x.open);
+    next.querySelectorAll('details').forEach((x, i) => { if (opened[i]) x.open = true; });
+    live.replaceWith(next);
+    return next;
+  }
+  for (const a of [...live.attributes]) if (!next.hasAttribute(a.name)) live.removeAttribute(a.name);
+  for (const a of next.attributes) if (live.getAttribute(a.name) !== a.value) live.setAttribute(a.name, a.value);
+  pc.forEach((n, i) => { if (n.nodeType === 1) patchEl(lc[i], n, nc[i], depth - 1); });
+  return live;
+}
 function patchRows(list, rows) {
   list._html = null;  // setHTML's cache no longer says what is there
   const have = new Map([...list.children].filter(el => el.dataset.dev).map(el => [el.dataset.dev, el]));
@@ -486,18 +512,20 @@ function patchRows(list, rows) {
     let el = have.get(key);
     have.delete(key);
     if (!el || el._html !== html) {
-      const t = document.createElement('template');
-      t.innerHTML = html.trim();
-      const fresh = t.content.firstElementChild;
-      fresh._html = html;
+      const fresh = fromHTML(html);
       if (el) {
-        const opened = [...el.querySelectorAll('details')].map(x => x.open);
-        fresh.querySelectorAll('details').forEach((x, i) => { if (opened[i]) x.open = true; });
-        if (el.dataset.state !== fresh.dataset.state) fresh.classList.add('changed');
-        el.replaceWith(fresh);
-        if (at === el) at = fresh;
-      }
-      el = fresh;
+        const changed = el.dataset.state !== fresh.dataset.state;
+        // The row, its head and its body are kept; their parts (light, name, buttons, details) are swapped.
+        const kept = patchEl(el, fromHTML(el._html), fresh, 2);
+        if (changed) {
+          kept.classList.remove('changed');
+          void kept.offsetWidth;  // restarts the flash
+          kept.classList.add('changed');
+        }
+        if (at === el) at = kept;
+        el = kept;
+      } else el = fresh;
+      el._html = html;
     }
     if (el !== at) list.insertBefore(el, at);
     else at = at.nextElementSibling;

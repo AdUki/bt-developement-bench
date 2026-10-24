@@ -551,8 +551,10 @@ body.wifi-page main { max-width: 560px; margin: 0 auto; padding: 0.5rem 16px 2re
   .list-head #sc-state { order: 4; flex-basis: 100%; }
   .list-head #sc-state:empty { display: none; }
   .rw-main { padding: 0.55rem 0.8rem; gap: 0.3rem 0.6rem; }
-  /* A device's Connect and Remove go on their own line under its name. */
-  .rw-acts:has(.dev-rm) { grid-column: 2 / -1; justify-content: flex-end; }
+  /* A device's Connect and Remove go on a line of their own, the row's whole width shared between
+     them: under the name alone, their desktop widths overflowed it and covered the light. */
+  .rw-acts:has(.dev-rm) { grid-column: 1 / -1; }
+  .rw-acts .dev-main, .rw-acts .dev-rm { flex: 1 1 0; min-width: 0; }
   .rw-body, .rw-note, .rw.dev > .rw-body, .rw.dev > .rw-note { padding-left: 0.8rem; padding-right: 0.8rem; }
   .player { grid-template-columns: 76px minmax(0, 1fr); gap: 0 0.75rem; }
   .pl-art { width: 76px; height: 76px; }
