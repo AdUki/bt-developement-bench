@@ -856,7 +856,7 @@ std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const 
     // A list replaces the image's (fragments would otherwise add to it).
     if (starts_with(k, "Monitor.")) monitor += "  " + std::string(v.is_array() ? "override." : "") + prop + " = " + spa_value(v) + "\n";
     else if (starts_with(k, "Device.")) device += "        " + prop + " = " + spa_value(v) + "\n";
-    // Whether received audio plays by itself is the received nodes' alone (bluez_input).
+    // Whether Bluetooth audio is linked by itself (Setup's "Received audio plays by itself").
     else if (k == "Node.node.autoconnect") {
       received += "        node.autoconnect = " + spa_value(v) + "\n";
       run_a2dp = v.is_boolean() && !v.get<bool>();
@@ -876,8 +876,11 @@ std::string wireplumber_roles_conf(const std::set<std::string>& roles_on, const 
   if (!node.empty())
     rules += "  {\n    matches = [ { node.name = \"~bluez_input.*\" } { node.name = \"~bluez_output.*\" } ]\n"
              "    actions = {\n      update-props = {\n" + node + "      }\n    }\n  }\n";
+  // The other way round as well: what the board sends a device in a role where PipeWire's node is
+  // a stream (the HFP hands-free unit's microphone, an LE Audio acceptor's source) would record the
+  // default source by itself. It sends what the route plays to it, or nothing.
   if (!received.empty())
-    rules += "  {\n    matches = [ { node.name = \"~bluez_input.*\" } ]\n"
+    rules += "  {\n    matches = [ { node.name = \"~bluez_input.*\" } { node.name = \"~bluez_output.*\" } ]\n"
              "    actions = {\n      update-props = {\n" + received + "      }\n    }\n  }\n";
   // Not linked, a received A2DP node is still run (node.always-process): unlinked it never
   // acquires its transport, and a phone whose stream start is not taken stops sending while its

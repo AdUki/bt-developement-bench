@@ -181,7 +181,10 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
   (A2DP sink) relayed to a speaker (the board as A2DP source). In PipeWire the phone's stream is
   a node `bluez_input.<addr>.…` once it plays. WirePlumber does not link it anywhere by itself on
   the bench (`node.autoconnect = false` on `bluez_input.*` in `50-btbench.conf`; Setup's
-  "Received audio plays by itself" undoes it): what plays is what was picked. Upstream links every
+  "Received audio plays by itself" undoes it): what plays is what was picked. Nor does it link
+  what the board sends a device where PipeWire's node for that is a stream (the HFP hands-free
+  unit's microphone, an LE Audio acceptor's source, `bluez_output.…`), which would otherwise
+  record the default source: the board sends what the route plays there, or nothing. Upstream links every
   one to the default sink, so two phones, a received broadcast and the radio all played at once.
   `bluez5.media-source-role = "input"` would not do: it covers A2DP only, PipeWire decides LE
   Audio's node class itself. A received A2DP node is run unlinked all the same
