@@ -332,7 +332,7 @@ details.log-box > summary .small-btn { margin-left: 0.5rem; }
 /* The row's main action keeps one width whatever it says, the work in progress included. */
 .rw-acts .dev-main { min-width: 9.5rem; text-align: center; white-space: nowrap; }
 .rw-acts .dev-rm { min-width: 8.5rem; text-align: center; white-space: nowrap; }
-.rw-acts .dev-main:disabled:has(.dots) { opacity: 0.8; }
+.rw-acts .dev-main:disabled:has(.dots), .rw-acts .dev-rm:disabled:has(.dots) { opacity: 0.8; }
 /* A device's row leads with its light and an icon of what it is (devices.js devKind); its details
    line up under the name. */
 .dev-lead { display: inline-flex; align-items: center; gap: 0.6rem; }

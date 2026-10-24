@@ -336,10 +336,11 @@ function deviceRow(d) {
   const open = devOpen.has(a);
   const btn = (act, label, cls) => `<button data-act="${act}" data-key="${a}" class="${cls || ''}"${dis}>${label}</button>`;
   // One button of one width whatever it says, the work in progress included, so the row does not
-  // grow a line or move its neighbours while a device connects.
+  // grow a line or move its neighbours while a device connects. A removal shows on Remove itself.
+  const removing = d.busy === 'removing';
   let main;
   if (busy && d.busy === 'pairing') main = `<button data-act="cancel-pairing" data-key="${a}" class="dev-main">Cancel pairing</button>`;
-  else if (busy) main = `<button class="dev-main" disabled><span class="dots"></span>${esc(d.busy.charAt(0).toUpperCase() + d.busy.slice(1))}…</button>`;
+  else if (busy && !removing) main = `<button class="dev-main" disabled><span class="dots"></span>${esc(d.busy.charAt(0).toUpperCase() + d.busy.slice(1))}…</button>`;
   else if (d.connected) main = btn('disconnect', 'Disconnect', 'dev-main');
   else if (!d.paired) main = btn('pair', 'Pair', 'primary dev-main');
   else main = btn('connect', 'Connect', 'primary dev-main');
@@ -413,7 +414,7 @@ function deviceRow(d) {
     <div class="rw-main" data-act="toggle" data-key="${a}">
       <span class="dev-lead"><span class="rw-led ${led}"></span>${devIcon(d)}</span>
       <div class="rw-title"><b>${esc(d.alias || d.address)}</b>${ownAdapterTag(d)}<span class="rw-sub">${sub}</span></div>
-      <div class="rw-acts">${main}<button data-act="remove" data-key="${a}" class="danger dev-rm"${dis}>${armed['rm' + a] ? 'Really remove?' : 'Remove'}</button><span class="chev"></span></div>
+      <div class="rw-acts">${main}<button data-act="remove" data-key="${a}" class="danger dev-rm"${dis}>${removing ? '<span class="dots"></span>Removing…' : armed['rm' + a] ? 'Really remove?' : 'Remove'}</button><span class="chev"></span></div>
     </div>
     ${d.error && (!d.error_on || !open) ? `<div class="rw-note bad-text">${esc(d.error)}</div>` : ''}
     ${body}
