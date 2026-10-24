@@ -497,13 +497,13 @@ void AudioRoute::run() {
         set_input_state("failed", who + " sent the board no audio within " + std::to_string(kWaitMs / 1000) +
                                       " s: start playing on it, then pick it again");
       }
-    } else if (type_ == "bluetooth" && capture_ && !stream_alive(capture_)) {
+    } else if (type_ == "bluetooth" && capture_ && state_ != "failed" && !stream_alive(capture_)) {
       // Its audio went away (the device stopped, disconnected, or remade its node for another
-      // codec): said, not reopened.
+      // codec): said, not reopened. The failed capture stays in the streams with its error until
+      // the next input takes its place and removes it.
       const json s = engine_.get(capture_);
       const std::string why = s.is_null() ? "the capture was stopped" : str(s, "error");
       set_input_state("failed", "its audio went away" + (why.empty() ? std::string{} : ": " + why) + ": pick it again");
-      capture_ = 0;
     }
     if (json_locked() != before) publish_locked();
   }
