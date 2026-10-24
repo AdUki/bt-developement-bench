@@ -364,6 +364,47 @@ void test_gatt_text() {
   CHECK_EQ(gatt_text("2b97", {}), std::string());
 }
 
+// A coordinated set (CSIP) of two earbuds: the DeviceSet1 object and each member's Sets.
+void test_sets() {
+  const json t = json::parse(R"({
+    "/org/bluez/hci0": {"org.bluez.Adapter1": {"Address": "B8:27:EB:50:7B:22"}},
+    "/org/bluez/hci0/set_8b1c2d": {"org.bluez.DeviceSet1": {
+      "Adapter": "/org/bluez/hci0", "AutoConnect": true, "Size": 2,
+      "Devices": ["/org/bluez/hci0/dev_C0_00_00_00_00_01", "/org/bluez/hci0/dev_C0_00_00_00_00_02"]}},
+    "/org/bluez/hci1/set_aa": {"org.bluez.DeviceSet1": {"Adapter": "/org/bluez/hci1", "Size": 2, "Devices": []}},
+    "/org/bluez/hci0/dev_C0_00_00_00_00_01": {"org.bluez.Device1": {"Address": "c0:00:00:00:00:01", "Alias": "Bud L",
+      "Sets": {"/org/bluez/hci0/set_8b1c2d": {"Rank": 1}}}},
+    "/org/bluez/hci0/dev_C0_00_00_00_00_02": {"org.bluez.Device1": {"Address": "C0:00:00:00:00:02", "Alias": "Bud R",
+      "Sets": {"/org/bluez/hci0/set_8b1c2d": {"Rank": 2}}}},
+    "/org/bluez/hci0/dev_D0_00_00_00_00_03": {"org.bluez.Device1": {"Address": "D0:00:00:00:00:03", "Alias": "Speaker"}},
+    "/org/bluez/hci0/dev_C0_00_00_00_00_01/fd0": {"org.bluez.MediaTransport1": {
+      "UUID": "00002bc9-0000-1000-8000-00805f9b34fb", "Codec": 6, "Device": "/org/bluez/hci0/dev_C0_00_00_00_00_01",
+      "State": "idle", "Location": 1}}
+  })");
+  const json all = model_sets(t);
+  CHECK_EQ(all.size(), size_t(2));
+  const json s = model_sets(t, "/org/bluez/hci0");
+  CHECK_EQ(s.size(), size_t(1));
+  CHECK_EQ(s[0]["path"].get<std::string>(), std::string("/org/bluez/hci0/set_8b1c2d"));
+  CHECK_EQ(s[0]["adapter"].get<std::string>(), std::string("/org/bluez/hci0"));
+  CHECK_EQ(s[0]["size"].get<int>(), 2);
+  CHECK(s[0]["auto_connect"].get<bool>());
+  CHECK_EQ(s[0]["devices"], json::parse(R"(["C0:00:00:00:00:01", "C0:00:00:00:00:02"])"));
+  CHECK(!model_sets(t, "/org/bluez/hci1")[0]["auto_connect"].get<bool>());
+  for (const json& d : model_devices(t)) {
+    if (d["address"] == "D0:00:00:00:00:03") {
+      CHECK(d["set"].is_null());
+      CHECK(d["set_rank"].is_null());
+    } else {
+      CHECK_EQ(d["set"].get<std::string>(), std::string("/org/bluez/hci0/set_8b1c2d"));
+      CHECK_EQ(d["set_rank"].get<int>(), d["address"] == "C0:00:00:00:00:01" ? 1 : 2);
+    }
+  }
+  // An LE Audio transport's audio location; an A2DP one has none.
+  CHECK_EQ(model_media(t)["transports"][0]["location"].get<int>(), 1);
+  CHECK(model_media(tree())["transports"][0]["location"].is_null());
+}
+
 int main() {
   test_gatt_text();
   std::string err;
@@ -380,5 +421,6 @@ int main() {
   test_players();
   test_profiles();
   test_names();
+  test_sets();
   return report("test_bluez_model");
 }

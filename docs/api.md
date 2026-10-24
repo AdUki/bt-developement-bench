@@ -120,6 +120,12 @@ place with `stale: true` until the next one. A device is:
                      "at_ms": 1791661005562}}
 ```
 
+A device that is a member of a coordinated set (CSIP: a pair of LE Audio earbuds) has `set`, the
+set's object path (`/org/bluez/hci0/set_…`, BlueZ's `DeviceSet1`), and `set_rank`, its rank in it;
+both `null` otherwise (a device in several sets shows the first). The top level has `sets`:
+`[{"path": "/org/bluez/hci0/set_1", "adapter": "/org/bluez/hci0", "size": 2, "auto_connect": true,
+"devices": ["AA:BB:…", "CC:DD:…"]}]`, the selected adapter's only when one is selected.
+
 `security_level` (0 none, 1 low, 2 medium, 3 high, 4 FIPS) and `encryption_type` (0 none, 1 E0,
 2 AES-CCM) are BlueZ's experimental `SecurityLevel` and `EncryptionType`, null without them;
 `modalias` is the device's Device ID, as the adapter's.
@@ -396,7 +402,8 @@ Decoded: SBC, AAC, aptX/aptX HD, LDAC (rates and modes), other vendor codecs by 
 configurations (BAP LTVs: rate, frame duration, allocation, octets per frame, bitrate); always the
 raw element as hex. `delay_ms` is the sink's reported delay (A2DP delay reporting), `null` without;
 `program_info` an LE Audio transport's Program_Info metadata (what a broadcast plays), `null`
-without.
+without; `location` an LE Audio transport's audio location (the bitmask of BAP's Audio Locations:
+1 front left, 2 front right, 3 both), `null` on A2DP.
 
 `PUT /api/media/transport` `{"path": "<transport>", "volume": 0..127}` — AVRCP absolute volume;
 on an LE Audio transport 0..255, the Volume Control Service's volume setting.

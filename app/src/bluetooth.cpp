@@ -1457,6 +1457,7 @@ json BtManager::state() const {
               {"adapter", adapter},
               {"adapters", adapters},
               {"devices", devices},
+              {"sets", model_sets(*objs, want_adapter_.empty() ? std::string{} : apath)},
               {"request", has_req ? bt_request_json(req) : json(nullptr)},
               {"agent", {{"policy", policy}, {"capability", cap}, {"registered", agent_reg}}},
               {"discovery", discovery}};

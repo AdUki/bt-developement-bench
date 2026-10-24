@@ -50,7 +50,8 @@ std::string bt_experimental_name(const std::string& uuid);
 // modalias|null and modalias_name, security_level|null, encryption_type|null, rssi|null,
 // tx_power|null, class|null ("0x240404") and class_major, appearance|null and appearance_name,
 // uuids:[{uuid:"110b", name:"Audio Sink"}], manufacturer_data:{"0x004c":"hex"},
-// service_data:{"fe2c":"hex"}, advertising_flags:"hex"|null.
+// service_data:{"fe2c":"hex"}, advertising_flags:"hex"|null, set|null (the DeviceSet1 path of
+// the coordinated set it is in) and set_rank|null.
 // `obj`, the device's whole object (all its interfaces), adds its bearers: BlueZ's
 // org.bluez.Bearer.BREDR1 and .LE1 (experimental), one per transport the device was seen on, each
 // {connected, paired, bonded, connectable|null}; null for a transport it has no bearer on.
@@ -63,6 +64,10 @@ nlohmann::json model_profiles(const nlohmann::json& dev_obj, const std::vector<c
 // All devices, each with its profiles while connected, optionally only those of one adapter path. Sorted: connected, paired, then by
 // name, so the list does not reshuffle as a scan adds devices.
 nlohmann::json model_devices(const nlohmann::json& objs, const std::string& adapter_path = "");
+
+// The coordinated sets (CSIP, org.bluez.DeviceSet1), optionally only those of one adapter path:
+// [{path, adapter, size, auto_connect, devices:["AA:BB:CC:DD:EE:FF", ...]}].
+nlohmann::json model_sets(const nlohmann::json& objs, const std::string& adapter_path = "");
 
 // The device's GATT database as BlueZ resolved it: {services:[{path, handle, uuid, name, primary,
 // characteristics:[{path, handle, uuid, name, flags:[...], value:"hex", text, notifying,

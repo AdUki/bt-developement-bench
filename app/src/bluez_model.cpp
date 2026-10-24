@@ -29,6 +29,7 @@ constexpr const char* kTransport = "org.bluez.MediaTransport1";
 constexpr const char* kPlayer = "org.bluez.MediaPlayer1";
 constexpr const char* kFolder = "org.bluez.MediaFolder1";
 constexpr const char* kItem = "org.bluez.MediaItem1";
+constexpr const char* kSet = "org.bluez.DeviceSet1";
 
 std::string hexn(unsigned v, int width) {
   char b[16];
@@ -298,7 +299,34 @@ json model_device(const std::string& path, const json& d, const json* obj) {
   j["service_data"] = sd;
   j["advertising_flags"] = d.contains("AdvertisingFlags") ? json(to_hex(bytes_of(d, "AdvertisingFlags")))
                                                           : json(nullptr);
+  // Sets a{oa{sv}}: the coordinated sets (CSIP) the device is in, each with its rank. A device is
+  // in one set in practice (a pair of earbuds), so the first is the one the API shows.
+  j["set"] = nullptr;
+  j["set_rank"] = nullptr;
+  if (d.contains("Sets") && d["Sets"].is_object() && !d["Sets"].empty()) {
+    const auto s = d["Sets"].begin();
+    j["set"] = s.key();
+    if (s->is_object() && s->contains("Rank")) j["set_rank"] = num_of(*s, "Rank");
+  }
   return j;
+}
+
+json model_sets(const json& objs, const std::string& adapter_path) {
+  json out = json::array();
+  for (auto it = objs.begin(); it != objs.end(); ++it) {
+    if (!it->contains(kSet)) continue;
+    const json& s = (*it)[kSet];
+    const std::string adapter = str_of(s, "Adapter");
+    if (!adapter_path.empty() && adapter != adapter_path) continue;
+    json devices = json::array();
+    for (const std::string& dev : strv_of(s, "Devices")) devices.push_back(upper(address_from_path(dev)));
+    out.push_back(json{{"path", it.key()},
+                       {"adapter", adapter},
+                       {"size", num_of(s, "Size")},
+                       {"auto_connect", bool_of(s, "AutoConnect")},
+                       {"devices", devices}});
+  }
+  return out;
 }
 
 namespace {
@@ -537,6 +565,9 @@ json model_media(const json& objs) {
           {"configuration", to_hex(cfg)},
           {"delay_ms", t.contains("Delay") ? json(num_of(t, "Delay") / 10.0) : json(nullptr)},
           {"volume", t.contains("Volume") ? json(num_of(t, "Volume")) : json(nullptr)},
+          // The audio locations (front left 0x1, front right 0x2, ...) the stream carries: LE
+          // Audio only, so null on an A2DP transport.
+          {"location", t.contains("Location") ? json(num_of(t, "Location")) : json(nullptr)},
           {"program_info", le_metadata_json(bytes_of(t, "Metadata")).value("program_info", json(nullptr))}});
     }
     if (it->contains(kPlayer)) {
