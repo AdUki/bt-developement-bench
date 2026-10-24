@@ -73,7 +73,7 @@ service, or with a characteristic missing `UUID`/`Service`/`Flags`.
 its delay from 150 to 180 ms 5 s after connecting) and a writable `Volume`. `Acquire` is refused:
 there is no audio.
 
-**AVRCP** (the Pixel, once connected): `…/player0` is a `MediaPlayer1` playing a list of four
+**AVRCP** (the Pixel, once connected): `…/player0` ("Music") and `…/player1` ("Spotify", paused), as a phone with two music apps, are each a `MediaPlayer1` playing a list of four
 tracks (title, artist, album, genre, track number, duration). `Play`, `Pause`, `Stop`, `Next`,
 `Previous` (to the start of the track after 3 s, else the track before), `FastForward` /
 `Rewind` (until `Play` or `Release`) and `Press` with the AV/C keys change its `Status`, `Track`

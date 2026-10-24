@@ -1380,13 +1380,13 @@ SHUFFLE = ('off', 'alltracks', 'group')
 
 
 class Player(PropObject):
-    def __init__(self, svc, path, dev):
+    def __init__(self, svc, path, dev, name='Music', status='playing'):
         self.index = 0
         self.position = 42000
-        self.status = 'playing'
+        self.status = status
         self.clock_at = time.monotonic()
-        p = {'Name': dbus.String('Music'), 'Type': dbus.String('Audio'), 'Subtype': dbus.String('Audio Book'),
-             'Status': dbus.String('playing'), 'Position': dbus.UInt32(42000),
+        p = {'Name': dbus.String(name), 'Type': dbus.String('Audio'), 'Subtype': dbus.String('Audio Book'),
+             'Status': dbus.String(status), 'Position': dbus.UInt32(42000),
              'Device': dbus.ObjectPath(dev.path), 'Track': self.track(),
              'Repeat': dbus.String('off'), 'Shuffle': dbus.String('off'),
              'Browsable': dbus.Boolean(True), 'Searchable': dbus.Boolean(True),
@@ -1635,9 +1635,11 @@ class Media:
                       'idle' if playback else 'pending', 1500 if playback else None)
         objs.append(t)
         if not playback:
-            player = Player(s, dev.path + '/player0', dev)
-            objs.append(player)
-            objs.extend(player.items)
+            # Two players, as a phone with two music apps shows (AVRCP 1.4+ lists each app's).
+            for i, (name, status) in enumerate((('Music', 'playing'), ('Spotify', 'paused'))):
+                player = Player(s, '%s/player%d' % (dev.path, i), dev, name, status)
+                objs.append(player)
+                objs.extend(player.items)
         for o in objs:
             s.root.add(o)
         self.objs[dev.path] = objs

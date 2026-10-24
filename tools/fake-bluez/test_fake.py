@@ -247,6 +247,7 @@ def main():
     check(wait_for(lambda: c.get(tr, 'org.bluez.MediaTransport1', 'State') == 'active', 4),
           'which goes active when the phone starts playing')
     check(dev(PIXEL) + '/player0' in c.objects(), 'with an AVRCP player')
+    check(dev(PIXEL) + '/player1' in c.objects(), 'and a second one, as a phone with two music apps')
     pl = dev(PIXEL) + '/player0'
     PL = 'org.bluez.MediaPlayer1'
     c.call(pl, PL, 'Pause')
