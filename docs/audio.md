@@ -184,7 +184,12 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
   "Received audio plays by itself" undoes it): what plays is what was picked. Upstream links every
   one to the default sink, so two phones, a received broadcast and the radio all played at once.
   `bluez5.media-source-role = "input"` would not do: it covers A2DP only, PipeWire decides LE
-  Audio's node class itself.
+  Audio's node class itself. A received A2DP node is run unlinked all the same
+  (`node.always-process`): a node nobody runs never acquires its transport, and a phone whose
+  stream start is not taken stops sending while its app goes on "playing". LE Audio's are not: the
+  node of a stream a peer started looks the same as a microphone the board would open itself, and
+  run, every connected earbud's microphone would hold a CIS (which also left a BE200 with no room
+  to accept another one as peripheral).
 - **The route** (`/api/audio/route`, Listen): one input at a time — the board's own stream, or a
   capture the route makes of the device picked, waited for up to 15 s until its node appears — on
   the outputs picked, which are that stream's sinks. Changing the input moves no output; changing
