@@ -804,6 +804,8 @@ td.acts > * { margin-right: 0.25rem; }
 /* Library → Inputs: the board's own music, then the Bluetooth inputs; the one picked is marked
    with the accent, its icon kept as a line drawing (a device's outline filled is a blob). */
 .in-head { padding: 0.6rem 0.4rem 0.2rem; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; font-weight: 600; }
+.in-bc-head { display: flex; align-items: center; justify-content: space-between; }
+.in-bc-head .small-btn { text-transform: none; letter-spacing: 0; font-weight: 500; }
 .in-row { box-shadow: inset 3px 0 0 transparent; }
 .in-row.now { box-shadow: inset 3px 0 0 var(--accent); background: var(--well); }
 .in-row.now .tr-n svg { fill: none; stroke: currentColor; }

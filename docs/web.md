@@ -69,7 +69,9 @@ received yet is received first, a phone that is not playing is asked once to pla
 says when the board waits for the device's audio (15 s at most) and why it failed; nothing is
 retried by itself, tapping it again is the retry. A broadcast that carries one channel offers
 *+ as left* / *+ as right* on the other channel's broadcasts while it is the input: the two are then
-one stereo input.
+one stereo input. On a board whose adapter can receive broadcasts, the broadcasts are a section of
+their own, *Auracast*, with *Scan* (an LE scan of 30 s, as in Audio → LE Audio): a broadcaster heard
+whose streams BlueZ has not read yet is listed as *reading its streams…* until it can be picked.
 
 *Library*, a page of its own so long folders get the screen: the phone's own folders and search
 (for a browsable player), the radio

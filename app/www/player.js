@@ -718,10 +718,9 @@ function renderInputs() {
       ls ? streamKind(ls).what + (ls.paused && !local ? ', paused' : '') : 'pick a station, tracks or a test signal in the library',
       local ? 'the input' : '');
   const rows = btInputs();
-  html += '<div class="in-head small muted">Bluetooth</div>';
   const pairing = inp.type === 'bluetooth' && inp.devices.length === 1 && inp.devices[0].kind === 'broadcast'
     ? rows.find(r => r.kind === 'broadcast' && sameAddr(r.address, inp.devices[0].address)) : null;
-  html += rows.map((r, i) => {
+  const rowHTML = (r, i) => {
     const on = isRouted(r);
     const sub = [KIND_WORDS[r.kind], r.codec, r.title, r.members && r.members.length > 1 ? `${r.members.length} devices` : '',
       r.side ? (r.side < 0 ? 'left channel' : 'right channel') : '',
@@ -731,7 +730,19 @@ function renderInputs() {
       ? `<button class="small-btn" data-in-pair="${i}" title="Play it as the ${r.side < 0 ? 'left' : 'right'} channel of the input">+ as ${r.side < 0 ? 'left' : 'right'}</button>` : '';
     return row(`data-in="${i}"`, on, r.kind === 'broadcast' ? PL_SVG.bt : r.kind === 'hfp' ? PL_SVG.phone : devSvg(r.address),
       r.name, sub, on ? stateText(on) : r.state, pair) + err(on);
-  }).join('') || '<div class="empty-line">No Bluetooth device sends the board audio: connect one in Devices (the board as its speaker), or scan for broadcasts in Audio → LE Audio.</div>';
+  };
+  const some = bc => rows.map((r, i) => (r.kind === 'broadcast') === bc ? rowHTML(r, i) : '').join('');
+  const rx = rxAdapter();
+  html += '<div class="in-head small muted">Bluetooth</div>' + (some(false) ||
+    `<div class="empty-line">No Bluetooth device sends the board audio: connect one in Devices (the board as its speaker)${rx ? '' : ', or scan for broadcasts in Audio → LE Audio'}.</div>`);
+  if (rx) {
+    // Broadcasters heard whose streams BlueZ has not read yet (it reads the BASE while it scans):
+    // listed, not pickable until they have streams.
+    const reading = (pl.la.sources || []).filter(x => !rows.some(r => r.kind === 'broadcast' && sameAddr(r.address, x.address)))
+      .map(x => row('', false, PL_SVG.bt, x.name || devName(x.address), 'Auracast', 'reading its streams…')).join('');
+    html += `<div class="in-head small muted in-bc-head">Auracast<button class="small-btn" data-in-scan>${rx.discovering ? 'Stop scan' : 'Scan'}</button></div>` +
+      (some(true) + reading || `<div class="empty-line">${rx.discovering ? 'Scanning for Auracast broadcasts…' : 'No broadcast found yet: scan for the ones in range.'}</div>`);
+  }
   setHTML($('np-inputs'), html);
   pl.inRows = rows;
 }
@@ -756,6 +767,7 @@ function pickInput(input, r) {
 }
 
 function inputClick(e) {
+  if (e.target.closest('[data-in-scan]')) { broadcastScan(); return true; }
   const pair = e.target.closest('[data-in-pair]');
   if (pair) {
     const r = pl.inRows[parseInt(pair.dataset.inPair, 10)];
@@ -771,6 +783,17 @@ function inputClick(e) {
   const r = pl.inRows[parseInt(el.dataset.in, 10)];
   if (r) pickInput({type: 'bluetooth', devices: [{address: r.address, kind: r.kind}]}, r);
   return true;
+}
+
+// The adapter that can receive broadcasts, or null: Inputs then has an Auracast section.
+const rxAdapter = () => (pl.la ? pl.la.adapters : []).find(a => a.receiver) || null;
+// Scan for broadcasts (an LE scan of 30 s on that adapter, as Audio → LE Audio does), or stop it.
+function broadcastScan() {
+  const a = rxAdapter();
+  if (!a) return;
+  const on = !a.discovering;
+  post('/bluetooth/scan', on ? {on: true, adapter: a.adapter, transport: 'le', seconds: 30} : {on: false, adapter: a.adapter})
+    .then(refreshLa).catch(fail);
 }
 
 // ---------------------------------------------------------------- the library
@@ -1595,8 +1618,16 @@ function setRoute(r) {
   renderNowPlaying();
 }
 const refreshRoute = () => api('/audio/route').then(setRoute).catch(() => {});
-// Which adapter can broadcast, for Auracast in Play to.
-const refreshLa = () => api('/le-audio').then(s => { pl.la = s; renderOuts(); }).catch(() => {});
+// Which adapter can broadcast and receive, for Auracast in Play to and Inputs. While it scans, it
+// is asked every 3 s: the broadcasters found come with it.
+function refreshLa() {
+  return api('/le-audio').then(s => {
+    pl.la = s;
+    renderNowPlaying();
+    clearTimeout(pl.laT);
+    if (currentTab === 'player' && s.adapters.some(a => a.discovering)) pl.laT = setTimeout(refreshLa, 3000);
+  }).catch(() => {});
+}
 
 // The outputs come and go with Bluetooth: asked again whenever the board's audio links change,
 // and once more a moment later (PipeWire makes a speaker's sink a little after BlueZ's transport).
