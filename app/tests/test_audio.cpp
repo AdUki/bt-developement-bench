@@ -222,6 +222,13 @@ void test_specs() {
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sink":{"type":"pipewire","target":"--foo"}})"), &s, &err));
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sink":{"type":"alsa"}})"), &s, &err));
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"capture","monitor":true}})"), &s, &err));
+  // A left and a right sink: one channel each of a stereo stream (a broadcast's two BISes).
+  CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[{"target":"a","channel":"left"},{"target":"b","channel":"right"}]})"), &s, &err));
+  CHECK_EQ(s.sinks.size(), 2u);
+  CHECK_EQ(s.sinks[1].channel, std::string("right"));
+  CHECK_EQ(stream_spec_json(s)["sinks"][0]["channel"], json("left"));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"channels":1,"sinks":[{"target":"a","channel":"left"}]})"), &s, &err));
+  CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone"},"sinks":[{"target":"a","channel":"middle"}]})"), &s, &err));
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"tone","freq":"x"}})"), &s, &err));
   CHECK(!stream_spec_from_json(json::parse(R"({"source":{"type":"exec"}})"), &s, &err));
   CHECK(stream_spec_from_json(json::parse(R"({"source":{"type":"capture","target":"bluez_input.5C_E9_1E_22_40_01.2"},

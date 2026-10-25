@@ -80,7 +80,8 @@ class AudioRoute {
   // its sinks (the route's outputs are). It takes the place of every other stream of the board's
   // own and of the route's capture.
   bool play(const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
-  // Bluetooth changed (a transport came or went): a device waited for may have its node now.
+  // Bluetooth changed (a transport came or went): a device waited for may have its node now, and
+  // a broadcast may have gone off air (end_unused_).
   void poke();
 
  private:
@@ -106,6 +107,7 @@ class AudioRoute {
   std::condition_variable cv_;
   bool stop_ = false;
   bool poked_ = false;
+  bool unused_ = false;  // Bluetooth or the outputs changed: end_unused_ is to look
   std::thread thread_;
 
   nlohmann::json outputs_ = nlohmann::json::array();  // the sinks, as stream_spec_json has them

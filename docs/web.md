@@ -98,8 +98,9 @@ of Inputs, Library and Up next keeps the track playing, play/pause and next in r
 *Play to* is one list of buttons, each on or off by itself: *This browser* (this browser listens to
 the input: its own choice, remembered by the browser), the board's own sound card if it has one
 (not the loopback card, which nobody hears), each Bluetooth speaker or pair of earbuds (a set is
-one button), and the board's Auracast broadcasts — *Auracast* starts a stereo broadcast (48_2_1)
-when the board has none and its adapter can broadcast, and turned off it ends it. The device the input comes from is shown
+one button), and the board's Auracast broadcasts — *Auracast* is the board's broadcast, one
+button for its BISes (a left and a right one too): on with none, it starts a stereo broadcast
+(48_2_1), and turned off it ends it. The device the input comes from is shown
 but cannot be turned on (it would get its own audio back), nor can Auracast while the input is a
 broadcast, and picking such an input takes those outputs off. Up to four of the board's at once; they are the board's, stay when the input changes,
 and change what plays at once: an output tapped joins (or leaves) the ones playing, which carry on
@@ -189,9 +190,10 @@ and paths. Under the cards the *AVDTP probe*: any device's own DISCOVER / GET_AL
 answer, connected or not, every stream endpoint with its role, codec and other capabilities.
 *LE Audio*: Auracast both ways, on the adapter that can (a picker when two can; the bar says
 whether it broadcasts, receives or both). *Broadcast from the board* starts a broadcast: the
-quality (BAP's broadcast configurations, 48 kHz 10 ms low latency first), stereo or mono, and a
-Broadcast Code to encrypt it (empty: anyone listens), the presentation delay under *Options*. Each
-broadcast is a row: BIG and BIS, *on air*, *silent* (it transmits only while
+quality (BAP's broadcast configurations, 48 kHz 10 ms low latency first), stereo (one BIS), left +
+right (two BISes) or mono, and a
+Broadcast Code to encrypt it (empty: anyone listens), the presentation delay under *Options*. The
+board sends one broadcast at a time: *Start broadcast* is off while there is one. Each BIS is a row: BIG and BIS, *on air*, *silent* (it transmits only while
 something plays into it) or *ending…*, its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it,
 and *Stop broadcast*. A broadcast started is one of Listen's outputs at once (what Listen plays
 goes on air), and one taken off them ends: *Stop broadcast* (or turning it off in Listen → Play to)

@@ -1309,7 +1309,8 @@ pl.sw = null;  // a switch: {value, add, seq, phase: asking|removing|starting|li
 
 const outSink = v => v === 'none' || v === 'browser' ? null : v === 'default' ? {type: 'pipewire', target: ''}
   : {type: v.split(':')[0], target: v.slice(v.indexOf(':') + 1)};
-const outSinks = vs => vs.map(outSink).filter(Boolean);
+// A value the route has keeps its sink as the route has it (a broadcast's left or right channel).
+const outSinks = vs => vs.map(v => (pl.route ? pl.route.outputs : []).find(k => sinkOut(k) === v) || outSink(v)).filter(Boolean);
 const sinkOut = k => k.target ? `${k.type}:${k.target}` : 'default';
 // A stream's outputs, as values (a stream from before there were several has one "sink").
 const streamOuts = s => (s.sinks || (s.sink ? [s.sink] : [])).map(sinkOut);
@@ -1324,10 +1325,11 @@ function nextOuts(cur, v) {
 const outEndpoint = (v, o = pl) => o.endpoints && o.endpoints.sinks.find(e => v.endsWith(':' + e.id));
 function outName(v, o = pl) {
   if (v === 'none') return 'No board output';
-  if (v === NEW_BCAST) return 'Auracast';
+  if (v === BCAST) return 'Auracast';
   if (v === 'browser') return 'This browser';
   if (v === 'default') return 'The board’s default output';
   const e = outEndpoint(v, o);
+  if (e && isBcast(e)) return 'Auracast';
   if (e) return e.address ? devName(e.address) : e.label;
   // A Bluetooth sink PipeWire does not have (now): its device, by name.
   const bt = /bluez_output\.([0-9A-F]{2}(?:_[0-9A-F]{2}){5})/i.exec(v);
@@ -1351,8 +1353,10 @@ function renderOutputs(ep) {
   renderNowPlaying();  // "Playing on …" names the output now that its label is known
 }
 
-// Auracast as an output while the board broadcasts nothing yet: tapped, a broadcast is started.
-const NEW_BCAST = 'auracast:new';
+// Auracast in Listen: one button for the board's one broadcast, whose BISes (one, or a left and a
+// right) are each a sink of the route. Tapped with none, a broadcast is started; tapped off, its
+// sinks leave the outputs and the daemon ends it.
+const BCAST = 'auracast';
 const isBcast = e => !!e.transport && !e.address;
 
 // Why sink `e` (an endpoint; null for a broadcast not started yet) cannot be on while `input` is
@@ -1379,6 +1383,7 @@ function outOptions(browser, o = pl) {
   const sinks = (ep ? ep.sinks : []).filter(e => e.kind !== 'loopback');
   sinks.forEach(e => {
     if (e.set && !e.set_leader) return;
+    if (o === pl && isBcast(e)) return;
     const v = `${kind}:${e.id}`;
     const t = e.address ? outTransport(v, o) : null;
     const bcast = isBcast(e);
@@ -1388,8 +1393,8 @@ function outOptions(browser, o = pl) {
         : bcast ? 'Auracast' : 'the board’s sound card',
       icon: bt || bcast ? PL_SVG.bt : PL_SVG.speaker, rank: bt ? 2 : bcast ? 3 : 1, off: outBlocked(e, input)});
   });
-  if (o === pl && bcastAdapter() && !sinks.some(isBcast)) {
-    opts.push({value: NEW_BCAST, name: 'Auracast', sub: '', icon: PL_SVG.bt, rank: 3, off: outBlocked(null, input)});
+  if (o === pl && (bcastAdapter() || sinks.some(isBcast))) {
+    opts.push({value: BCAST, name: 'Auracast', sub: '', icon: PL_SVG.bt, rank: 3, off: outBlocked(null, input)});
   }
   return opts.sort((a, b) => a.rank - b.rank);
 }
@@ -1412,7 +1417,11 @@ function outButtonsHTML(opts, cur, sw, o = pl) {
 }
 
 // The outputs on: the route's, and this browser when it listens.
-const curOuts = () => routeOuts().concat(pl.listen ? ['browser'] : []);
+const isBcastOut = v => { const e = outEndpoint(v); return !!e && isBcast(e); };
+const curOuts = () => {
+  const vs = routeOuts();
+  return vs.filter(v => !isBcastOut(v)).concat(vs.some(isBcastOut) ? [BCAST] : [], pl.listen ? ['browser'] : []);
+};
 
 function renderOuts() {
   const b = outStream();
@@ -1539,7 +1548,13 @@ function swAdvance(sw, b, o = pl) {
 function pickOut(v) {
   if (v === 'browser') return pickListen(!pl.listen);
   if (!pl.route) return;
-  if (v === NEW_BCAST) return startBroadcastOut();
+  if (v === BCAST) {
+    const outs = routeOuts();
+    if (outs.some(isBcastOut)) return put('/audio/route', {outputs: outSinks(outs.filter(x => !isBcastOut(x)))}).then(setRoute).catch(fail);
+    // One that is not an output any more is being ended.
+    if (pl.endpoints && pl.endpoints.sinks.some(isBcast)) return;
+    return startBroadcastOut();
+  }
   const next = nextOuts(routeOuts(), v);
   if (next.length > MAX_OUTS) { toast(`The board plays to at most ${MAX_OUTS} outputs at once.`); return; }
   const b = outStream(), add = next.includes(v);
@@ -1576,7 +1591,7 @@ function pickOut(v) {
 function startBroadcastOut() {
   const a = bcastAdapter();
   if (!a || (pl.sw && pl.sw.phase !== 'done' && pl.sw.phase !== 'failed')) return;
-  const sw = pl.sw = {value: NEW_BCAST, add: true, phase: 'broadcast', at: Date.now(), seq: null};
+  const sw = pl.sw = {value: BCAST, add: true, phase: 'broadcast', at: Date.now(), seq: null};
   renderOuts();
   post('/le-audio/broadcasts', {adapter: a.adapter, preset: '48_2_1', channels: 2}).then(r => {
     if (r.output_error) throw new Error(r.output_error);

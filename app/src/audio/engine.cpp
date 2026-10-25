@@ -304,13 +304,19 @@ SinkSpec sink_spec(const json& kj) {
     throw std::invalid_argument("sink type is pipewire, alsa or none");
   if (!k.target.empty() && !endpoint_id_ok(k.target)) throw std::invalid_argument("bad sink target");
   if (k.type == "alsa" && k.target.empty()) throw std::invalid_argument("an ALSA sink needs a target device");
+  k.channel = str(kj, "channel", "");
+  if (!k.channel.empty() && k.channel != "left" && k.channel != "right")
+    throw std::invalid_argument("a sink's channel is left, right or none");
+  if (!k.channel.empty() && k.type != "pipewire") throw std::invalid_argument("a sink's channel is for a PipeWire sink");
   if (k.type == "none") k.target.clear();
   return k;
 }
 
 namespace {
 
-bool same_sink(const SinkSpec& a, const SinkSpec& b) { return a.type == b.type && a.target == b.target; }
+bool same_sink(const SinkSpec& a, const SinkSpec& b) {
+  return a.type == b.type && a.target == b.target && a.channel == b.channel;
+}
 
 // A stream's outputs: "sinks", an array of sinks (each once; none left out), or the one "sink" of
 // before. Throws std::invalid_argument.
@@ -336,7 +342,11 @@ std::vector<SinkSpec> sinks_spec(const json& j) {
   return out;
 }
 
-json sink_json(const SinkSpec& k) { return json{{"type", k.type}, {"target", k.target}}; }
+json sink_json(const SinkSpec& k) {
+  json j{{"type", k.type}, {"target", k.target}};
+  if (!k.channel.empty()) j["channel"] = k.channel;
+  return j;
+}
 
 }  // namespace
 
@@ -426,6 +436,8 @@ bool stream_spec_from_json(const json& j, StreamSpec* out, std::string* err) {
     }
 
     s.sinks = sinks_spec(j);
+    for (const SinkSpec& k : s.sinks)
+      if (!k.channel.empty() && s.channels != 2) throw std::invalid_argument("a sink's channel is one of a stereo stream: channels 2");
     *out = std::move(s);
     return true;
   } catch (const std::exception& e) {
@@ -1176,6 +1188,7 @@ void AudioEngine::Stream::run() {
   struct Out {
     SinkSpec sink;
     std::unique_ptr<Child> proc;
+    size_t scale = 1;             // the stream's channels over the sink's: 2 for a left or right sink
     std::string pending;          // what it was given and has not taken yet
     uint64_t taken = 0;           // bytes it has taken since it opened
     int64_t took_ms = 0;          // when it last took any
@@ -1198,7 +1211,9 @@ void AudioEngine::Stream::run() {
     const std::string node = opened++ ? node_name + "-" + std::to_string(opened) : node_name;
     std::vector<std::string> argv;
     auto c = std::make_unique<Child>();
-    if (!sink_argv(o.sink, rate, ch, sp.latency_ms, node, desc, *tools, &argv, e) || !c->start(argv, true, nullptr, e))
+    o.scale = o.sink.channel.empty() ? 1 : static_cast<size_t>(ch);
+    const int sink_ch = ch / static_cast<int>(o.scale);
+    if (!sink_argv(o.sink, rate, sink_ch, sp.latency_ms, node, desc, *tools, &argv, e) || !c->start(argv, true, nullptr, e))
       return false;
     set_process_fifo(c->pid(), kAudioRtPrio);
     // A small pipe: what sits in it is latency between a change (a gain, a tone's frequency) and
@@ -1206,7 +1221,7 @@ void AudioEngine::Stream::run() {
     fcntl(c->in_fd(), F_SETPIPE_SZ, 16384);
     fcntl(c->in_fd(), F_SETFL, fcntl(c->in_fd(), F_GETFL) | O_NONBLOCK);
     if (o.sink.type == "pipewire") {
-      const std::string h = wav_header(rate, ch);
+      const std::string h = wav_header(rate, sink_ch);
       if (!write_all(c->in_fd(), h.data(), h.size(), stop)) {
         const int st = c->stop();
         *e = "the sink did not start: " + (c->reason().empty() ? "exit " + std::to_string(st) : c->reason());
@@ -1485,10 +1500,22 @@ void AudioEngine::Stream::run() {
       const size_t n = got_frames * frame_bytes;
       // Each sink is given the chunk: one that plays may have some waiting (backlog); one opening or
       // stalled only when it took the last, so it starts with what plays then, not with old audio.
+      std::string side[2];  // the left and the right channel alone, made for a sink that takes one
       for (const auto& o : outs) {
         if (!o->proc) continue;
-        const bool plays = o->taken >= half_s && !o->stalled;
-        if (o->pending.size() <= (plays ? backlog : 0)) o->pending.append(reinterpret_cast<const char*>(buf.data()), n);
+        const bool plays = o->taken * o->scale >= half_s && !o->stalled;
+        if (o->pending.size() * o->scale > (plays ? backlog : 0)) continue;
+        if (o->scale == 1) {
+          o->pending.append(reinterpret_cast<const char*>(buf.data()), n);
+          continue;
+        }
+        const int c = o->sink.channel == "right" ? 1 : 0;
+        if (side[c].empty()) {
+          side[c].resize(got_frames * sizeof(int16_t));
+          int16_t* d = reinterpret_cast<int16_t*>(side[c].data());
+          for (size_t f = 0; f < got_frames; ++f) d[f] = buf[f * ch + c];
+        }
+        o->pending += side[c];
       }
       // Written as each sink takes it, until one has taken all it was given. One that takes nothing
       // for 2 s (a Bluetooth link that stopped streaming) has stalled: it no longer holds the pump.
@@ -1506,14 +1533,14 @@ void AudioEngine::Stream::run() {
             continue;
           }
           if (took) {
-            const bool was = o.taken >= half_s;
+            const bool was = o.taken * o.scale >= half_s;
             o.taken += took;
             o.took_ms = now;
             if (o.stalled) {
               o.stalled = false;
               LOG_INFO("audio: stream {}: {} takes audio again", id, sink_name(o.sink));
               set_sink(o.sink, "playing");
-            } else if (!was && o.taken >= half_s) {
+            } else if (!was && o.taken * o.scale >= half_s) {
               set_sink(o.sink, "playing");
             }
           } else if (!o.pending.empty() && !o.stalled && now - o.took_ms >= 2000) {

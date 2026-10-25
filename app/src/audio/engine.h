@@ -127,6 +127,9 @@ struct SourceSpec {
 struct SinkSpec {
   std::string type = "none";  // none | pipewire | alsa
   std::string target;         // endpoint id; "" for PipeWire's default sink
+  // "left" or "right": the sink takes that channel of a stereo stream alone, as mono (one BIS of
+  // a broadcast that sends left and right as two); "" every channel.
+  std::string channel;
 };
 
 // A stream plays to any number of sinks at once (two Bluetooth speakers, a speaker and the

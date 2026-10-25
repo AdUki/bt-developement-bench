@@ -47,7 +47,7 @@ function qosLine(q, codec) {
 
 // ---------------------------------------------------------------- the board's broadcasts
 
-function broadcastRow(b) {
+function broadcastRow(b, first) {
   // It exists while it is one of Listen's outputs: off air it waits for Listen to play, or (taken
   // off them) the daemon is ending it.
   const on = b.state === 'active', routed = b.node && laOn(b.node);
@@ -64,7 +64,7 @@ function broadcastRow(b) {
       <div class="rw-title"><b>BIG ${b.big}${b.bis != null && b.bis !== 255 ? ' · BIS ' + b.bis : ''}</b> ${st}${b.encrypted ? ' ' + pill('encrypted') : ''}
         <span class="rw-sub"><span>${esc(b.codec.summary)}${b.codec.channels ? ' · ' + (b.codec.channels === 2 ? 'stereo' : 'mono') : ''}</span><span>${esc(qosLine(b.qos, b.codec))}</span></span></div>
       <div class="rw-acts">
-        <button data-la-end="${b.big}" class="danger"${ending ? ' disabled' : ''}>${ending ? 'going off air…' : 'Stop broadcast'}</button></div></div>
+        ${first ? `<button data-la-end="${b.big}" class="danger"${ending ? ' disabled' : ''}>${ending ? 'going off air…' : 'Stop broadcast'}</button>` : ''}</div></div>
     <div class="rw-note small">Plays: ${playing}</div></div>`;
 }
 
@@ -117,7 +117,10 @@ function renderLeAudio(s) {
   if (a && a.broadcaster && !a.pac) setText($('la-msg'), 'No broadcast endpoint: PipeWire registers it with the LE Audio broadcast source role (System → Profiles).');
   else if ($('la-msg').dataset.sticky !== '1') setText($('la-msg'), '');
   const mine = s.broadcasts.filter(b => !a || b.adapter === a.adapter);
-  setHTML($('la-bcasts'), mine.map(broadcastRow).join('') || '<div class="empty">The board broadcasts nothing. Start a broadcast, then play into it: Auracast receivers in range find it and can listen.</div>');
+  // One broadcast at a time; a left and a right BIS are two rows of it, stopped together.
+  setHTML($('la-bcasts'), mine.map((b, i) => broadcastRow(b, mine.findIndex(x => x.big === b.big) === i)).join('') ||
+    '<div class="empty">The board broadcasts nothing.</div>');
+  $('la-form').querySelector('[type=submit]').disabled = s.broadcasts.length > 0;
   loaded($('la-bcasts'));
   // Not while a code is being typed: the rebuild would take the field away.
   const ae = document.activeElement;
@@ -168,7 +171,7 @@ function setupLeAudio() {
     e.preventDefault();
     const f = e.target, a = laAdapter();
     lsSet('btbench.la.preset', f.preset.value);
-    const body = {adapter: a ? a.adapter : '', preset: f.preset.value, channels: parseInt(f.channels.value, 10),
+    const body = {adapter: a ? a.adapter : '', preset: f.preset.value, channels: f.channels.value === 'lr' ? 'lr' : parseInt(f.channels.value, 10),
       code: f.code.value, presentation_delay_us: Math.round((parseFloat(f.pd_ms.value) || 40) * 1000)};
     setText($('la-msg'), 'starting…');
     post('/le-audio/broadcasts', body).then(r => {

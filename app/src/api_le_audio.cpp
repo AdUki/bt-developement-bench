@@ -3,14 +3,22 @@
 // sink like an A2DP speaker (GET /api/media, /api/audio).
 #include <systemd/sd-bus.h>
 
+#include <poll.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <chrono>
+#include <functional>
 #include <mutex>
 #include <set>
 
 #include "http_util.h"
 #include "le_audio.h"
 #include "mgmt.h"
+#include "util/exec.h"
 #include "util/log.h"
+#include "util/strings.h"
 #include "webserver.h"
 
 using json = nlohmann::json;
@@ -30,6 +38,43 @@ json le_audio_state(BtManager& bt, audio::AudioEngine& engine) {
   return model_le_audio(*bt.objects(), controllers, engine.endpoints(false));
 }
 json le_audio_state(Deps& d) { return le_audio_state(d.bt, d.audio); }
+
+// PipeWire's graph followed with pw-dump --monitor, which writes each change as it happens:
+// until() asks `ready` once at the start and again on every change, up to `timeout_ms`.
+class PwWatch {
+ public:
+  PwWatch() {
+    std::string err;
+    if (!spawn({"pw-dump", "--monitor"}, &p_, &err)) LOG_WARN("le-audio: pw-dump --monitor: {}", err);
+  }
+  ~PwWatch() {
+    if (p_.pid <= 0) return;
+    kill_group(p_.pid, 200);
+    waitpid(p_.pid, nullptr, 0);
+    if (p_.out_fd >= 0) close(p_.out_fd);
+    if (p_.err_fd >= 0) close(p_.err_fd);
+  }
+  PwWatch(const PwWatch&) = delete;
+  PwWatch& operator=(const PwWatch&) = delete;
+  bool until(int timeout_ms, const std::function<bool()>& ready) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    if (ready()) return true;
+    char buf[65536];
+    while (p_.out_fd >= 0) {
+      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - std::chrono::steady_clock::now()).count();
+      if (left <= 0) return false;
+      pollfd pf{p_.out_fd, POLLIN, 0};
+      if (poll(&pf, 1, static_cast<int>(left)) <= 0) return false;
+      // A change: read what there is of it, then look.
+      if (read(p_.out_fd, buf, sizeof buf) <= 0) return false;
+      if (ready()) return true;
+    }
+    return false;
+  }
+
+ private:
+  Spawned p_;
+};
 
 // The broadcasts POST is starting ("hciN/big"), until it has added them to the route's outputs:
 // le_audio_end_unused leaves them alone meanwhile.
@@ -138,12 +183,16 @@ void le_audio_end_unused(BtManager& bt, audio::AudioEngine& engine, const json& 
 void install_le_audio_routes(httplib::Server& svr, Deps& d) {
   svr.Get("/api/le-audio", [&d](const httplib::Request&, httplib::Response& res) { send_json(res, le_audio_state(d)); });
 
-  // Body: {adapter ("" the primary), preset, channels, code, presentation_delay_us} (le_audio.h).
-  // A new BIG of one BIS; it goes on air once something plays into its node.
+  // Body: {adapter ("" the primary), preset, channels (2, 1, or "lr": left and right as two
+  // BISes), code, presentation_delay_us} (le_audio.h). The board's one broadcast: a BIG of one BIS,
+  // or of two for "lr"; it goes on air once something plays into it.
   svr.Post("/api/le-audio/broadcasts", json_route([&d](const json& j, const httplib::Request&, httplib::Response& res) {
     const std::string apath = d.bt.find_adapter(j.value("adapter", std::string{}));
     if (apath.empty()) return send_error(res, 404, "no such adapter");
     const json st = le_audio_state(d);
+    if (!st["broadcasts"].empty())
+      return send_error(res, 409, "the board already broadcasts (BIG " + std::to_string(st["broadcasts"][0]["big"].get<int>()) +
+                                      "): stop it first");
     std::string pac;
     for (const json& a : st["adapters"])
       if ("/org/bluez/" + a["adapter"].get<std::string>() == apath) {
@@ -155,29 +204,67 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
       return send_error(res, 409, "no broadcast endpoint on this adapter: PipeWire registers it with the "
                                   "LE Audio broadcast source role (System → Profiles)");
     const uint8_t big = le_free_big(st["broadcasts"]);
-    LeBcastConfig c;
-    std::string err;
-    if (!le_bcast_config_from_json(j, big, &c, &err)) return send_error(res, 400, err);
+    // Left and right: two single-channel BISes of the same BIG, one SetConfiguration each.
+    const bool lr = j.contains("channels") && j["channels"] == "lr";
+    std::vector<json> parts;
+    if (lr) {
+      for (const char* side : {"left", "right"}) {
+        json p = j;
+        p["channels"] = 1;
+        p["location"] = side;
+        parts.push_back(p);
+      }
+    } else {
+      parts.push_back(j);
+    }
+    std::vector<LeBcastConfig> cs;
+    for (const json& p : parts) {
+      LeBcastConfig c;
+      std::string err;
+      if (!le_bcast_config_from_json(p, big, &c, &err)) return send_error(res, 400, err);
+      cs.push_back(c);
+    }
     set_starting(apath, big, true);
-    const BtCallResult r = d.bt.call(pac, "org.bluez.MediaEndpoint1", "SetConfiguration",
-                                     [c](sd_bus_message* m) { return append_bis(m, c); }, kCallTimeoutMs);
-    if (!r.ok) {
-      set_starting(apath, big, false);
-      return call_error(res, r);
+    // PipeWire makes a broadcast's node after BlueZ has answered SetConfiguration: what changes in
+    // its graph from now on is followed (pw-dump --monitor) until the nodes are there.
+    PwWatch watch;
+    for (const LeBcastConfig& c : cs) {
+      const BtCallResult r = d.bt.call(pac, "org.bluez.MediaEndpoint1", "SetConfiguration",
+                                       [c](sd_bus_message* m) { return append_bis(m, c); }, kCallTimeoutMs);
+      if (!r.ok) {
+        set_starting(apath, big, false);
+        return call_error(res, r);
+      }
     }
     d.bt.touch();
+    const std::string prefix = pac + "/";
+    std::vector<json> nodes;  // the broadcast's sinks, in transport (BIS) order
+    const auto find = [&](bool fresh) {
+      nodes.clear();
+      for (const json& e : d.audio.endpoints(fresh)["sinks"])
+        if (e["transport"].is_string() && starts_with(e["transport"].get<std::string>(), prefix)) nodes.push_back(e);
+      std::sort(nodes.begin(), nodes.end(), [](const json& a, const json& b) { return a["transport"] < b["transport"]; });
+      return nodes.size() >= cs.size();
+    };
+    const bool found = watch.until(5000, [&] { return find(true); });
     // A broadcast is one of the route's outputs from the start: what Listen plays goes on air, and
-    // taking it off the outputs ends it (le_audio_end_output).
-    json out{{"big", big}, {"pac", pac}, {"node", nullptr}};
-    for (const json& b : le_audio_state(d)["broadcasts"])
-      if (b["big"] == big && "/org/bluez/" + b["adapter"].get<std::string>() == apath && b["node"].is_string()) out["node"] = b["node"];
-    if (out["node"].is_string()) {
+    // taking it off the outputs ends it (le_audio_end_unused). Left and right are a sink each, fed
+    // one channel of the stereo stream.
+    json out{{"big", big}, {"pac", pac}, {"nodes", json::array()}};
+    if (found) {
       json outputs = d.route.get()["outputs"];
-      outputs.push_back(json{{"type", "pipewire"}, {"target", out["node"]}});
+      for (size_t k = 0; k < cs.size(); ++k) {
+        json sink{{"type", "pipewire"}, {"target", nodes[k]["id"]}};
+        if (lr) sink["channel"] = cs[k].right ? "right" : "left";
+        outputs.push_back(sink);
+        out["nodes"].push_back(nodes[k]["id"]);
+      }
       json routed;
       std::string rerr;
       int rst = 0;
       if (!d.route.put(json{{"outputs", outputs}}, &routed, &rerr, &rst)) out["output_error"] = rerr;
+    } else {
+      out["output_error"] = "PipeWire made no node for it within 5 s";
     }
     set_starting(apath, big, false);
     send_json(res, out, 201);

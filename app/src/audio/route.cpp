@@ -398,7 +398,7 @@ bool AudioRoute::put(const json& body, json* out, std::string* err, int* status)
   json updated;
   if (!outputs.is_null()) {
     outputs_ = outputs;
-    poked_ = true;  // an output taken off may be one to end (end_unused_)
+    unused_ = true;  // an output taken off may be one to end (end_unused_)
     save();
     // What plays now plays on them at once: its kept outputs untouched, new ones opened.
     const int active = type_ == "bluetooth" ? (stream_alive(capture_) ? capture_ : 0) : type_ == "local" ? local_stream() : 0;
@@ -486,8 +486,9 @@ bool AudioRoute::play(const json& body, json* out, std::string* err, int* status
 void AudioRoute::poke() {
   {
     std::lock_guard<std::mutex> lk(m_);
-    if (!wait_until_) return;
-    poked_ = true;
+    // Every change may have left a broadcast unused (end_unused_); only a wait needs the binding.
+    unused_ = true;
+    if (wait_until_) poked_ = true;
   }
   cv_.notify_all();
 }
@@ -495,10 +496,10 @@ void AudioRoute::poke() {
 void AudioRoute::run() {
   std::unique_lock<std::mutex> lk(m_);
   while (!stop_) {
-    cv_.wait_for(lk, std::chrono::seconds(1), [this] { return stop_ || poked_; });
+    cv_.wait_for(lk, std::chrono::seconds(1), [this] { return stop_ || poked_ || unused_; });
     if (stop_) break;
-    const bool poked = poked_;
-    poked_ = false;
+    const bool unused = unused_;
+    poked_ = unused_ = false;
     const json before = json_locked();
     if (type_ == "bluetooth" && wait_until_) {
       if (!bind_locked()) {
@@ -532,7 +533,7 @@ void AudioRoute::run() {
       wait_until_ = kUntilBack;
     }
     if (json_locked() != before) publish_locked();
-    if (end_unused_ && poked) {
+    if (end_unused_ && unused) {
       const json outputs = outputs_;
       const EndUnused end = end_unused_;
       lk.unlock();
