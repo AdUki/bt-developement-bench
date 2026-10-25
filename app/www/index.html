@@ -556,38 +556,66 @@
 
   <!-- ======================================================== Traffic: packets -->
   <section id="packets" class="panel fit">
-    <div class="card fit-main" id="lp" data-full>
+    <div class="card fit-main" id="cv" data-full>
       <div class="card-head">
-        <span id="lp-status" class="small muted"></span>
+        <select id="cv-file" class="mono small" aria-label="Capture file"></select>
         <div class="acts">
-          <button class="small-btn" id="lp-run">Pause</button>
-          <button class="small-btn" id="lp-clear">Clear</button>
-          <button class="small-btn" id="lp-cap" title="Open the file btmon is writing under Captures, with this filter">Open as capture</button>
+          <span id="cv-status" class="small muted"></span>
+          <label class="switch inline small" id="cv-follow-wrap" hidden><input type="checkbox" id="cv-follow"><i></i> Follow</label>
         </div>
       </div>
       <div class="row cv-filter">
-        <input id="lp-filter" class="mono" spellcheck="false" autocomplete="off" aria-label="Filter"
-               placeholder='proto:att handle:64 dir:tx len>20 !evt:0x13 "read request"'>
-        <button id="lp-apply">Filter</button>
+        <input id="cv-filter" class="mono" spellcheck="false" autocomplete="off" aria-label="Filter"
+               placeholder='proto:att handle:64 dir:tx len>20 t>=12.5 !evt:0x13 "read request"'>
+        <button id="cv-apply">Filter</button>
       </div>
-      <div id="lp-chips" class="cv-chips"></div>
+      <div id="cv-chips" class="cv-chips"></div>
+      <div class="row wrap small cv-tools">
+        <button class="small-btn" id="cv-stats-btn" aria-expanded="false" aria-controls="cv-stats">Statistics</button>
+        <label>Time <select id="cv-time" class="small" aria-label="Time column">
+          <option value="rel">since the first packet</option><option value="tod">time of day</option><option value="delta">since the row above</option>
+        </select></label>
+        <span class="grow"></span>
+        <label class="check" title="Put in the packets btmon needs to decode the matches too (connections, L2CAP and AVDTP signalling, GATT discovery), and the context the file began with">
+          <input type="checkbox" id="cv-ctx"> with context</label>
+        <a class="small-btn btn-link" id="cv-save" download title="The matching packets as a btsnoop file (btmon -r, Wireshark)">Save matches</a>
+      </div>
+      <div id="cv-stats" class="cv-stats" hidden></div>
       <details class="small muted cv-hint more-fields">
         <summary>Filter syntax</summary>
-        <p>The capture viewer's: <code>type:</code> <code>dir:</code> <code>proto:</code> <code>handle:</code> <code>cid:</code>
-          <code>psm:</code> <code>opcode:</code> <code>evt:</code> <code>is:err|mark|cont|lat</code> <code>len&gt;100</code>
-          <code>lat&gt;20</code> (TX → NOCP, ms; such a filter shows a TX packet once its completion came, up to a second late),
-          <code>!term</code>, <code>a|b</code> (either value), <code>… || …</code> (either filter: the quick filters combine this way, click several), and any other word or <code>"quoted phrase"</code> searched in the summaries.
-          The board keeps the last 2048 packets while someone watches: changing the filter re-filters those, and a row
-          says where packets were dropped (the page fell behind) or skipped (more matched than it sends, the newest kept).</p>
+        <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value;
+          <code>a b || c</code> matches either group; the quick filters combine this way (click several).
+          <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
+          <code>proto:hci|l2cap|att|smp|sdp|rfcomm|avdtp|rtp|avctp|bnep|hid|sco|iso</code> ·
+          <code>handle:11</code> <code>cid:0x40</code> <code>psm:25</code> <code>index:0</code> ·
+          <code>opcode:0x0406</code> (a command and its Complete/Status) <code>evt:0x13</code> <code>subevt:0x02</code> ·
+          <code>is:err|mark|cont|lat</code> · <code>len&gt;100</code> <code>n&lt;=500</code> <code>lat&gt;20</code> (TX → NOCP, ms) ·
+          <code>t&gt;=12.5 t&lt;30</code> (seconds since the first packet) ·
+          <code>addr:AA:BB:CC:DD:EE:FF</code> (that peer's links, and packets that name it; its first bytes are enough).
+          Any other word, or a <code>"quoted phrase"</code>,
+          is searched in the summaries (case-insensitive) — slower, so on a big file the results arrive over a few seconds.
+          Drag across the graph to select a time range; click it to jump there. In a packet's detail, a term under
+          its summary adds it to the filter (shift-click: without it).</p>
       </details>
+      <div class="cv-graph-wrap">
+        <div class="row wrap small">
+          <select id="cv-conn" class="small" aria-label="Connection"></select>
+          <span class="legend"><i class="c-tx"></i>TX<i class="c-rx"></i>RX<i class="c-p50"></i>lat p50<i class="c-p95"></i>p95</span>
+          <span id="cv-gscale" class="muted"></span>
+          <span id="cv-readout" class="mono muted grow"></span>
+        </div>
+        <canvas id="cv-graph" class="cv-graph"></canvas>
+      </div>
       <div class="cv-split">
-        <div class="cv-table" id="lp-table">
-          <div class="cv-head"><span>seq</span><span>time</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
-          <div class="cv-body lp-body" id="lp-body"></div>
+        <div class="cv-table" id="cv-table" tabindex="0">
+          <div class="cv-head"><span>No.</span><span id="cv-time-h">time (s)</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
+          <div class="cv-body" id="cv-body"><div id="cv-spacer"></div><div class="cv-rows" id="cv-rows"></div></div>
         </div>
         <div class="cv-detail">
-          <div id="lp-fields" class="cv-fields"></div>
-          <pre id="lp-hex" class="cv-hex"></pre>
+          <div id="cv-dfields">
+            <div id="cv-fields" class="cv-fields"></div>
+            <pre id="cv-hex" class="cv-hex"></pre>
+          </div>
         </div>
       </div>
     </div>
@@ -653,71 +681,6 @@
     <div class="card" id="cap-analyze" hidden>
       <div class="card-head"><h3 id="cap-an-title"></h3><button class="small-btn" id="cap-an-close">Close</button></div>
       <pre id="cap-an-text" class="log tall"></pre>
-    </div>
-
-    <div class="card fit-main" id="cv" data-full hidden>
-      <div class="card-head">
-        <h3 class="mono" id="cv-title"></h3>
-        <div class="acts">
-          <span id="cv-status" class="small muted"></span>
-          <label class="switch inline small" id="cv-follow-wrap" hidden><input type="checkbox" id="cv-follow"><i></i> Follow</label>
-          <button class="small-btn" id="cv-close">Close</button>
-        </div>
-      </div>
-      <div class="row cv-filter">
-        <input id="cv-filter" class="mono" spellcheck="false" autocomplete="off" aria-label="Filter"
-               placeholder='proto:att handle:64 dir:tx len>20 t>=12.5 !evt:0x13 "read request"'>
-        <button id="cv-apply">Filter</button>
-      </div>
-      <div id="cv-chips" class="cv-chips"></div>
-      <div class="row wrap small cv-tools">
-        <button class="small-btn" id="cv-stats-btn" aria-expanded="false" aria-controls="cv-stats">Statistics</button>
-        <label>Time <select id="cv-time" class="small" aria-label="Time column">
-          <option value="rel">since the first packet</option><option value="tod">time of day</option><option value="delta">since the row above</option>
-        </select></label>
-        <span class="grow"></span>
-        <label class="check" title="Put in the packets btmon needs to decode the matches too (connections, L2CAP and AVDTP signalling, GATT discovery), and the context the file began with">
-          <input type="checkbox" id="cv-ctx"> with context</label>
-        <a class="small-btn btn-link" id="cv-save" download title="The matching packets as a btsnoop file (btmon -r, Wireshark)">Save matches</a>
-      </div>
-      <div id="cv-stats" class="cv-stats" hidden></div>
-      <details class="small muted cv-hint more-fields">
-        <summary>Filter syntax</summary>
-        <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value;
-          <code>a b || c</code> matches either group; the quick filters combine this way (click several).
-          <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
-          <code>proto:hci|l2cap|att|smp|sdp|rfcomm|avdtp|rtp|avctp|bnep|hid|sco|iso</code> ·
-          <code>handle:11</code> <code>cid:0x40</code> <code>psm:25</code> <code>index:0</code> ·
-          <code>opcode:0x0406</code> (a command and its Complete/Status) <code>evt:0x13</code> <code>subevt:0x02</code> ·
-          <code>is:err|mark|cont|lat</code> · <code>len&gt;100</code> <code>n&lt;=500</code> <code>lat&gt;20</code> (TX → NOCP, ms) ·
-          <code>t&gt;=12.5 t&lt;30</code> (seconds since the first packet) ·
-          <code>addr:AA:BB:CC:DD:EE:FF</code> (that peer's links, and packets that name it; its first bytes are enough).
-          Any other word, or a <code>"quoted phrase"</code>,
-          is searched in the summaries (case-insensitive) — slower, so on a big file the results arrive over a few seconds.
-          Drag across the graph to select a time range; click it to jump there. In a packet's detail, a term under
-          its summary adds it to the filter (shift-click: without it).</p>
-      </details>
-      <div class="cv-graph-wrap">
-        <div class="row wrap small">
-          <select id="cv-conn" class="small" aria-label="Connection"></select>
-          <span class="legend"><i class="c-tx"></i>TX<i class="c-rx"></i>RX<i class="c-p50"></i>lat p50<i class="c-p95"></i>p95</span>
-          <span id="cv-gscale" class="muted"></span>
-          <span id="cv-readout" class="mono muted grow"></span>
-        </div>
-        <canvas id="cv-graph" class="cv-graph"></canvas>
-      </div>
-      <div class="cv-split">
-        <div class="cv-table" id="cv-table" tabindex="0">
-          <div class="cv-head"><span>No.</span><span id="cv-time-h">time (s)</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
-          <div class="cv-body" id="cv-body"><div id="cv-spacer"></div><div class="cv-rows" id="cv-rows"></div></div>
-        </div>
-        <div class="cv-detail">
-          <div id="cv-dfields">
-            <div id="cv-fields" class="cv-fields"></div>
-            <pre id="cv-hex" class="cv-hex"></pre>
-          </div>
-        </div>
-      </div>
     </div>
   </section>
 

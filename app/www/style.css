@@ -669,11 +669,8 @@ a.small-btn.disabled { opacity: 0.45; cursor: default; }
   .cv-table.cv-tod .cv-head, .cv-table.cv-tod .cv-row { grid-template-columns: 3.6rem 7.8rem 1.7rem 3rem 3.5rem 2.8rem minmax(24rem, 1fr); }
 }
 
-/* Live packets (Monitor tab): the Capture viewer's table and detail, its rows appended as they
-   come instead of virtualised (the page keeps at most 1000). */
-.lp-body { height: 360px; }
-.lp-note > span:last-child { grid-column: 2 / -1; font-style: italic; }
-#lp .cv-detail { max-height: 386px; }
+/* The file box in the viewer's head: ring names are long, the head is shared with the status. */
+#cv-file { max-width: 100%; }
 
 .tbl td.wrap { white-space: normal; min-width: 14rem; }
 .empty-card h3 { margin-bottom: 0.3rem; }
@@ -1058,7 +1055,7 @@ body.has-full { overflow: hidden; }
 .is-full > .cv-split { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
 .is-full .cv-table { display: flex; flex-direction: column; }
 .is-full .cv-body { flex: 1; height: auto; min-height: 12rem; }
-.is-full .cv-detail, #lp.is-full .cv-detail { max-height: none; }
+.is-full .cv-detail { max-height: none; }
 .is-full > .lg-view { flex: 1; height: auto; min-height: 12rem; }
 .is-full .tracklist { max-height: none; }
 .gr-chart.is-full canvas.graph { flex: 1; height: auto; min-height: 220px; }
@@ -1086,12 +1083,10 @@ body.has-full { overflow: hidden; }
   body.fit .fit-main > .cv-split { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
   body.fit .fit-main .cv-table { display: flex; flex-direction: column; }
   body.fit .fit-main .cv-body { flex: 1; height: auto; min-height: 6rem; }
-  body.fit .fit-main .cv-detail, body.fit #lp .cv-detail { max-height: none; }
+  body.fit .fit-main .cv-detail { max-height: none; }
   /* The page does not scroll: no room kept for its scrollbar, and the lists use the whole width. */
   html:has(body.fit) { scrollbar-gutter: auto; }
   body.fit main { max-width: none; }
-  /* An open capture is the page: the file list comes back when it is closed. */
-  body.fit #capture.fit > .card:not(#cv) { display: none; }
 }
 .card-head > .full-btn { margin-left: auto; }
 

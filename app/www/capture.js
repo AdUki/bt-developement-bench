@@ -1,13 +1,17 @@
 'use strict';
-// Capture: the always-on btmon ring (btbench-btsnoop.service) in /tmp/btsnoop (RAM), and a packet
-// viewer for its files. Files download as they are — btmon -r and Wireshark both read btsnoop —
-// and "analyze" is btmon -a on the board. "view" opens the file in the viewer: a filter, a
-// virtualised packet table, the decoded fields and hex of one packet, and a graph strip of the
-// whole capture (docs/monitor.md "Packet view").
+// Packets and Captures. Captures is the always-on btmon ring (btbench-btsnoop.service) in
+// /tmp/btsnoop (RAM): its files download as they are (btmon -r and Wireshark both read btsnoop),
+// "Summary" is btmon -a on the board, "Open" shows a file under Packets. Packets is the viewer:
+// one file of the ring, by default the one being written, as one list of what was captured and
+// what is arriving: a filter, a virtualised packet table, the decoded fields and hex of one
+// packet, and a graph strip of the whole file (docs/monitor.md "Packet view").
 //
 // The board indexes a file once and answers every request within a time budget. A request that
 // could not finish (a big file being indexed, a text filter decoding summaries) says
-// "complete": false; the viewer then asks again shortly and the totals grow. Everything is
+// "complete": false; the viewer then asks again shortly and the totals grow. The live end is a
+// tail request (docs/monitor.md "The live end"): while the table is at the end of the file being
+// written and the page is visible, one request waits on the board for the next matching packets
+// and the table grows with its answer; scrolled up or hidden, nothing is asked for. Everything is
 // wrapped in one function: the tab files share the page's global scope.
 
 (() => {
@@ -38,6 +42,7 @@
           <button class="small-btn" data-an="${esc(f.name)}" title="btmon -a on the board">Summary</button>
           ${f.active ? '' : `<button class="small-btn danger" data-rm="${esc(f.name)}">${armed['cap' + f.name] ? 'Really?' : 'Delete'}</button>`}</td></tr>`).join('')
       : '<tr><td class="muted empty">No captures yet: start recording, or the ring fills by itself on the board.</td></tr>');
+    renderFiles();
     const open = s.files.find(f => f.name === cv.name);
     if (cv.name && open) {
       cv.active = !!open.active;
@@ -46,7 +51,7 @@
     }
   }
 
-  const refreshCapture = () => api('/capture').then(s => { setText($('cap-msg'), ''); renderCapture(s); })
+  const refreshCapture = () => api('/capture').then(s => { setText($('cap-msg'), ''); renderCapture(s); return s; })
     .catch(e => {
       setText($('cap-msg'), e.message);
       loaded($('cap-files'));
@@ -54,6 +59,7 @@
         setText($('cap-state'), 'error');
         setClass($('cap-state'), 'pill bad');
       }
+      throw e;
     });
 
   // ------------------------------------------------------------ the viewer: state
@@ -61,6 +67,8 @@
   const ROW = 22;     // px; fixed, so only the rows on screen exist in the page
   const PAGE = 200;   // rows per request
   const KEEP = 3000;  // rows kept in memory around the viewport
+  const WAIT = 25000; // ms a tail request may wait on the board (it allows 30 s)
+  const END_N = 2147483647;  // at_n beyond any frame: the page after the last match, the totals known
 
   // A few filters people reach for. Clicking one replaces the filter but keeps a time range.
   const CHIPS = [
@@ -80,15 +88,18 @@
   ];
 
   const cv = {
-    name: null, active: false, filter: '', gen: 0,
+    name: null, active: false, filter: lsGet('btbench.cv.filter') || '', gen: 0,
+    pending: null,         // {name, end}: a file to open when the view is next on screen
     rows: new Map(),       // match ordinal → packet
     total: 0, complete: true, info: null, inflight: false, error: '',
     selIdx: -1, selN: null, detail: null, hexSpans: [],
-    graph: null, conn: '', graphGen: 0, drag: null, pendingSel: null,
-    progressTimer: null, follow: false, followTimer: null,
+    graph: null, conn: '', graphGen: 0, graphAt: 0, drag: null, pendingSel: null,
+    progressTimer: null,
+    // The live end: following while the table is at the end of the file being written.
+    follow: false, tailing: false, tailCtl: null, retry: null,
     // The time column: since the first packet, time of day, or since the row above.
     time: ['rel', 'tod', 'delta'].includes(lsGet('btbench.cv.time')) ? lsGet('btbench.cv.time') : 'rel',
-    statsOpen: false, stats: null, statsGen: 0,
+    statsOpen: false, stats: null, statsGen: 0, statsAt: 0,
   };
 
   const enc = encodeURIComponent;
@@ -118,45 +129,66 @@
     return fmtT(p.t);
   }
   const fmtN = n => Number(n).toLocaleString();
+  const onScreen = () => currentTab === 'packets' && !document.hidden;
 
-  // ------------------------------------------------------------ opening a file
+  // ------------------------------------------------------------ which file
 
-  function openView(name) {
+  // The box at the top: the ring's files, newest first, the one being written marked; a file
+  // that is open but no longer listed (deleted meanwhile) stays until another is picked.
+  function renderFiles() {
+    const files = capState ? capState.files : [];
+    const opts = files.map(f => `<option value="${esc(f.name)}"${f.name === cv.name ? ' selected' : ''}>${esc(f.name)}${f.active ? ' · writing' : ''}</option>`);
+    if (cv.name && !files.some(f => f.name === cv.name)) opts.unshift(`<option value="${esc(cv.name)}" selected>${esc(cv.name)}</option>`);
+    setHTML($('cv-file'), opts.join('') || '<option value="">no captures</option>');
+  }
+
+  // Shows a file under Packets: at its end, following, when it is the one being written.
+  function openFile(name, end) {
+    cv.pending = {name, end};
+    if (currentTab === 'packets') loadPending();
+    else go('packets');
+  }
+
+  function loadPending() {
+    const {name, end} = cv.pending;
+    cv.pending = null;
+    stopTail();
     cv.name = name;
     const f = capState && capState.files.find(x => x.name === name);
     cv.active = !!(f && f.active);
-    $('cv').hidden = false;
-    $('capture').classList.add('fit');
-    updateFit();
     $('cv-follow-wrap').hidden = !cv.active;
-    setText($('cv-title'), name);
-    setFollow(false);
+    cv.follow = false;
+    $('cv-follow').checked = false;
     cv.selIdx = -1;
     cv.selN = null;
     cv.conn = '';
     clearDetail();
-    applyFilter($('cv-filter').value.trim(), false);
+    renderFiles();
+    applyFilter($('cv-filter').value.trim(), false, end && cv.active);
     if (capState) renderCapture(capState);
-    $('cv').scrollIntoView({behavior: 'smooth', block: 'start'});
   }
 
-  function closeView() {
-    cv.name = null;
-    cv.gen++;
-    setFollow(false);
-    clearTimeout(cv.progressTimer);
-    $('cv').hidden = true;
-    $('capture').classList.remove('fit');
-    updateFit();
-    if (capState) renderCapture(capState);
+  // Nothing open yet: the file being written, else the newest.
+  function openDefault() {
+    refreshCapture().then(s => {
+      if (cv.name || cv.pending) return;
+      const f = s.files.find(x => x.active) || s.files[0];
+      if (f) openFile(f.name, !!f.active);
+      else {
+        renderFiles();
+        setText($('cv-status'), 'no captures');
+      }
+    }).catch(() => {});
   }
 
   // A new filter: drop the cached rows and, if a packet was selected, come back to it (or the
-  // match after it) in the new list.
-  function applyFilter(f, keepSel = true) {
+  // match after it) in the new list. With `end`, go to the end of the list instead and follow.
+  function applyFilter(f, keepSel = true, end = false) {
     cv.filter = f;
     $('cv-filter').value = f;
+    lsSet('btbench.cv.filter', f);
     cv.gen++;
+    stopTail();
     cv.rows.clear();
     cv.total = 0;
     cv.complete = false;
@@ -165,8 +197,11 @@
     clearTimeout(cv.progressTimer);
     renderChips();
     $('cv-spacer').style.height = '0px';
+    $('cv-rows').style.transform = '';
+    setHTML($('cv-rows'), '');
     $('cv-body').scrollTop = 0;
-    if (keepSel && cv.selN) jump({at_n: cv.selN}, true);
+    if (end || cv.follow) toEnd();
+    else if (keepSel && cv.selN) jump({at_n: cv.selN}, true);
     else {
       cv.selIdx = -1;
       fetchRows(0);
@@ -206,7 +241,10 @@
     // the scan; the rows already shown stay valid, matches are only ever appended.
     clearTimeout(cv.progressTimer);
     if (!r.complete) cv.progressTimer = setTimeout(() => { cv.inflight = false; fetchVisible(true); }, 150);
-    else if (cv.graph && !cv.graph.complete) fetchGraph();
+    else {
+      if (cv.graph && !cv.graph.complete) fetchGraph();
+      maybeTail();
+    }
   }
 
   function fetchRows(start, force) {
@@ -229,6 +267,7 @@
   function jump(at, selectIt) {
     if (!cv.name) return;
     const gen = ++cv.gen;
+    stopTail();
     cv.inflight = true;
     const q = at.at_t != null ? `&at_t=${at.at_t}` : `&at_n=${at.at_n}`;
     api(query(q)).then(r => {
@@ -240,6 +279,28 @@
       const p = r.packets[0];
       if (p && (selectIt || at.at_t != null) && (at.at_n == null || p.n >= at.at_n)) select(r.start, p);
       else cv.selIdx = -1;
+      renderRows();
+    }).catch(e => {
+      if (gen !== cv.gen) return;
+      cv.inflight = false;
+      showError(e);
+    });
+  }
+
+  // The end of the list: the totals from a page past the last match, then the table scrolled
+  // to the bottom (which loads the last rows) and following from there.
+  function toEnd() {
+    if (!cv.name) return;
+    const gen = ++cv.gen;
+    stopTail();
+    cv.inflight = true;
+    api(query(`&at_n=${END_N}`)).then(r => {
+      if (gen !== cv.gen) return;
+      cv.inflight = false;
+      took(r);
+      cv.selIdx = -1;
+      $('cv-body').scrollTop = cv.total * ROW;
+      if (cv.active) setFollow(true);
       renderRows();
     }).catch(e => {
       if (gen !== cv.gen) return;
@@ -322,6 +383,7 @@
       bits.push(`searching… ${Math.floor(100 * r.scanned / Math.max(1, r.packets_in_file))}%`);
     }
     if (r.datalink !== 2001) bits.push(r.datalink === 1002 ? 'H4 capture' : 'HCI capture');
+    if (cv.follow && cv.active) bits.push('following');
     setText($('cv-status'), bits.join(' · '));
     setClass($('cv-status'), 'small ' + (r.complete ? 'muted' : 'warn-text'));
     renderSave();
@@ -339,11 +401,78 @@
     setText(a, cv.filter ? `Save ${fmtN(cv.total)} matches` : 'Save a copy');
   }
 
+  // ------------------------------------------------------------ the live end
+
+  const atEnd = () => {
+    const body = $('cv-body');
+    return body.scrollTop + body.clientHeight >= body.scrollHeight - ROW * 2;
+  };
+
+  function setFollow(on) {
+    cv.follow = on;
+    $('cv-follow').checked = on;
+    if (on) {
+      $('cv-body').scrollTop = cv.total * ROW;
+      maybeTail();
+    } else {
+      stopTail();
+    }
+    renderStatus();
+  }
+
+  function stopTail() {
+    clearTimeout(cv.retry);
+    cv.retry = null;
+    if (cv.tailCtl) cv.tailCtl.abort();
+    cv.tailCtl = null;
+    cv.tailing = false;
+  }
+
+  // One tail request at a time, only while there is a live end to follow and someone looks at it:
+  // the file being written, the table at its end and complete, this view on a visible page.
+  function maybeTail() {
+    if (!cv.name || !cv.active || !cv.follow || !cv.complete || cv.tailing || cv.inflight || cv.error || !onScreen()) return;
+    const gen = cv.gen;
+    const ctl = new AbortController();
+    cv.tailCtl = ctl;
+    cv.tailing = true;
+    // Only the request still current may clear the state: an aborted one answers late.
+    const done = () => { if (cv.tailCtl === ctl) { cv.tailCtl = null; cv.tailing = false; } };
+    api(query(`&start=${cv.total}&wait=${WAIT}`), {signal: ctl.signal, cache: 'no-store'}).then(r => {
+      done();
+      if (gen !== cv.gen) return;
+      // The ring moved on to a new file: the live end is there now.
+      if (r.newer) {
+        refreshCapture().catch(() => {}).then(() => { if (gen === cv.gen && cv.follow) openFile(r.newer, true); });
+        return;
+      }
+      took(r);  // re-arms the tail when the answer is complete
+      if (r.packets.length && cv.follow) {
+        $('cv-body').scrollTop = cv.total * ROW;
+        renderRows();
+        // The graph and the statistics are over the whole file: redrawn with what came, but at
+        // most every two seconds, since the board rebuilds them from the index each time.
+        const now = Date.now();
+        if (now - cv.graphAt > 2000) fetchGraph();
+        if (cv.statsOpen && now - cv.statsAt > 2000) fetchStats();
+      }
+    }).catch(e => {
+      done();
+      if (gen !== cv.gen || e.name === 'AbortError') return;
+      showError(e);
+      // A bad filter stays wrong; anything else (the daemon restarting, too many requests
+      // waiting) is tried again once, a little later.
+      if (e.status !== 400 && e.status !== 404) cv.retry = setTimeout(() => { cv.error = ''; maybeTail(); }, 3000);
+    });
+    renderStatus();
+  }
+
   // ------------------------------------------------------------ statistics
 
   function fetchStats() {
     if (!cv.name) return;
     const gen = ++cv.statsGen;
+    cv.statsAt = Date.now();
     api(`${base()}/stats?filter=${enc(cv.filter)}`).then(st => {
       if (gen !== cv.statsGen) return;
       cv.stats = st;
@@ -519,6 +648,7 @@
   function fetchGraph() {
     if (!cv.name) return;
     const gen = ++cv.graphGen;
+    cv.graphAt = Date.now();
     // About one bucket per 2 px: finer buckets would only draw as noise.
     const points = Math.max(50, Math.round(($('cv-graph').clientWidth || 1000) / 2));
     api(`${base()}/graph?filter=${enc(cv.filter)}&points=${points}${cv.conn ? '&conn=' + enc(cv.conn) : ''}`).then(g => {
@@ -578,7 +708,7 @@
 
   function drawGraph() {
     const c = $('cv-graph');
-    if (!c || $('cv').hidden || !c.clientWidth) return;
+    if (!c || currentTab !== 'packets' || !c.clientWidth) return;
     const {g: x, w, h} = graphCtx(c);
     const G = cv.graph;
     x.font = '11px system-ui, sans-serif';
@@ -737,32 +867,6 @@
     c.addEventListener('pointercancel', () => { cv.drag = null; drawGraph(); });
   }
 
-  // ------------------------------------------------------------ follow (the file being written)
-
-  function setFollow(on) {
-    cv.follow = on;
-    $('cv-follow').checked = on;
-    clearInterval(cv.followTimer);
-    cv.followTimer = null;
-    if (!on) return;
-    let ticks = 0;
-    cv.followTimer = setInterval(() => {
-      if (!cv.name || cv.inflight) return;
-      const body = $('cv-body');
-      const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - ROW * 2;
-      const gen = cv.gen;
-      cv.inflight = true;
-      api(query(`&start=${Math.max(0, cv.total - 20)}`)).then(r => {
-        if (gen !== cv.gen) return;
-        cv.inflight = false;
-        took(r);
-        if (atEnd) body.scrollTop = body.scrollHeight;
-        renderRows();
-      }).catch(e => { cv.inflight = false; showError(e); });
-      if (++ticks % 3 === 0) fetchGraph();
-    }, 2000);
-  }
-
   // ------------------------------------------------------------ wiring
 
   function setupCapture() {
@@ -773,7 +877,8 @@
       const an = e.target.closest('button[data-an]');
       const rm = e.target.closest('button[data-rm]');
       if (view) {
-        openView(view.dataset.view);
+        const f = capState && capState.files.find(x => x.name === view.dataset.view);
+        openFile(view.dataset.view, !!(f && f.active));
       } else if (an) {
         const name = an.dataset.an;
         $('cap-analyze').hidden = false;
@@ -784,13 +889,16 @@
       } else if (rm) {
         const name = rm.dataset.rm;
         if (!twoClick('cap' + name, () => capState && renderCapture(capState))) return;
-        if (name === cv.name) closeView();
         del(`/capture/files/${encodeURIComponent(name)}`).then(refreshCapture).catch(fail);
       }
     };
     $('cap-an-close').onclick = () => { $('cap-analyze').hidden = true; };
 
-    $('cv-close').onclick = closeView;
+    $('cv-file').onchange = e => {
+      const name = e.target.value;
+      const f = capState && capState.files.find(x => x.name === name);
+      if (name) openFile(name, !!(f && f.active));
+    };
     $('cv-filter').addEventListener('keydown', e => {
       if (e.key === 'Enter') applyFilter($('cv-filter').value.trim());
       if (e.key === 'Escape') { $('cv-filter').value = cv.filter; $('cv-filter').blur(); }
@@ -820,7 +928,16 @@
     $('cv-follow').onchange = e => setFollow(e.target.checked);
 
     const body = $('cv-body');
-    body.addEventListener('scroll', queueRows, {passive: true});
+    body.addEventListener('scroll', () => {
+      queueRows();
+      // Following is being at the end: scrolling up leaves it, scrolling back to the end (or a
+      // list that fits the window) joins it.
+      if (cv.active) {
+        const end = atEnd();
+        if (cv.follow && !end) setFollow(false);
+        else if (!cv.follow && end) setFollow(true);
+      }
+    }, {passive: true});
     $('cv-rows').onclick = e => {
       const r = e.target.closest('.cv-row[data-i]');
       if (!r) return;
@@ -848,28 +965,46 @@
     fields.addEventListener('mouseleave', () => highlight(null, 0));
     setupGraph();
     window.addEventListener('resize', () => { if (cv.name) { queueRows(); } });
+    // A browser tab in the background is hidden too: nothing may wait on the board for it.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stopTail();
+      else maybeTail();
+    });
+    $('cv-filter').value = cv.filter;
     clearDetail();
     renderChips();
+    renderFiles();
     setTimeMode(cv.time);
   }
 
-  registerTab('capture', {
+  registerTab('packets', {
+    // show() also runs again when the WebSocket reconnects: a tail already waiting is kept.
     show() {
-      refreshCapture();
-      clearInterval(capPoll);
-      capPoll = setInterval(refreshCapture, 5000);
-      if (cv.name) {
+      if (cv.pending) loadPending();
+      else if (!cv.name) openDefault();
+      else {
         cv.inflight = false;
         if (!cv.complete) fetchVisible(true);
         queueRows();
         fetchGraph();
+        maybeTail();
       }
+    },
+    hide() {
+      stopTail();
+      clearTimeout(cv.progressTimer);
+    },
+  });
+
+  registerTab('capture', {
+    show() {
+      refreshCapture().catch(() => {});
+      clearInterval(capPoll);
+      capPoll = setInterval(() => refreshCapture().catch(() => {}), 5000);
     },
     hide() {
       clearInterval(capPoll);
       capPoll = null;
-      setFollow(false);
-      clearTimeout(cv.progressTimer);
     },
   });
   setupCapture();

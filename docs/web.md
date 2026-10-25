@@ -265,15 +265,37 @@ histogram since it connected and its L2CAP channels with the AVDTP stream's stat
 loss/jitter. Below: the event log (connections, channels, AVDTP signalling) and **Mark**, which
 writes a note into btmon, the btsnoop ring and live captures.
 
-*Packets*: the packets as they happen, filtered on the
-board with the Capture viewer's filter box and quick filters (the same syntax). The table follows
-the newest rows unless you scroll up, keeps the last 1000, and marks where the board dropped
-packets (the page fell behind) or skipped matches (more than it sends: the newest are kept).
-Changing the filter re-filters the 2048 packets the board still holds. Click a row for its decoded
-fields and hex dump; *Pause* stops the stream (the rows stay clickable while the board still holds
-them), *Open as capture* opens the file btmon is writing in the capture viewer with the same
-filter. The stream runs only while this view is on screen and the browser tab is visible. Under
-the table, the command for a live capture in Wireshark on your PC.
+*Packets*: the packets, captured and live, as one list: the file btmon is writing, opened at its
+end and growing with it, or any file of the ring picked from the box at the top (the one being
+written is marked). *Follow* is on while the table is at the end: new packets are fetched as
+they are written and the table stays at the bottom; scrolling up switches it off (nothing is
+fetched then), scrolling back to the end or ticking it switches it on. At a rotation the view
+moves to the new file. Everything below is the same for an old file and for the live end:
+- a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
+  [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
+  ATT, SMP, AVDTP, media, AVRCP, RFCOMM, MGMT (what bluetoothd asks the kernel, by name), errors,
+  marks and logs, slow TX. They combine: a click adds one or takes it away, and the ones picked are
+  joined with `||` (ATT and media: `proto:att || proto:rtp`); *all* clears them, and a time range
+  dragged on the graph goes into each;
+- a graph strip of the whole file: packets per time bucket of the filtered set, and for a chosen
+  connection its TX/RX throughput and TX latency p50/p95. Drag across it to keep only that time
+  range (it becomes `t>=… t<…` in the filter, and the graph zooms to it); click to jump the table
+  there. The band shows which part of the file is on screen;
+- the packet table: frame number, time since the first packet (or time of day, or since the row
+  above), direction, handle, protocol, length and summary (TX latency for completed TX packets),
+  coloured by kind and direction, errors in red, marks highlighted. Only the rows on screen are
+  fetched, so a 300 000-packet file scrolls like a small one. ↑ ↓, Page Up/Down, Home and End
+  move the selection;
+- the selected packet decoded: a tree of fields, and the hex dump with offsets. Hovering a field
+  highlights its bytes; the terms under the summary add themselves to the filter on a click
+  (shift: negated);
+- *Statistics*: what the filter matches, by protocol and by link, with the TX latency percentiles;
+  *Save matches* downloads them as a btsnoop file (*with context*: with what btmon needs to decode
+  them).
+
+On the board a big file is indexed, and a text filter searched, a slice at a time: the status line
+shows the progress and the totals grow until done. Under the table, the command for a live
+capture in Wireshark on your PC.
 
 *D-Bus*: BlueZ's D-Bus traffic as it happens — the calls to BlueZ and obexd with their arguments,
 the replies with the call they answer and how long it took, errors in red, the signals
@@ -297,28 +319,8 @@ idle. Off, the samples are collected only while the view is open, and the last f
 connection come from the monitor's history when it opens.
 
 *Captures*: the always-on btsnoop ring: start/stop recording, the files (the newest is being
-written), open, download, delete, and *Summary* (`btmon -a` on the board). *Open* opens a file in the packet
-viewer:
-- a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
-  [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
-  ATT, SMP, AVDTP, media, AVRCP, RFCOMM, MGMT (what bluetoothd asks the kernel, by name), errors,
-  marks and logs, slow TX. They combine: a click adds one or takes it away, and the ones picked are
-  joined with `||` (ATT and media: `proto:att || proto:rtp`); *all* clears them, and a time range
-  dragged on the graph goes into each;
-- a graph strip of the whole capture: packets per time bucket of the filtered set, and for a chosen
-  connection its TX/RX throughput and TX latency p50/p95. Drag across it to keep only that time
-  range (it becomes `t>=… t<…` in the filter, and the graph zooms to it); click to jump the table
-  there. The band shows which part of the capture is on screen;
-- the packet table: frame number, time since the first packet, direction, handle, protocol,
-  length and summary (TX latency for completed TX packets), coloured by kind and direction, errors
-  in red, marks highlighted. Only the rows on screen are fetched, so a 300 000-packet file scrolls
-  like a small one. ↑ ↓, Page Up/Down, Home and End move the selection;
-- the selected packet decoded: a tree of fields, and the hex dump with offsets. Hovering a field
-  highlights its bytes.
-
-On the board a big file is indexed, and a text filter searched, a slice at a time: the status line
-shows the progress and the totals grow until done. For the file btmon is writing, *follow* keeps
-reading what is appended (and scrolls with it while the table is at the bottom).
+written), *Open* (the file in *Packets*), download, delete, and *Summary* (`btmon -a` on the
+board).
 
 **System** — the board itself, in eight views: its state and logs, then how it is set up.
 *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
