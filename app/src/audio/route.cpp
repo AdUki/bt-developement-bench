@@ -397,16 +397,6 @@ bool AudioRoute::put(const json& body, json* out, std::string* err, int* status)
   std::lock_guard<std::mutex> lk(m_);
   json updated;
   if (!outputs.is_null()) {
-    // The outputs taken off are ended by the thread (a broadcast once it is off air), those turned
-    // on again kept.
-    const auto has = [](const json& sinks, const std::string& t) {
-      for (const json& k : sinks)
-        if (str(k, "target") == t) return true;
-      return false;
-    };
-    for (const json& k : outputs_)
-      if (!str(k, "target").empty() && !has(outputs, str(k, "target"))) ending_.emplace_back(str(k, "target"), mono_ms() + kEndMs);
-    ending_.erase(std::remove_if(ending_.begin(), ending_.end(), [&](const auto& e) { return has(outputs, e.first); }), ending_.end());
     outputs_ = outputs;
     save();
     // What plays now plays on them at once: its kept outputs untouched, new ones opened.
@@ -461,9 +451,9 @@ bool AudioRoute::put(const json& body, json* out, std::string* err, int* status)
   return true;
 }
 
-void AudioRoute::on_output_dropped(EndOutput f) {
+void AudioRoute::on_unused_outputs(EndUnused f) {
   std::lock_guard<std::mutex> lk(m_);
-  end_output_ = std::move(f);
+  end_unused_ = std::move(f);
 }
 
 bool AudioRoute::play(const json& body, json* out, std::string* err, int* status) {
@@ -540,23 +530,13 @@ void AudioRoute::run() {
       wait_until_ = kUntilBack;
     }
     if (json_locked() != before) publish_locked();
-    if (!ending_.empty() && end_output_) {
-      const auto ending = ending_;
-      const EndOutput end = end_output_;
+    if (end_unused_ && mono_ms() - swept_ >= kSweepMs) {
+      swept_ = mono_ms();
+      const json outputs = outputs_;
+      const EndUnused end = end_unused_;
       lk.unlock();
-      std::vector<std::string> done;
-      for (const auto& [target, deadline] : ending) {
-        if (end(target)) {
-          done.push_back(target);
-        } else if (mono_ms() > deadline) {
-          LOG_WARN("route: {} taken off the outputs but still on air after {} s: left as it is", target, kEndMs / 1000);
-          done.push_back(target);
-        }
-      }
+      end(outputs);
       lk.lock();
-      ending_.erase(std::remove_if(ending_.begin(), ending_.end(),
-                                   [&](const auto& e) { return std::find(done.begin(), done.end(), e.first) != done.end(); }),
-                    ending_.end());
     }
   }
 }

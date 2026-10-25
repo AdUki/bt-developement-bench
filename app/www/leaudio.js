@@ -48,9 +48,12 @@ function qosLine(q, codec) {
 // ---------------------------------------------------------------- the board's broadcasts
 
 function broadcastRow(b) {
-  const on = b.state === 'active';
-  const st = on ? pill('on air', 'good') : b.state === 'idle' ? pill('ready · off air') : pill(b.state, 'warn');
-  const out = b.node && laOn(b.node);
+  // It exists while it is one of Listen's outputs: off air it waits for Listen to play, or (taken
+  // off them) the daemon is ending it.
+  const on = b.state === 'active', routed = b.node && laOn(b.node);
+  const st = on ? pill('on air', 'good') : b.state === 'idle' ? pill(routed || !b.node ? 'silent' : 'ending…')
+    : pill(b.state, 'warn');
+  const out = routed;
   // Streams started elsewhere into it (Audio → Streams, bench) are named; Listen's is its input.
   const others = la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === b.node) && s.state !== 'ended');
   const playing = [out ? 'what Listen plays' : '', ...others.map(s => esc(s.label.split(' → ')[0]))].filter(Boolean).join(', ') ||

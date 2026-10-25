@@ -66,15 +66,12 @@ class AudioRoute {
   AudioRoute& operator=(const AudioRoute&) = delete;
 
   static constexpr int kWaitMs = 15000;
-  // How long an output taken off is asked to end before it is given up on.
-  static constexpr int kEndMs = 30000;
+  static constexpr int kSweepMs = 2000;
 
-  // An output taken off the route that is the route's to end: the board's own Auracast broadcast,
-  // which exists to be one of the outputs. Called each second from the route's thread, without its
-  // lock: true once ended or when `target` is nothing to end, false while it cannot be yet
-  // (PipeWire lets a broadcast go off air a few seconds after nothing plays into it).
-  using EndOutput = std::function<bool(const std::string& target)>;
-  void on_output_dropped(EndOutput f);
+  // Ends what exists only to be one of the outputs and is not one (the board's own Auracast
+  // broadcast): called every kSweepMs from the route's thread, without its lock, with the outputs.
+  using EndUnused = std::function<void(const nlohmann::json& outputs)>;
+  void on_unused_outputs(EndUnused f);
 
   // GET /api/audio/route.
   nlohmann::json get();
@@ -123,8 +120,8 @@ class AudioRoute {
   static constexpr int64_t kUntilBack = INT64_MAX;
   int capture_ = 0;         // the capture the route made for a Bluetooth input
   int paused_ = 0;          // the board's stream paused for a Bluetooth input, resumed for local
-  EndOutput end_output_;
-  std::vector<std::pair<std::string, int64_t>> ending_;  // outputs taken off, with a steady-ms deadline
+  EndUnused end_unused_;
+  int64_t swept_ = 0;  // steady ms of the last sweep
 };
 
 }  // namespace btb::audio

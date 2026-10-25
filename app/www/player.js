@@ -1385,11 +1385,11 @@ function outOptions(browser, o = pl) {
     const bt = e.kind === 'bluetooth' && !bcast;
     opts.push({value: v, name: e.set_leader ? ((e.members || []).length === 1 ? devName(e.members[0]) : e.label) : e.address ? devName(e.address) : e.label,
       sub: e.set_leader ? ((e.members || []).length > 1 ? `${e.members.length} devices, one each channel` : 'left + right') : e.address ? (t && t.codec ? t.codec.name : 'Bluetooth')
-        : bcast ? 'Auracast · off ends it' : 'the board’s sound card',
+        : bcast ? 'Auracast' : 'the board’s sound card',
       icon: bt || bcast ? PL_SVG.bt : PL_SVG.speaker, rank: bt ? 2 : bcast ? 3 : 1, off: outBlocked(e, input)});
   });
   if (o === pl && bcastAdapter() && !sinks.some(isBcast)) {
-    opts.push({value: NEW_BCAST, name: 'Auracast', sub: 'start a broadcast', icon: PL_SVG.bt, rank: 3, off: outBlocked(null, input)});
+    opts.push({value: NEW_BCAST, name: 'Auracast', sub: '', icon: PL_SVG.bt, rank: 3, off: outBlocked(null, input)});
   }
   return opts.sort((a, b) => a.rank - b.rank);
 }

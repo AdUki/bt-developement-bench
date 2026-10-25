@@ -191,12 +191,12 @@ answer, connected or not, every stream endpoint with its role, codec and other c
 whether it broadcasts, receives or both). *Broadcast from the board* starts a broadcast: the
 quality (BAP's broadcast configurations, 48 kHz 10 ms low latency first), stereo or mono, and a
 Broadcast Code to encrypt it (empty: anyone listens), the presentation delay under *Options*. Each
-broadcast is a row: BIG and BIS, *on air* or *ready · off air* (it transmits only while something
-plays into it), its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it,
+broadcast is a row: BIG and BIS, *on air*, *silent* (it transmits only while
+something plays into it) or *ending…*, its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it,
 and *Stop broadcast*. A broadcast started is one of Listen's outputs at once (what Listen plays
 goes on air), and one taken off them ends: *Stop broadcast* (or turning it off in Listen → Play to)
 stops anything else playing into it and the daemon clears it once PipeWire let it go off air, a
-few seconds later. The board's broadcast carries no Broadcast Name, so receivers list it by address.
+few seconds later. So does one left from before that is not an output and plays nothing. The board's broadcast carries no Broadcast Name, so receivers list it by address.
 *Broadcasts in range* scans (LE, 30 s) and shows each broadcaster as a card: its name (the
 Broadcast Name), address, Broadcast ID, signal, encrypted and paired; then its streams, one per
 BIS, once BlueZ has read them (location, codec, state, and the Program_Info the broadcaster sends,

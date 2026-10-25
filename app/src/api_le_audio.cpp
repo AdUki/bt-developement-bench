@@ -4,6 +4,7 @@
 #include <systemd/sd-bus.h>
 
 #include <algorithm>
+#include <set>
 
 #include "http_util.h"
 #include "le_audio.h"
@@ -91,22 +92,38 @@ int append_bis(sd_bus_message* m, const LeBcastConfig& c) {
 
 }  // namespace
 
-bool le_audio_end_output(BtManager& bt, audio::AudioEngine& engine, const std::string& target) {
-  const json st = le_audio_state(bt, engine);
+void le_audio_end_unused(BtManager& bt, audio::AudioEngine& engine, const json& outputs, std::set<std::string>* seen) {
+  // Nothing to look at on a board that broadcasts nothing (the Pi Zero): no transport under a
+  // broadcast PAC.
+  const auto objs = bt.objects();
+  bool any = false;
+  for (auto it = objs->begin(); it != objs->end() && !any; ++it)
+    any = it.key().find("/pac_bcast") != std::string::npos && it.key().find("/fd") != std::string::npos;
+  if (!any) {
+    seen->clear();
+    return;
+  }
+  std::set<std::string> used, now;
+  for (const json& k : outputs) used.insert(k.value("target", std::string{}));
+  const json st = model_le_audio(*objs, json::object(), engine.endpoints(false));
   for (const json& b : st["broadcasts"]) {
-    if (!b["node"].is_string() || b["node"].get<std::string>() != target) continue;
-    // Still on air: PipeWire has not let it go yet (or something else plays into it).
-    if (b["state"] != "idle") return false;
+    // Off air with no node yet is one being started (its node comes before SetConfiguration
+    // answers, and POST then adds it): left alone.
+    if (!b["node"].is_string() || b["state"] != "idle" || used.count(b["node"].get<std::string>())) continue;
+    const std::string node = b["node"].get<std::string>();
+    now.insert(node);
+    // Unused at two sweeps running: not one that POST is adding to the outputs this moment.
+    if (!seen->count(node)) continue;
     int n = 0;
     BtCallResult r;
-    if (!clear_big(bt, st["broadcasts"], b["big"].get<int>(), "/org/bluez/" + b["adapter"].get<std::string>(), &n, &r))
-      LOG_WARN("le-audio: ending BIG {} taken off the outputs: {}", b["big"].get<int>(), r.error);
+    const int big = b["big"].get<int>();
+    if (clear_big(bt, st["broadcasts"], big, "/org/bluez/" + b["adapter"].get<std::string>(), &n, &r))
+      LOG_INFO("le-audio: BIG {} ended: not one of the outputs", big);
     else
-      LOG_INFO("le-audio: BIG {} ended: taken off the outputs", b["big"].get<int>());
+      LOG_WARN("le-audio: ending BIG {}, not one of the outputs: {}", big, r.error);
     bt.touch();
-    return true;
   }
-  return true;
+  *seen = now;
 }
 
 void install_le_audio_routes(httplib::Server& svr, Deps& d) {
@@ -176,6 +193,7 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
       std::string err;
       int status = 0;
       if (!d.route.put(json{{"outputs", outputs}}, &out, &err, &status)) return send_error(res, status, err);
+      // Ended by the route's sweep once off air (le_audio_end_unused).
       return send_json(res, json{{"ok", true}, {"ending", true}}, 202);
     }
     for (const json& b : st["broadcasts"])
