@@ -279,6 +279,8 @@ int main(int argc, char** argv) {
   btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,
                  player, dbus_log, route};
   btb::WebServer server(deps, wopt);
+  // The board's broadcast exists to be an output: taken off the route, it ends.
+  route.on_output_dropped([&bt, &audio](const std::string& t) { return btb::le_audio_end_output(bt, audio, t); });
   bt.on_change([&server, &hid_host, &route](bool request) {
     server.publish_bt(request);
     hid_host.poke();

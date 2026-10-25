@@ -3,9 +3,12 @@
 // sink like an A2DP speaker (GET /api/media, /api/audio).
 #include <systemd/sd-bus.h>
 
+#include <algorithm>
+
 #include "http_util.h"
 #include "le_audio.h"
 #include "mgmt.h"
+#include "util/log.h"
 #include "webserver.h"
 
 using json = nlohmann::json;
@@ -18,11 +21,26 @@ namespace {
 // its endpoint in between); Select answers at once, the BIG sync comes with PipeWire's Acquire.
 constexpr int kCallTimeoutMs = 10000;
 
-json le_audio_state(Deps& d) {
+json le_audio_state(BtManager& bt, audio::AudioEngine& engine) {
   json controllers = json::object();
   std::string err;
   mgmt_read_controllers(&controllers, &err);
-  return model_le_audio(*d.bt.objects(), controllers, d.audio.endpoints(false));
+  return model_le_audio(*bt.objects(), controllers, engine.endpoints(false));
+}
+json le_audio_state(Deps& d) { return le_audio_state(d.bt, d.audio); }
+
+// Every BIS of broadcast `b`'s BIG on `apath` goes (ClearConfiguration), and PipeWire's node with it.
+bool clear_big(BtManager& bt, const json& broadcasts, int big, const std::string& apath, int* n, BtCallResult* r) {
+  for (const json& b : broadcasts) {
+    if (b["big"] != big || "/org/bluez/" + b["adapter"].get<std::string>() != apath) continue;
+    const std::string path = b["path"].get<std::string>();
+    const std::string ep = path.substr(0, path.rfind('/'));
+    *r = bt.call(ep, "org.bluez.MediaEndpoint1", "ClearConfiguration",
+                 [path](sd_bus_message* m) { return sd_bus_message_append(m, "o", path.c_str()); }, kCallTimeoutMs);
+    if (!r->ok) return false;
+    ++*n;
+  }
+  return true;
 }
 
 void call_error(httplib::Response& res, const BtCallResult& r) {
@@ -73,6 +91,24 @@ int append_bis(sd_bus_message* m, const LeBcastConfig& c) {
 
 }  // namespace
 
+bool le_audio_end_output(BtManager& bt, audio::AudioEngine& engine, const std::string& target) {
+  const json st = le_audio_state(bt, engine);
+  for (const json& b : st["broadcasts"]) {
+    if (!b["node"].is_string() || b["node"].get<std::string>() != target) continue;
+    // Still on air: PipeWire has not let it go yet (or something else plays into it).
+    if (b["state"] != "idle") return false;
+    int n = 0;
+    BtCallResult r;
+    if (!clear_big(bt, st["broadcasts"], b["big"].get<int>(), "/org/bluez/" + b["adapter"].get<std::string>(), &n, &r))
+      LOG_WARN("le-audio: ending BIG {} taken off the outputs: {}", b["big"].get<int>(), r.error);
+    else
+      LOG_INFO("le-audio: BIG {} ended: taken off the outputs", b["big"].get<int>());
+    bt.touch();
+    return true;
+  }
+  return true;
+}
+
 void install_le_audio_routes(httplib::Server& svr, Deps& d) {
   svr.Get("/api/le-audio", [&d](const httplib::Request&, httplib::Response& res) { send_json(res, le_audio_state(d)); });
 
@@ -100,31 +136,55 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
                                      [c](sd_bus_message* m) { return append_bis(m, c); }, kCallTimeoutMs);
     if (!r.ok) return call_error(res, r);
     d.bt.touch();
-    send_json(res, json{{"big", big}, {"pac", pac}}, 201);
+    // A broadcast is one of the route's outputs from the start: what Listen plays goes on air, and
+    // taking it off the outputs ends it (le_audio_end_output).
+    json out{{"big", big}, {"pac", pac}, {"node", nullptr}};
+    for (const json& b : le_audio_state(d)["broadcasts"])
+      if (b["big"] == big && "/org/bluez/" + b["adapter"].get<std::string>() == apath && b["node"].is_string()) out["node"] = b["node"];
+    if (out["node"].is_string()) {
+      json outputs = d.route.get()["outputs"];
+      outputs.push_back(json{{"type", "pipewire"}, {"target", out["node"]}});
+      json routed;
+      std::string rerr;
+      int rst = 0;
+      if (!d.route.put(json{{"outputs", outputs}}, &routed, &rerr, &rst)) out["output_error"] = rerr;
+    }
+    send_json(res, out, 201);
   }));
 
   // Every BIS of the BIG goes, and PipeWire's node with it. Only off air: BlueZ clearing a stream
   // PipeWire still holds leaves its transport half gone, and the next Acquire on it crashed
-  // bluetoothd (5.87). PipeWire lets a broadcast go a few seconds after nothing plays into it.
+  // bluetoothd (5.87). One of the route's outputs is taken off them instead (202), and the route
+  // ends it once PipeWire let it go off air, a few seconds later.
   svr.Delete("/api/le-audio/broadcasts/:big", [&d](const httplib::Request& req, httplib::Response& res) {
     const std::string apath = d.bt.find_adapter(query(req, "adapter", ""));
     const int big = std::atoi(path_param(req, "big").c_str());
     const json st = le_audio_state(d);
+    std::vector<std::string> nodes;
+    for (const json& b : st["broadcasts"])
+      if (b["big"] == big && "/org/bluez/" + b["adapter"].get<std::string>() == apath && b["node"].is_string())
+        nodes.push_back(b["node"].get<std::string>());
+    json outputs = json::array();
+    bool routed = false;
+    for (const json& k : d.route.get()["outputs"]) {
+      const bool mine = std::find(nodes.begin(), nodes.end(), k.value("target", std::string{})) != nodes.end();
+      routed = routed || mine;
+      if (!mine) outputs.push_back(k);
+    }
+    if (routed) {
+      json out;
+      std::string err;
+      int status = 0;
+      if (!d.route.put(json{{"outputs", outputs}}, &out, &err, &status)) return send_error(res, status, err);
+      return send_json(res, json{{"ok", true}, {"ending", true}}, 202);
+    }
     for (const json& b : st["broadcasts"])
       if (b["big"] == big && "/org/bluez/" + b["adapter"].get<std::string>() == apath && b["state"] != "idle")
         return send_error(res, 409, "on air: stop what plays into it first; PipeWire lets the broadcast go a few "
                                     "seconds later");
     int n = 0;
-    for (const json& b : st["broadcasts"]) {
-      if (b["big"] != big || "/org/bluez/" + b["adapter"].get<std::string>() != apath) continue;
-      const std::string path = b["path"].get<std::string>();
-      const std::string ep = path.substr(0, path.rfind('/'));
-      const BtCallResult r = d.bt.call(ep, "org.bluez.MediaEndpoint1", "ClearConfiguration",
-                                       [path](sd_bus_message* m) { return sd_bus_message_append(m, "o", path.c_str()); },
-                                       kCallTimeoutMs);
-      if (!r.ok) return call_error(res, r);
-      ++n;
-    }
+    BtCallResult r;
+    if (!clear_big(d.bt, st["broadcasts"], big, apath, &n, &r)) return call_error(res, r);
     if (!n) return send_error(res, 404, "no such broadcast");
     d.bt.touch();
     send_ok(res);

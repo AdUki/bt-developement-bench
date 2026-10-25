@@ -1385,7 +1385,7 @@ function outOptions(browser, o = pl) {
     const bt = e.kind === 'bluetooth' && !bcast;
     opts.push({value: v, name: e.set_leader ? ((e.members || []).length === 1 ? devName(e.members[0]) : e.label) : e.address ? devName(e.address) : e.label,
       sub: e.set_leader ? ((e.members || []).length > 1 ? `${e.members.length} devices, one each channel` : 'left + right') : e.address ? (t && t.codec ? t.codec.name : 'Bluetooth')
-        : bcast ? 'Auracast · anyone in range' : 'the board’s sound card',
+        : bcast ? 'Auracast · off ends it' : 'the board’s sound card',
       icon: bt || bcast ? PL_SVG.bt : PL_SVG.speaker, rank: bt ? 2 : bcast ? 3 : 1, off: outBlocked(e, input)});
   });
   if (o === pl && bcastAdapter() && !sinks.some(isBcast)) {
@@ -1571,25 +1571,17 @@ function pickOut(v) {
 }
 
 // Auracast tapped while the board broadcasts nothing: a stereo broadcast of BAP's 48_2_1 (Audio →
-// LE Audio's default) is started, and once PipeWire has its sink that sink is turned on like any
-// other output. Its settings, or a second broadcast, are Audio → LE Audio's.
+// LE Audio's default) is started, which the daemon makes one of the route's outputs; tapped off
+// like any output, the daemon ends it. Its settings, or a second broadcast, are Audio → LE Audio's.
 function startBroadcastOut() {
   const a = bcastAdapter();
   if (!a || (pl.sw && pl.sw.phase !== 'done' && pl.sw.phase !== 'failed')) return;
   const sw = pl.sw = {value: NEW_BCAST, add: true, phase: 'broadcast', at: Date.now(), seq: null};
   renderOuts();
-  post('/le-audio/broadcasts', {adapter: a.adapter, preset: '48_2_1', channels: 2})
-    .then(r => api('/le-audio').then(s => {
-      pl.la = s;
-      const b = s.broadcasts.find(x => x.big === r.big && x.adapter === a.adapter);
-      if (!b || !b.node) throw new Error('PipeWire made no sink for it');
-      return api('/audio/endpoints?fresh=1').then(ep => {
-        pl.endpoints = ep;
-        if (pl.sw !== sw) return renderNowPlaying();
-        pl.sw = null;
-        pickOut(`pipewire:${b.node}`);
-      });
-    }))
+  post('/le-audio/broadcasts', {adapter: a.adapter, preset: '48_2_1', channels: 2}).then(r => {
+    if (r.output_error) throw new Error(r.output_error);
+    return Promise.all([api('/audio/endpoints?fresh=1').then(ep => { pl.endpoints = ep; }), refreshLa(), refreshRoute()]);
+  }).then(() => { if (pl.sw === sw) pl.sw = null; renderNowPlaying(); })
     .catch(e => { if (pl.sw === sw) { sw.phase = 'failed'; sw.error = e.message; } renderOuts(); });
 }
 

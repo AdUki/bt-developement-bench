@@ -73,6 +73,10 @@ void install_obex_routes(httplib::Server& svr, Deps& d);
 void install_hid_routes(httplib::Server& svr, Deps& d);
 void install_setup_routes(httplib::Server& svr, Deps& d);
 
+// The route's hook for an output taken off it (AudioRoute::on_output_dropped): the board's
+// broadcast whose node `target` is, cleared once off air; true when done or not a broadcast.
+bool le_audio_end_output(BtManager& bt, audio::AudioEngine& engine, const std::string& target);
+
 class WebServer {
  public:
   WebServer(Deps deps, WebOptions opt);

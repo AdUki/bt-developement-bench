@@ -99,7 +99,7 @@ of Inputs, Library and Up next keeps the track playing, play/pause and next in r
 the input: its own choice, remembered by the browser), the board's own sound card if it has one
 (not the loopback card, which nobody hears), each Bluetooth speaker or pair of earbuds (a set is
 one button), and the board's Auracast broadcasts — *Auracast* starts a stereo broadcast (48_2_1)
-when the board has none and its adapter can broadcast. The device the input comes from is shown
+when the board has none and its adapter can broadcast, and turned off it ends it. The device the input comes from is shown
 but cannot be turned on (it would get its own audio back), nor can Auracast while the input is a
 broadcast, and picking such an input takes those outputs off. Up to four of the board's at once; they are the board's, stay when the input changes,
 and change what plays at once: an output tapped joins (or leaves) the ones playing, which carry on
@@ -193,10 +193,10 @@ quality (BAP's broadcast configurations, 48 kHz 10 ms low latency first), stereo
 Broadcast Code to encrypt it (empty: anyone listens), the presentation delay under *Options*. Each
 broadcast is a row: BIG and BIS, *on air* or *ready · off air* (it transmits only while something
 plays into it), its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it,
-*Play to* and *Stop broadcast* (which takes it off Listen's outputs, stops anything else playing
-into it, waits until it is off air — PipeWire lets it go a few seconds later — and then clears
-it). *Play to* is the same toggle as the broadcast in Listen → Play to: what Listen plays goes on
-air (not while Listen's input is a broadcast received). The board's broadcast carries no Broadcast Name, so receivers list it by address.
+and *Stop broadcast*. A broadcast started is one of Listen's outputs at once (what Listen plays
+goes on air), and one taken off them ends: *Stop broadcast* (or turning it off in Listen → Play to)
+stops anything else playing into it and the daemon clears it once PipeWire let it go off air, a
+few seconds later. The board's broadcast carries no Broadcast Name, so receivers list it by address.
 *Broadcasts in range* scans (LE, 30 s) and shows each broadcaster as a card: its name (the
 Broadcast Name), address, Broadcast ID, signal, encrypted and paired; then its streams, one per
 BIS, once BlueZ has read them (location, codec, state, and the Program_Info the broadcaster sends,
