@@ -758,25 +758,37 @@ cmd_mon() {
   done
 }
 
-# Live packets, filtered on the board (docs/monitor.md "Live packets"), until interrupted. The
-# stream's status lines say where the board dropped packets (we fell behind) or skipped matches
-# (more than one batch sends); only their growth is printed.
+# The live end of the capture being written (docs/monitor.md "The live end"), until interrupted:
+# the last few matches of the filter, then every new one as the board writes it. The same list
+# the console shows, with the file's frame numbers, so a number here is the number there and in
+# Wireshark. Each request waits on the board for the next matches (a tail request); when the ring
+# rotates, the board names the new file and we move to it.
 mon_packets() {
-  local q="/api/hci/live?filter=$(jq -rn --arg s "${1-}" '$s | @uri')"
-  curl -sSN "$URL$q" | jq -nr --unbuffered --arg dim "$dim" --arg off "$off" '
-    def clock: (. / 1000 | floor | strflocaltime("%H:%M:%S")) + "." + ("00" + (. % 1000 | floor | tostring))[-3:];
-    foreach inputs as $o ({d: 0, s: 0, out: null};
-      if $o.error then .out = "error: \($o.error)"
-      elif $o.status then
-        .out = (if $o.status.dropped > .d or $o.status.skipped > .s
-                then "\($dim)-- \($o.status.dropped - .d) dropped, \($o.status.skipped - .s) skipped --\($off)"
-                else null end)
-        | .d = $o.status.dropped | .s = $o.status.skipped
-      else .out = ([($o.seq | tostring), ($o.ts_ms | clock), $o.dir, ($o.handle // "" | tostring),
-                    ($o.proto // $o.type), ($o.len | tostring),
-                    $o.summary + (if $o.lat_ms != null then "  [\($o.lat_ms) ms]" else "" end)] | join("\t"))
-      end;
-      .out // empty)'
+  local filter name j n start total
+  filter=$(jq -rn --arg s "${1-}" '$s | @uri')
+  name=$(get /api/capture | jq -r '(.files[] | select(.active) | .name) // (.files[0].name // empty)') || return 1
+  [ -n "$name" ] || die "no capture file: the btsnoop ring is not recording (bench cap on)"
+  # Where the list ends now: the totals come from a page past the last match.
+  j=$(get "/api/capture/files/$name/packets?filter=$filter&at_n=2147483647&count=1") || return 1
+  total=$(jq -r .total <<<"$j")
+  start=$((total > 10 ? total - 10 : 0))
+  echo "${dim}$name${off}" >&2
+  while true; do
+    j=$(TIMEOUT=60 get "/api/capture/files/$name/packets?filter=$filter&start=$start&count=200&wait=25000") || return 1
+    jq -r '.packets[] | [(.n | tostring), ((.ts_ms / 1000 | floor | strflocaltime("%H:%M:%S")) + "." + ("00" + (.ts_ms % 1000 | floor | tostring))[-3:]),
+                        .dir, (.handle // "" | tostring), (.proto // .type), (.len | tostring),
+                        .summary + (if .lat_ms != null then "  [\(.lat_ms) ms]" else "" end)] | join("\t")' <<<"$j"
+    n=$(jq '.packets | length' <<<"$j")
+    start=$((start + n))
+    # A partial answer (the file still being indexed) continues at once; a rotation moves on.
+    local newer
+    newer=$(jq -r '.newer // empty' <<<"$j")
+    if [ -n "$newer" ]; then
+      name=$newer
+      start=0
+      echo "${dim}-- $name --${off}" >&2
+    fi
+  done
 }
 
 # ---- Wi-Fi, kernel, system ---------------------------------------------------------------------
@@ -1041,11 +1053,11 @@ ${bold}Audio${off}
 ${bold}Capture and monitor${off}
   cap on|off|ls                   the always-on btsnoop ring
   cap get NAME [OUT] | analyze NAME | rm NAME
-  cap packets NAME [FILTER]       its packets (COUNT=200 first matches; filter syntax: docs/monitor.md)
+  cap packets NAME [FILTER]       a file's packets (COUNT=200 first matches; filter syntax: docs/monitor.md)
   cap live                        curl -sN $URL/api/hci/live.pcap | wireshark -k -i -
   mark TEXT                       a marker in btmon, btsnoop and Wireshark
   mon [--once]                    per-connection/channel throughput, latency, credits, RTP loss
-  mon packets [FILTER]            live packets, filtered on the board (filter syntax: docs/monitor.md)
+  mon packets [FILTER]            the live end of the capture being written, filtered on the board
 ${bold}Board${off}
   wifi status|scan|add SSID [PSK]|remove SSID|ap|sta|off|auto
   kernel status|try|commit|rollback
