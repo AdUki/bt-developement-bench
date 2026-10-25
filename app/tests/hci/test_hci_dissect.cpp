@@ -229,6 +229,188 @@ void test_sdp_rfcomm_obex() {
   CHECK_EQ(field(d.fields, "Img-Handle"), std::string("\"0000001\""));
 }
 
+// One monitor packet of any kind (a command, an event, a management frame, an ACL packet), with
+// the summary-only path checked against the detail one as run() does.
+Dissection run_mon(uint16_t mon, const std::string& hex, uint8_t proto = 0, uint16_t cid = 0) {
+  const Bytes pkt = from_hex(hex);
+  IndexEntry e{};
+  e.mon = static_cast<uint8_t>(mon);
+  e.proto = proto;
+  e.cid = cid;
+  e.flags = mon == btb::hci::kMonAclTx ? btb::hci::kFlagTx : btb::hci::kFlagRx;
+  Dissection ds;
+  btb::hci::dissect(e, pkt.data(), pkt.size(), true, &ds);
+  Dissection brief;
+  btb::hci::dissect(e, pkt.data(), pkt.size(), false, &brief);
+  CHECK_EQ(brief.summary, ds.summary);
+  return ds;
+}
+
+Dissection cmd(const std::string& hex) { return run_mon(btb::hci::kMonCommand, hex); }
+Dissection evt(const std::string& hex) { return run_mon(btb::hci::kMonEvent, hex); }
+
+// A decoded layout leaves no raw parameter block behind.
+bool no_blob(const json& fields) {
+  for (const char* n : {"Parameters", "Return parameters", "Undecoded"}) {
+    if (field(fields, n) != "(none)") {
+      std::printf("  '%s' left: %s\n", n, field(fields, n).c_str());
+      return false;
+    }
+  }
+  return true;
+}
+
+void test_hci_advertising() {
+  // The parameters btmon shows for LE Set Extended Advertising Parameters, which the dissector
+  // used to leave as one blob (bluetoothd's legacy connectable advertising).
+  auto d = cmd("362019011300a00000f00000070000000000000000007f0100010000");
+  CHECK_EQ(d.summary, std::string("LE Set Extended Advertising Parameters set 1 100.00-150.00 ms legacy"));
+  CHECK_EQ(field(d.fields, "Properties"), std::string("0x0013 (connectable, scannable, legacy)"));
+  CHECK_EQ(field(d.fields, "Min interval"), std::string("100.00 ms (0xa0)"));
+  CHECK_EQ(field(d.fields, "Channel map"), std::string("0x07 (37, 38, 39)"));
+  CHECK_EQ(field(d.fields, "TX power"), std::string("no preference (0x7f)"));
+  CHECK_EQ(field(d.fields, "Secondary PHY"), std::string("0x01 (LE 1M)"));
+  CHECK_EQ(field(d.fields, "Scan request notifications"), std::string("disabled (0x00)"));
+  CHECK(no_blob(d.fields));
+  d = evt("0e050136200008");
+  CHECK_EQ(d.summary, std::string("LE Set Extended Advertising Parameters complete TX power 8 dBm"));
+  CHECK_EQ(field(d.fields, "Selected TX power"), std::string("8 dBm"));
+  d = cmd("392006010101000000");
+  CHECK_EQ(d.summary, std::string("LE Set Extended Advertising Enable on set 1"));
+  CHECK_EQ(field(d.fields, "Set 0"), std::string("handle 1, duration none, max events 0"));
+  // An Auracast source (the VIM3L): the Broadcast ID, then the BASE in the periodic advertising.
+  d = cmd("37200b0103010706165218cb6dae");
+  CHECK_EQ(d.summary, std::string("LE Set Extended Advertising Data set 1 Broadcast ID 0xae6dcb"));
+  CHECK_EQ(field(d.fields, "Operation"), std::string("0x03 (complete data)"));
+  d = cmd("3f202901032625165118409c0001010600000000100201080202010503030000000304640004030204000100");
+  CHECK_EQ(d.summary, std::string("LE Set Periodic Advertising Data set 1 BASE 1 BIS, LC3 48 kHz, 10 ms, FL+FR, 100 octets, media"));
+  CHECK_EQ(field(d.fields, "Presentation delay"), std::string("40000 us"));
+  CHECK_EQ(field(d.fields, "Audio channel allocation"), std::string("0x00000003 (FL, FR)"));
+  CHECK_EQ(field(d.fields, "Streaming audio contexts"), std::string("0x0004 (media)"));
+  CHECK_EQ(field(d.fields, "BIS index"), std::string("1"));
+  CHECK(no_blob(d.fields));
+  d = cmd("3e200701100010000000");
+  CHECK_EQ(d.summary, std::string("LE Set Periodic Advertising Parameters set 1 20.00-20.00 ms"));
+  d = cmd("4020020101");
+  CHECK_EQ(d.summary, std::string("LE Set Periodic Advertising Enable on set 1"));
+  // A Realtek earbud's extended advertising: the LE Audio announcements of CAP, ASCS and TMAS.
+  d = evt("3e5b0d0101000020002d1517840102007fba000000000000000000410201040f0952544c383736334520417564696f041653180109164e18"
+          "01270223020003164f18051655182a0009024e184f18501844180319420906ff5d00020100");
+  CHECK_EQ(d.summary, std::string("LE Extended Advertising Report 84:17:15:2D:00:20 (public) -70 dBm \"RTL8763E Audio\" "
+                                  "CAP targeted, ASCS targeted"));
+  CHECK_EQ(field(d.fields, "Event type"), std::string("0x0001 (connectable; data complete)"));
+  CHECK_EQ(field(d.fields, "Secondary PHY"), std::string("0x02 (LE 2M)"));
+  CHECK_EQ(field(d.fields, "TX power"), std::string("not available"));
+  CHECK_EQ(field(d.fields, "Flags"), std::string("0x04 (BR/EDR not supported)"));
+  CHECK_EQ(field(d.fields, "Available sink contexts"), std::string("0x0227 (unspecified, conversational, media, voice assistants, ringtone)"));
+  CHECK_EQ(field(d.fields, "TMAP role"), std::string("0x002a (call terminal, unicast media receiver, broadcast media receiver)"));
+  CHECK_EQ(field(d.fields, "Appearance"), std::string("0x0942 (wearable audio device)"));
+  CHECK_EQ(field(d.fields, "Manufacturer data"), std::string("company 0x005d (Realtek), 020100"));
+  CHECK(no_blob(d.fields));
+  // Scanning: two PHYs, each with its own parameters.
+  d = cmd("41200d00010500600018000020014800");
+  CHECK_EQ(d.summary, std::string("LE Set Extended Scan Parameters passive"));
+  CHECK_EQ(field(d.fields, "Scanning PHYs"), std::string("0x05 (LE 1M, LE Coded)"));
+  CHECK_EQ(field(d.fields, "Filter policy"), std::string("0x01 (accept list only)"));
+  CHECK(no_blob(d.fields));
+  // The rest built per spec (no capture had them): periodic sync, its report with a BASE, BIGInfo.
+  d = cmd("44200e0000016655443322c10000e80300");
+  CHECK_EQ(d.summary, std::string("LE Periodic Advertising Create Sync C1:22:33:44:55:66 SID 0"));
+  CHECK_EQ(field(d.fields, "Sync timeout"), std::string("10000.00 ms (0x3e8)"));
+  d = evt("3e100e00010000016655443322c1021000" "05");
+  CHECK_EQ(d.summary, std::string("LE Periodic Advertising Sync Established sync handle 1 C1:22:33:44:55:66 SID 0 interval 20.00 ms"));
+  CHECK_EQ(field(d.fields, "Clock accuracy"), std::string("0x05 (50 ppm)"));
+  d = evt("3e2e0f01007fc4ff002625165118409c0001010600000000100201080202010503030000000304640004030204000100");
+  CHECK_EQ(d.summary, std::string("LE Periodic Advertising Report sync handle 1 -60 dBm, 38 bytes BASE 1 BIS, LC3 48 kHz, 10 ms, "
+                                  "FL+FR, 100 octets, media"));
+  CHECK_EQ(field(d.fields, "Octets per codec frame"), std::string("100"));
+  d = evt("3e1422010002040800020002640010270064000200" "01");
+  CHECK_EQ(d.summary, std::string("LE BIGInfo Advertising Report sync handle 1, 2 BIS, ISO interval 10.00 ms, max SDU 100, encrypted"));
+  CHECK(no_blob(d.fields));
+}
+
+void test_hci_iso() {
+  // A unicast stream's group (the VIM3L towards the Realtek earbud): two CIS, then their handles.
+  auto d = cmd("622021004c1d004c1d0000000008000800020078003c00020202020100003c0002020002");
+  CHECK_EQ(d.summary, std::string("LE Set CIG Parameters CIG 0, 2 CIS"));
+  CHECK_EQ(field(d.fields, "SDU interval C to P"), std::string("7500 us"));
+  CHECK_EQ(field(d.fields, "Max SDU C to P"), std::string("120"));
+  CHECK_EQ(field(d.fields, "PHY C to P"), std::string("0x02 (LE 2M)"));
+  CHECK(no_blob(d.fields));
+  d = evt("0e0a01622000000200090109");
+  CHECK_EQ(d.summary, std::string("LE Set CIG Parameters complete CIG 0 CIS 2304,2305"));
+  // Its CIS once established, built per spec.
+  d = evt("3e1d19000009401f00401f00102700102700020203010101017800" "3c000600");
+  CHECK_EQ(d.summary, std::string("LE CIS Established handle 2304 ISO interval 7.50 ms, latency 10.0/10.0 ms"));
+  CHECK_EQ(field(d.fields, "CIG sync delay"), std::string("8000 us"));
+  CHECK_EQ(field(d.fields, "Max PDU P to C"), std::string("60"));
+  CHECK(no_blob(d.fields));
+  // A broadcast (the VIM3L's Auracast source): the BIG, its completion, the data path, the end.
+  d = cmd("68201f000101102700c8001400040200000000000000000000000000000000000000");
+  CHECK_EQ(d.summary, std::string("LE Create BIG BIG 0 adv set 1, 1 BIS"));
+  CHECK_EQ(field(d.fields, "Max transport latency"), std::string("20 ms"));
+  CHECK_EQ(field(d.fields, "RTN"), std::string("4"));
+  CHECK(no_blob(d.fields));
+  d = evt("3e151b0000d81f00e846000208020004c800100001000a");
+  CHECK_EQ(d.summary, std::string("LE Create BIG Complete BIG 0 BIS 2560, ISO interval 20.00 ms, latency 18.2 ms"));
+  CHECK_EQ(field(d.fields, "BIG sync delay"), std::string("8152 us"));
+  CHECK_EQ(field(d.fields, "IRC"), std::string("4"));
+  d = cmd("6e200d000a0000030000000000000000");
+  CHECK_EQ(d.summary, std::string("LE Setup ISO Data Path handle 2560 input HCI transparent"));
+  d = evt("0e06016e2000000a");
+  CHECK_EQ(d.summary, std::string("LE Setup ISO Data Path complete handle 2560"));
+  d = evt("3e031c0016");
+  CHECK_EQ(d.summary, std::string("LE Terminate BIG Complete BIG 0 reason 0x16 (Connection Terminated By Local Host)"));
+  // A receiver's side, built per spec: sync to two BIS, and the controller's answer.
+  d = cmd("6b201a00010000" + std::string(32, '0') + "00e803020102");
+  CHECK_EQ(d.summary, std::string("LE BIG Create Sync BIG 0 sync handle 1 BIS 1,2"));
+  d = evt("3e131d000010270004020002640008000200" "0a010a");
+  CHECK_EQ(d.summary, std::string("LE BIG Sync Established BIG 0 BIS 2560,2561, ISO interval 10.00 ms, latency 10.0 ms"));
+  // An ISO data packet: the boundary and the packet status in the tree.
+  d = run_mon(btb::hci::kMonIsoRx, "002a0c000100c8800102030405060708");
+  CHECK_EQ(d.summary, std::string("ISO seq 1, SDU 200 bytes (lost)"));
+  CHECK_EQ(field(d.fields, "Packet boundary"), std::string("2 (complete SDU)"));
+  CHECK_EQ(field(d.fields, "Packet status"), std::string("lost"));
+}
+
+void test_hci_controller() {
+  // The Intel BE200's answers at init: versions, features, codecs.
+  auto d = evt("0e0c010110000d23470d02002347");
+  CHECK_EQ(field(d.fields, "HCI version"), std::string("13 (Bluetooth 5.4, revision 0x4723)"));
+  CHECK_EQ(field(d.fields, "Manufacturer"), std::string("2 (Intel)"));
+  CHECK(no_blob(d.fields));
+  d = evt("0e0c01032000fff901ffbe000000");
+  CHECK(has(field(d.fields, "Features"), "CIS central, CIS peripheral, isochronous broadcaster, synchronized receiver"));
+  d = evt("0e23010d100007000201020202030e04020502060c03020000000102000200010600060004");
+  CHECK_EQ(field(d.fields, "Supported codecs"), std::string("7"));
+  CHECK_EQ(field(d.fields, "Vendor codec"), std::string("0x0002:0x0000 (Intel), 0x01 (BR/EDR ACL)"));
+  CHECK(no_blob(d.fields));
+  d = evt("0e0c01031000bffe0ffedbff7b87");
+  CHECK(has(field(d.fields, "Features"), "EDR ACL 2 Mb/s, EDR ACL 3 Mb/s"));
+  d = cmd("0e100706000000000200");
+  CHECK_EQ(d.summary, std::string("Read Local Supported Codec Capabilities LC3 (0x06)"));
+  CHECK_EQ(field(d.fields, "Transport"), std::string("0x02 (BR/EDR SCO)"));
+  // A connection's start: the enhanced LE connection, with the fields that used to stay bytes.
+  d = evt("3e1f0a000008000020002d15178400000000000000000000000018000000f40100");
+  CHECK_EQ(d.summary, std::string("LE Enhanced Connection Complete handle 2048 84:17:15:2D:00:20 (public) central interval 30.00 ms"));
+  CHECK_EQ(field(d.fields, "Central clock accuracy"), std::string("500 ppm"));
+  CHECK(no_blob(d.fields));
+  // Classic: the HFP eSCO set-up's codec, built per spec (mSBC over a transparent air mode).
+  d = cmd("3d043b0100401f0000401f0000030000000003000000003c003c00007d0000007d0000"
+          "050000000005000000001000100001010f0f0101101008000803" "02");
+  CHECK_EQ(d.summary, std::string("Enhanced Setup Synchronous Connection handle 1 transparent"));
+  CHECK_EQ(field(d.fields, "Input coding format"), std::string("mSBC (0x05)"));
+  CHECK_EQ(field(d.fields, "Retransmission effort"), std::string("0x02 (optimize for link quality)"));
+  CHECK(no_blob(d.fields));
+  // L2CAP's information responses: the bits by name.
+  d = run_mon(btb::hci::kMonAclRx, "0b0010000c0001000b01080002000000b8020000", btb::hci::kProtoL2cap, 1);
+  CHECK_EQ(field(d.fields, "Features"), std::string("0x000002b8 (enhanced retransmission, streaming, FCS option, fixed "
+                                                    "channels, unicast connectionless data)"));
+  d = run_mon(btb::hci::kMonAclRx, "0b001400100001000b020c00030000008600000000000000", btb::hci::kProtoL2cap, 1);
+  CHECK_EQ(field(d.fields, "Fixed channels"), std::string("8600000000000000 (L2CAP signalling, connectionless, BR/EDR "
+                                                          "security manager)"));
+}
+
 }  // namespace
 
 int main() {
@@ -236,5 +418,8 @@ int main() {
   test_avrcp_control();
   test_avrcp_browsing();
   test_sdp_rfcomm_obex();
+  test_hci_advertising();
+  test_hci_iso();
+  test_hci_controller();
   return report("test_hci_dissect");
 }

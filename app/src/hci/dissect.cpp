@@ -109,22 +109,29 @@ class Out {
   void close() {
     if (stack_.size() > 1) stack_.pop_back();
   }
+  // The furthest byte a field has covered since mark(): what a parameter block's decoder did not
+  // reach is shown as bytes after the fields (rest()), so a layout that ends early, or a newer
+  // spec's extra fields, still show. Kept in detail mode only, like the tree.
+  void mark(const uint8_t* p) { reach_ = p; }
+  const uint8_t* reach() const { return reach_; }
 
   const bool detail;
   std::string summary;
   json root = json::array();
 
  private:
-  json node(const std::string& name, const std::string& value, const uint8_t* p, size_t n) const {
+  json node(const std::string& name, const std::string& value, const uint8_t* p, size_t n) {
     json j{{"name", name}};
     if (!value.empty()) j["value"] = value;
     if (p && n) {
       j["off"] = p - base_;
       j["len"] = n;
+      if (p + n > reach_) reach_ = p + n;
     }
     return j;
   }
   const uint8_t* base_;
+  const uint8_t* reach_ = nullptr;
   std::vector<json*> stack_;
 };
 
@@ -139,6 +146,15 @@ class Out {
 #define CLOSE()                \
   do {                         \
     if (o.detail) o.close();   \
+  } while (0)
+// The same for a parameter reader (Rd) in a function without an Out of its own.
+#define OPEN_R(r, ...)                      \
+  do {                                      \
+    if ((r).o.detail) (r).o.open(__VA_ARGS__);  \
+  } while (0)
+#define CLOSE_R(r)                    \
+  do {                                \
+    if ((r).o.detail) (r).o.close();  \
   } while (0)
 
 // ---------------------------------------------------------------------------------------------
@@ -268,6 +284,8 @@ const char* cmd_name(uint16_t op) {
     case 0x0c7b: return "Read Authenticated Payload Timeout";
     case 0x0c7c: return "Write Authenticated Payload Timeout";
     case 0x0c7d: return "Read Local OOB Extended Data";
+    case 0x0c77: return "Read Synchronization Train Parameters";
+    case 0x0c83: return "Configure Data Path";
     // Informational
     case 0x1001: return "Read Local Version Information";
     case 0x1002: return "Read Local Supported Commands";
@@ -279,6 +297,9 @@ const char* cmd_name(uint16_t op) {
     case 0x100b: return "Read Local Supported Codecs";
     case 0x100c: return "Read Local Simple Pairing Options";
     case 0x100d: return "Read Local Supported Codecs v2";
+    case 0x100e: return "Read Local Supported Codec Capabilities";
+    case 0x100f: return "Read Local Supported Controller Delay";
+    case 0x140c: return "Get MWS Transport Layer Configuration";
     // Status
     case 0x1401: return "Read Failed Contact Counter";
     case 0x1402: return "Reset Failed Contact Counter";
@@ -360,8 +381,21 @@ const char* cmd_name(uint16_t op) {
     case 0x2044: return "LE Periodic Advertising Create Sync";
     case 0x2045: return "LE Periodic Advertising Create Sync Cancel";
     case 0x2046: return "LE Periodic Advertising Terminate Sync";
+    case 0x2047: return "LE Add Device To Periodic Advertiser List";
+    case 0x2048: return "LE Remove Device From Periodic Advertiser List";
+    case 0x2049: return "LE Clear Periodic Advertiser List";
+    case 0x204a: return "LE Read Periodic Advertiser List Size";
     case 0x204b: return "LE Read Transmit Power";
     case 0x204e: return "LE Set Privacy Mode";
+    case 0x204c: return "LE Read RF Path Compensation";
+    case 0x204d: return "LE Write RF Path Compensation";
+    case 0x2059: return "LE Set Periodic Advertising Receive Enable";
+    case 0x205a: return "LE Periodic Advertising Sync Transfer";
+    case 0x205b: return "LE Periodic Advertising Set Info Transfer";
+    case 0x205c: return "LE Set Periodic Advertising Sync Transfer Parameters";
+    case 0x205d: return "LE Set Default Periodic Advertising Sync Transfer Parameters";
+    case 0x205e: return "LE Generate DHKey v2";
+    case 0x205f: return "LE Modify Sleep Clock Accuracy";
     case 0x2060: return "LE Read Buffer Size v2";
     case 0x2061: return "LE Read ISO TX Sync";
     case 0x2062: return "LE Set CIG Parameters";
@@ -371,13 +405,34 @@ const char* cmd_name(uint16_t op) {
     case 0x2066: return "LE Accept CIS Request";
     case 0x2067: return "LE Reject CIS Request";
     case 0x2068: return "LE Create BIG";
+    case 0x2069: return "LE Create BIG Test";
     case 0x206a: return "LE Terminate BIG";
     case 0x206b: return "LE BIG Create Sync";
     case 0x206c: return "LE BIG Terminate Sync";
+    case 0x206d: return "LE Request Peer SCA";
     case 0x206e: return "LE Setup ISO Data Path";
     case 0x206f: return "LE Remove ISO Data Path";
     case 0x2074: return "LE Set Host Feature";
     case 0x2075: return "LE Read ISO Link Quality";
+    case 0x2070: return "LE ISO Transmit Test";
+    case 0x2071: return "LE ISO Receive Test";
+    case 0x2072: return "LE ISO Read Test Counters";
+    case 0x2073: return "LE ISO Test End";
+    case 0x2076: return "LE Enhanced Read Transmit Power Level";
+    case 0x2077: return "LE Read Remote Transmit Power Level";
+    case 0x2078: return "LE Set Path Loss Reporting Parameters";
+    case 0x2079: return "LE Set Path Loss Reporting Enable";
+    case 0x207a: return "LE Set Transmit Power Reporting Enable";
+    case 0x207b: return "LE Transmitter Test v4";
+    case 0x207c: return "LE Set Data Related Address Changes";
+    case 0x207d: return "LE Set Default Subrate";
+    case 0x207e: return "LE Subrate Request";
+    case 0x207f: return "LE Set Extended Advertising Parameters v2";
+    case 0x2082: return "LE Set Periodic Advertising Subevent Data";
+    case 0x2083: return "LE Set Periodic Advertising Response Data";
+    case 0x2084: return "LE Set Periodic Sync Subevent";
+    case 0x2085: return "LE Extended Create Connection v2";
+    case 0x2086: return "LE Set Periodic Advertising Parameters v2";
     default: return nullptr;
   }
 }
@@ -477,7 +532,20 @@ const char* le_sub_name(uint8_t s) {
     case 0x1c: return "LE Terminate BIG Complete";
     case 0x1d: return "LE BIG Sync Established";
     case 0x1e: return "LE BIG Sync Lost";
+    case 0x15: return "LE Connectionless IQ Report";
+    case 0x16: return "LE Connection IQ Report";
+    case 0x17: return "LE CTE Request Failed";
+    case 0x18: return "LE Periodic Advertising Sync Transfer Received";
+    case 0x1f: return "LE Request Peer SCA Complete";
+    case 0x20: return "LE Path Loss Threshold";
+    case 0x21: return "LE Transmit Power Reporting";
     case 0x22: return "LE BIGInfo Advertising Report";
+    case 0x23: return "LE Subrate Change";
+    case 0x24: return "LE Periodic Advertising Sync Established v2";
+    case 0x25: return "LE Periodic Advertising Report v2";
+    case 0x26: return "LE Periodic Advertising Sync Transfer Received v2";
+    case 0x27: return "LE Periodic Advertising Subevent Data Request";
+    case 0x28: return "LE Periodic Advertising Response Report";
     case 0x29: return "LE Enhanced Connection Complete v2";
     case 0x2a: return "LE CIS Established v2";
     default: return nullptr;
@@ -687,6 +755,11 @@ const char* uuid16_name(uint16_t u) {
     case 0x1854: return "Hearing Access";
     case 0x1855: return "Telephony and Media Audio";
     case 0x1856: return "Public Broadcast Announcement";
+    case 0x184b: return "Telephone Bearer";
+    case 0x184c: return "Generic Telephone Bearer";
+    case 0x1851: return "Basic Audio Announcement";
+    case 0x1852: return "Broadcast Audio Announcement";
+    case 0x1858: return "Gaming Audio";
     case 0x2800: return "Primary Service";
     case 0x2801: return "Secondary Service";
     case 0x2802: return "Include";
@@ -721,6 +794,65 @@ const char* uuid16_name(uint16_t u) {
     case 0x2b7d: return "Volume State";
     case 0x2b7e: return "Volume Control Point";
     case 0x2b7f: return "Volume Flags";
+    case 0x2ac9: return "Resolvable Private Address Only";
+    case 0x2b51: return "TMAP Role";
+    case 0x2b77: return "Audio Input State";
+    case 0x2b78: return "Gain Setting Attributes";
+    case 0x2b79: return "Audio Input Type";
+    case 0x2b7a: return "Audio Input Status";
+    case 0x2b7b: return "Audio Input Control Point";
+    case 0x2b7c: return "Audio Input Description";
+    case 0x2b80: return "Volume Offset State";
+    case 0x2b81: return "Audio Location";
+    case 0x2b82: return "Volume Offset Control Point";
+    case 0x2b83: return "Audio Output Description";
+    case 0x2b84: return "Set Identity Resolving Key";
+    case 0x2b85: return "Coordinated Set Size";
+    case 0x2b86: return "Set Member Lock";
+    case 0x2b87: return "Set Member Rank";
+    case 0x2b93: return "Media Player Name";
+    case 0x2b94: return "Media Player Icon Object ID";
+    case 0x2b95: return "Media Player Icon URL";
+    case 0x2b96: return "Track Changed";
+    case 0x2b97: return "Track Title";
+    case 0x2b98: return "Track Duration";
+    case 0x2b99: return "Track Position";
+    case 0x2b9a: return "Playback Speed";
+    case 0x2b9b: return "Seeking Speed";
+    case 0x2b9c: return "Current Track Segments Object ID";
+    case 0x2b9d: return "Current Track Object ID";
+    case 0x2b9e: return "Next Track Object ID";
+    case 0x2b9f: return "Parent Group Object ID";
+    case 0x2ba0: return "Current Group Object ID";
+    case 0x2ba1: return "Playing Order";
+    case 0x2ba2: return "Playing Orders Supported";
+    case 0x2ba3: return "Media State";
+    case 0x2ba4: return "Media Control Point";
+    case 0x2ba5: return "Media Control Point Opcodes Supported";
+    case 0x2ba6: return "Search Results Object ID";
+    case 0x2ba7: return "Search Control Point";
+    case 0x2bb3: return "Bearer Provider Name";
+    case 0x2bb4: return "Bearer UCI";
+    case 0x2bb5: return "Bearer Technology";
+    case 0x2bb6: return "Bearer URI Schemes Supported";
+    case 0x2bb7: return "Bearer Signal Strength";
+    case 0x2bb8: return "Bearer Signal Strength Reporting Interval";
+    case 0x2bb9: return "Bearer List Current Calls";
+    case 0x2bba: return "Content Control ID";
+    case 0x2bbb: return "Status Flags";
+    case 0x2bbc: return "Incoming Call Target Bearer URI";
+    case 0x2bbd: return "Call State";
+    case 0x2bbe: return "Call Control Point";
+    case 0x2bbf: return "Call Control Point Optional Opcodes";
+    case 0x2bc0: return "Termination Reason";
+    case 0x2bc1: return "Incoming Call";
+    case 0x2bc2: return "Call Friendly Name";
+    case 0x2bc3: return "Mute";
+    case 0x2bc7: return "Broadcast Audio Scan Control Point";
+    case 0x2bc8: return "Broadcast Receive State";
+    case 0x2bda: return "Hearing Aid Features";
+    case 0x2bdb: return "Hearing Aid Preset Control Point";
+    case 0x2bdc: return "Active Preset Index";
     case 0x2bc4: return "Sink ASE";
     case 0x2bc5: return "Source ASE";
     case 0x2bc6: return "ASE Control Point";
@@ -757,6 +889,152 @@ const char* addr_type_name(uint8_t t) {
     case 0x02: return "public identity";
     case 0x03: return "random identity";
     default: return "unknown";
+  }
+}
+
+// The address a controller uses for itself (Own_Address_Type): 2 and 3 ask it to resolve.
+const char* own_addr_type_name(uint8_t t) {
+  switch (t) {
+    case 0x00: return "public";
+    case 0x01: return "random";
+    case 0x02: return "RPA, else public";
+    case 0x03: return "RPA, else random";
+    default: return "unknown";
+  }
+}
+
+const char* phy_name(uint8_t p) {
+  switch (p) {
+    case 0x01: return "LE 1M";
+    case 0x02: return "LE 2M";
+    case 0x03: return "LE Coded";
+    case 0x04: return "LE Coded S=2";  // secondary advertising PHY options of v2 commands
+    default: return "?";
+  }
+}
+
+// The set bits of v by name, unknown ones as "bit N": "connectable, scannable, legacy".
+std::string bit_names(uint64_t v, const char* const* names, size_t count) {
+  std::string s;
+  for (unsigned b = 0; b < 64; ++b) {
+    if (!(v >> b & 1)) continue;
+    if (!s.empty()) s += ", ";
+    s += b < count && names[b] ? std::string(names[b]) : sf("bit %u", b);
+  }
+  return s.empty() ? "none" : s;
+}
+
+const char* const kPhyBits[] = {"LE 1M", "LE 2M", "LE Coded"};
+std::string phys_str(uint8_t v) { return sf("0x%02x (%s)", v, bit_names(v, kPhyBits, 3).c_str()); }
+
+// A cursor over a parameter block, for layouts read field by field: each call puts one field in
+// the tree (formatting it only in detail mode) and returns its value, 0 past the end. Most HCI
+// parameters are fixed layouts of small integers, so this keeps each one to a line per field.
+class Rd {
+ public:
+  Rd(Out& o, const uint8_t* p, size_t n) : o(o), p_(p), n_(n) {}
+  bool has(size_t k) const { return at_ + k <= n_; }
+  size_t left() const { return at_ < n_ ? n_ - at_ : 0; }
+  const uint8_t* cur() const { return p_ + at_; }
+  void skip(size_t k) { at_ = std::min(n_, at_ + k); }
+
+  uint32_t raw(size_t k) const {
+    if (!has(k)) return 0;
+    uint32_t v = 0;
+    for (size_t i = 0; i < k; ++i) v |= static_cast<uint32_t>(p_[at_ + i]) << (8 * i);
+    return v;
+  }
+  // An integer of k bytes; fmt formats it (printf with one unsigned argument).
+  uint32_t num(const char* name, size_t k, const char* fmt = "%u") {
+    if (!has(k)) return skip(k), 0;
+    const uint32_t v = raw(k);
+    if (o.detail) o.add(name, sf(fmt, v), cur(), k);
+    at_ += k;
+    return v;
+  }
+  uint8_t u8(const char* name, const char* fmt = "%u") { return static_cast<uint8_t>(num(name, 1, fmt)); }
+  uint16_t u16(const char* name, const char* fmt = "%u") { return static_cast<uint16_t>(num(name, 2, fmt)); }
+  uint32_t u24(const char* name, const char* fmt = "%u") { return num(name, 3, fmt); }
+  uint32_t u32(const char* name, const char* fmt = "%u") { return num(name, 4, fmt); }
+  // A value with a text of its own: v is the integer, text its rendering.
+  template <typename Fn>
+  uint32_t with(const char* name, size_t k, Fn text) {
+    if (!has(k)) return skip(k), 0;
+    const uint32_t v = raw(k);
+    if (o.detail) o.add(name, text(v), cur(), k);
+    at_ += k;
+    return v;
+  }
+  // A number from a table of names: "0x02 (LE 2M)".
+  template <typename Fn>
+  uint32_t named(const char* name, size_t k, Fn fn) {
+    return with(name, k, [&](uint32_t v) { return sf(k == 1 ? "0x%02x (%s)" : k == 2 ? "0x%04x (%s)" : "0x%06x (%s)", v, fn(v)); });
+  }
+  // Bit flags: "0x0013 (connectable, scannable, legacy)".
+  uint32_t flags(const char* name, size_t k, const char* const* names, size_t count) {
+    return with(name, k, [&](uint32_t v) {
+      return sf(k == 1 ? "0x%02x" : k == 2 ? "0x%04x" : k == 3 ? "0x%06x" : "0x%08x", v) + " (" + bit_names(v, names, count) + ")";
+    });
+  }
+  // A time in units of unit_ms: "20.00 ms (0x0010)".
+  uint32_t time(const char* name, size_t k, double unit_ms) {
+    return with(name, k, [&](uint32_t v) { return sf("%.2f ms (0x%x)", v * unit_ms, v); });
+  }
+  int8_t dbm(const char* name) {
+    return static_cast<int8_t>(with(name, 1, [](uint32_t v) {
+      return v == 0x7f ? std::string("not available (0x7f)") : sf("%d dBm", static_cast<int8_t>(v));
+    }));
+  }
+  uint16_t handle(const char* name = "Handle") {
+    return static_cast<uint16_t>(with(name, 2, [](uint32_t v) { return std::to_string(v & 0x0fff); }) & 0x0fff);
+  }
+  uint8_t status(const char* name = "Status") {
+    return static_cast<uint8_t>(with(name, 1, [](uint32_t v) { return status_str(static_cast<uint8_t>(v)); }));
+  }
+  uint8_t yes_no(const char* name, const char* on = "enabled", const char* off = "disabled") {
+    return static_cast<uint8_t>(with(name, 1, [&](uint32_t v) { return sf("%s (0x%02x)", v ? on : off, v); }));
+  }
+  uint8_t atype(const char* name = "Address type") {
+    return static_cast<uint8_t>(with(name, 1, [](uint32_t v) { return std::string(addr_type_name(static_cast<uint8_t>(v))); }));
+  }
+  uint8_t own_atype(const char* name = "Own address type") {
+    return static_cast<uint8_t>(with(name, 1, [](uint32_t v) { return std::string(own_addr_type_name(static_cast<uint8_t>(v))); }));
+  }
+  uint8_t phy(const char* name) { return static_cast<uint8_t>(named(name, 1, [](uint32_t v) { return phy_name(static_cast<uint8_t>(v)); })); }
+  uint8_t phys(const char* name) { return static_cast<uint8_t>(with(name, 1, [](uint32_t v) { return phys_str(static_cast<uint8_t>(v)); })); }
+  // A BD_ADDR; returns it as text (empty past the end).
+  std::string addr(const char* name = "Address") {
+    if (!has(6)) return skip(6), std::string();
+    const std::string a = bdaddr_str(cur());
+    if (o.detail) o.add(name, a, cur(), 6);
+    at_ += 6;
+    return a;
+  }
+  void hex(const char* name, size_t k) {
+    k = std::min(k, left());
+    if (k && o.detail) o.add(name, hexbytes(cur(), k, 64), cur(), k);
+    at_ += k;
+  }
+
+  Out& o;
+
+ private:
+  const uint8_t* p_;
+  size_t n_;
+  size_t at_ = 0;
+};
+
+// The bytes of [p, p + n) no field covered since o.mark(): all of them as `name` when nothing
+// was decoded (a command without a layout here), else the undecoded tail.
+void rest(Out& o, const uint8_t* p, size_t n, const char* name = "Parameters") {
+  if (!o.detail || !n) return;
+  const uint8_t* end = p + n;
+  const uint8_t* r = o.reach();
+  if (r && r >= end) return;
+  if (!r || r <= p) {
+    o.add(name, hexbytes(p, n, 64), p, n);
+  } else {
+    o.add("Undecoded", hexbytes(r, static_cast<size_t>(end - r), 64), r, static_cast<size_t>(end - r));
   }
 }
 
@@ -958,93 +1236,6 @@ std::string cid_str(uint16_t cid) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Advertising / EIR data: AD structures of { length, type, data }.
-
-const char* ad_type_name(uint8_t t) {
-  switch (t) {
-    case 0x01: return "Flags";
-    case 0x02: return "16-bit UUIDs (incomplete)";
-    case 0x03: return "16-bit UUIDs";
-    case 0x04: return "32-bit UUIDs (incomplete)";
-    case 0x05: return "32-bit UUIDs";
-    case 0x06: return "128-bit UUIDs (incomplete)";
-    case 0x07: return "128-bit UUIDs";
-    case 0x08: return "Short name";
-    case 0x09: return "Name";
-    case 0x0a: return "TX power";
-    case 0x0d: return "Class of device";
-    case 0x10: return "Device ID";
-    case 0x14: return "16-bit solicitation UUIDs";
-    case 0x16: return "Service data (16-bit UUID)";
-    case 0x19: return "Appearance";
-    case 0x1b: return "LE device address";
-    case 0x20: return "Service data (32-bit UUID)";
-    case 0x21: return "Service data (128-bit UUID)";
-    case 0x24: return "URI";
-    case 0x30: return "Broadcast name";
-    case 0xff: return "Manufacturer data";
-    default: return nullptr;
-  }
-}
-
-// Returns the local name, if the data carries one; in detail mode lists every structure.
-std::string ad_data(Out& o, const uint8_t* p, size_t n) {
-  std::string name;
-  while (n >= 2) {
-    const size_t l = p[0];
-    if (l == 0) break;  // EIR is zero-padded to 240 bytes
-    if (l + 1 > n) break;
-    const uint8_t t = p[1];
-    const uint8_t* v = p + 2;
-    const size_t vn = l - 1;
-    if ((t == 0x08 || t == 0x09 || t == 0x30) && (name.empty() || t == 0x09)) {
-      name = printable(v, vn, 40);
-    }
-    if (o.detail) {
-      const char* tn = ad_type_name(t);
-      std::string val;
-      switch (t) {
-        case 0x02:
-        case 0x03:
-        case 0x14:
-          for (size_t i = 0; i + 1 < vn; i += 2) val += (val.empty() ? "" : ", ") + uuid_str(v + i, 2);
-          break;
-        case 0x06:
-        case 0x07:
-          for (size_t i = 0; i + 15 < vn; i += 16) val += (val.empty() ? "" : ", ") + uuid_str(v + i, 16);
-          break;
-        case 0x08:
-        case 0x09:
-        case 0x30:
-          val = "\"" + printable(v, vn) + "\"";
-          break;
-        case 0x0a:
-          if (vn >= 1) val = sf("%d dBm", static_cast<int8_t>(v[0]));
-          break;
-        case 0x01:
-          if (vn >= 1) val = sf("0x%02x", v[0]);
-          break;
-        case 0x19:
-          if (vn >= 2) val = sf("0x%04x", le16(v));
-          break;
-        case 0xff:
-          if (vn >= 2) val = sf("company 0x%04x, ", le16(v)) + hexbytes(v + 2, vn - 2);
-          break;
-        case 0x16:
-          if (vn >= 2) val = uuid_str(v, 2) + ": " + hexbytes(v + 2, vn - 2);
-          break;
-        default:
-          val = hexbytes(v, vn);
-      }
-      o.add(tn ? tn : sf("AD type 0x%02x", t), val, p, l + 1);
-    }
-    p += l + 1;
-    n -= l + 1;
-  }
-  return name;
-}
-
-// ---------------------------------------------------------------------------------------------
 // HCI commands
 
 // Class of Device (Assigned Numbers 2.8): the major device class and its service classes.
@@ -1062,6 +1253,739 @@ std::string cod_str(uint32_t c) {
   return s;
 }
 
+// LMP feature bits (Core Vol 2 Part C 3.3), per page of Read Local/Remote (Extended) Features.
+const char* const kLmpFeatures0[64] = {
+    "3-slot packets", "5-slot packets", "encryption", "slot offset", "timing accuracy", "role switch",
+    "hold mode", "sniff mode", "previously used", "power control requests", "CQDDR", "SCO link",
+    "HV2 packets", "HV3 packets", "u-law log", "A-law log", "CVSD", "paging parameter negotiation",
+    "power control", "transparent SCO data", "flow control lag (lsb)", "flow control lag (middle)",
+    "flow control lag (msb)", "broadcast encryption", nullptr, "EDR ACL 2 Mb/s", "EDR ACL 3 Mb/s",
+    "enhanced inquiry scan", "interlaced inquiry scan", "interlaced page scan", "RSSI with inquiry results",
+    "eSCO EV3", "EV4 packets", "EV5 packets", nullptr, "AFH capable peripheral", "AFH classification peripheral",
+    "BR/EDR not supported", "LE supported (controller)", "3-slot EDR ACL", "5-slot EDR ACL", "sniff subrating",
+    "pause encryption", "AFH capable central", "AFH classification central", "EDR eSCO 2 Mb/s",
+    "EDR eSCO 3 Mb/s", "3-slot EDR eSCO", "extended inquiry response", "simultaneous LE and BR/EDR (controller)",
+    nullptr, "secure simple pairing (controller)", "encapsulated PDU", "erroneous data reporting",
+    "non-flushable packet boundary flag", nullptr, "link supervision timeout changed event",
+    "variable inquiry TX power level", "enhanced power control", nullptr, nullptr, nullptr, nullptr,
+    "extended features"};
+const char* const kLmpFeatures1[] = {"secure simple pairing (host)", "LE supported (host)",
+                                     "simultaneous LE and BR/EDR (host)", "secure connections (host)"};
+const char* const kLmpFeatures2[] = {
+    "connectionless peripheral broadcast central", "connectionless peripheral broadcast peripheral",
+    "synchronization train", "synchronization scan", "inquiry response notification event",
+    "generalized interlaced scan", "coarse clock adjustment", nullptr, "secure connections (controller)",
+    "ping", "slot availability mask", "train nudging"};
+
+std::string lmp_features_str(const uint8_t* p, unsigned page) {
+  uint64_t v = 0;
+  for (int i = 7; i >= 0; --i) v = v << 8 | p[i];
+  if (page == 0) return bit_names(v, kLmpFeatures0, 64);
+  if (page == 1) return bit_names(v, kLmpFeatures1, 4);
+  if (page == 2) return bit_names(v, kLmpFeatures2, 12);
+  return hexbytes(p, 8);
+}
+
+// LE link layer feature bits (Core Vol 6 Part B 4.6), which also number LE Set Host Feature's bit.
+const char* const kLeFeatures[] = {
+    "LE encryption", "connection parameters request", "extended reject indication",
+    "peripheral-initiated features exchange", "LE ping", "data packet length extension", "LL privacy",
+    "extended scanner filter policies", "LE 2M PHY", "stable modulation index TX", "stable modulation index RX",
+    "LE Coded PHY", "extended advertising", "periodic advertising", "channel selection algorithm #2",
+    "power class 1", "minimum number of used channels", "connection CTE request", "connection CTE response",
+    "connectionless CTE TX", "connectionless CTE RX", "AoD", "AoA", "receiving CTE",
+    "periodic advertising sync transfer sender", "periodic advertising sync transfer recipient",
+    "sleep clock accuracy updates", "remote public key validation", "CIS central", "CIS peripheral",
+    "isochronous broadcaster", "synchronized receiver", "CIS (host support)", "power control request",
+    "power control request (2)", "path loss monitoring", "periodic advertising ADI", "connection subrating",
+    "connection subrating (host support)", "channel classification", "advertising coding selection",
+    "advertising coding selection (host support)", "decision-based advertising filtering",
+    "periodic advertising with responses advertiser", "periodic advertising with responses scanner",
+    "unsegmented framed mode", "channel sounding", "channel sounding (host support)",
+    "channel sounding tone quality indication"};
+constexpr size_t kLeFeatureCount = sizeof kLeFeatures / sizeof *kLeFeatures;
+
+std::string le_features_str(const uint8_t* p) {
+  uint64_t v = 0;
+  for (int i = 7; i >= 0; --i) v = v << 8 | p[i];
+  return bit_names(v, kLeFeatures, kLeFeatureCount);
+}
+
+// The Bluetooth version an HCI or LMP version number stands for (Assigned Numbers 2.1).
+const char* bt_version_name(uint8_t v) {
+  static const char* const names[] = {"1.0b", "1.1", "1.2", "2.0", "2.1", "3.0", "4.0", "4.1",
+                                      "4.2",  "5.0", "5.1", "5.2", "5.3", "5.4", "6.0", "6.1"};
+  return v < sizeof names / sizeof *names ? names[v] : "?";
+}
+
+std::string company_str(uint16_t c) {
+  const char* n = company_name(c);
+  return n ? sf("%u (%s)", c, n) : std::to_string(c);
+}
+
+// Coding formats (Assigned Numbers 2.11): HCI codec IDs, LE Audio's codec IDs.
+const char* coding_format_name(uint8_t f) {
+  switch (f) {
+    case 0x00: return "u-law log";
+    case 0x01: return "A-law log";
+    case 0x02: return "CVSD";
+    case 0x03: return "transparent";
+    case 0x04: return "linear PCM";
+    case 0x05: return "mSBC";
+    case 0x06: return "LC3";
+    case 0x07: return "G.729A";
+    case 0x08: return "LC3plus";
+    case 0xff: return "vendor";
+    default: return "?";
+  }
+}
+
+// A codec ID (coding format, company, vendor codec ID): "LC3 (0x06)", "vendor 0x0075:0x0001 (Samsung)".
+std::string codec_id_str(const uint8_t* p) {
+  if (p[0] != 0xff) return sf("%s (0x%02x)", coding_format_name(p[0]), p[0]);
+  const char* c = company_name(le16(p + 1));
+  return sf("vendor 0x%04x:0x%04x", le16(p + 1), le16(p + 3)) + (c ? std::string(" (") + c + ")" : "");
+}
+
+const char* const kAdvProps[] = {"connectable", "scannable", "directed", "high duty cycle directed",
+                                 "legacy", "anonymous", "include TX power"};
+const char* const kAdvChannels[] = {"37", "38", "39"};
+const char* const kLinkPolicy[] = {"role switch", "hold mode", "sniff mode", "park state"};
+// ACL packet types: the 2-DH and 3-DH bits say "may not be used".
+const char* const kAclPacketTypes[] = {nullptr, "no 2-DH1", "no 3-DH1", "DM1", "DH1", nullptr, nullptr, nullptr,
+                                       "no 2-DH3", "no 3-DH3", "DM3", "DH3", "no 2-DH5", "no 3-DH5", "DM5", "DH5"};
+const char* const kSyncPacketTypes[] = {"HV1", "HV2", "HV3", "EV3", "EV4", "EV5",
+                                        "no 2-EV3", "no 3-EV3", "no 2-EV5", "no 3-EV5"};
+
+const char* adv_filter_name(uint32_t f) {
+  switch (f) {
+    case 0: return "any scan and connect request";
+    case 1: return "scan requests from the accept list";
+    case 2: return "connect requests from the accept list";
+    case 3: return "both from the accept list";
+    default: return "?";
+  }
+}
+const char* scan_filter_name(uint32_t f) {
+  switch (f) {
+    case 0: return "accept all";
+    case 1: return "accept list only";
+    case 2: return "accept all, directed to an RPA too";
+    case 3: return "accept list, directed to an RPA too";
+    default: return "?";
+  }
+}
+const char* adv_type_name(uint32_t t) {
+  switch (t) {
+    case 0: return "ADV_IND";
+    case 1: return "ADV_DIRECT_IND (high duty cycle)";
+    case 2: return "ADV_SCAN_IND";
+    case 3: return "ADV_NONCONN_IND";
+    case 4: return "ADV_DIRECT_IND (low duty cycle)";
+    default: return "?";
+  }
+}
+const char* adv_data_op_name(uint32_t op) {
+  switch (op) {
+    case 0: return "intermediate fragment";
+    case 1: return "first fragment";
+    case 2: return "last fragment";
+    case 3: return "complete data";
+    case 4: return "unchanged data (new DID)";
+    default: return "?";
+  }
+}
+// Sleep clock accuracy classes (Core Vol 4 Part E 7.7.65.25).
+const char* sca_name(uint32_t s) {
+  static const char* const names[] = {"251-500 ppm", "151-250 ppm", "101-150 ppm", "76-100 ppm",
+                                      "51-75 ppm",   "31-50 ppm",   "21-30 ppm",   "0-20 ppm"};
+  return s < 8 ? names[s] : "?";
+}
+const char* retrans_effort_name(uint32_t r) {
+  switch (r) {
+    case 0x00: return "no retransmissions";
+    case 0x01: return "optimize for power";
+    case 0x02: return "optimize for link quality";
+    case 0xff: return "don't care";
+    default: return "?";
+  }
+}
+const char* auth_req_name(uint32_t a) {
+  switch (a) {
+    case 0: return "no bonding";
+    case 1: return "no bonding, MITM";
+    case 2: return "dedicated bonding";
+    case 3: return "dedicated bonding, MITM";
+    case 4: return "general bonding";
+    case 5: return "general bonding, MITM";
+    default: return "?";
+  }
+}
+const char* oob_present_name(uint32_t v) {
+  switch (v) {
+    case 0: return "not present";
+    case 1: return "P-192";
+    case 2: return "P-256";
+    case 3: return "P-192 and P-256";
+    default: return "?";
+  }
+}
+const char* inquiry_mode_name(uint32_t m) {
+  switch (m) {
+    case 0: return "standard";
+    case 1: return "with RSSI";
+    case 2: return "with RSSI or extended";
+    default: return "?";
+  }
+}
+// The voice setting (Core Vol 4 Part E 6.12): the air coding and the host side's sample format.
+std::string voice_setting_str(uint32_t v) {
+  static const char* const air[] = {"CVSD", "u-law", "A-law", "transparent"};
+  static const char* const in[] = {"linear", "u-law", "A-law", "?"};
+  return sf("0x%04x (air coding %s, input %s %u-bit)", v, air[v & 3], in[(v >> 8) & 3], v & 0x20 ? 16 : 8);
+}
+const char* data_path_name(uint32_t id) { return id == 0 ? "HCI" : id == 0xff ? "disabled" : "vendor"; }
+const char* privacy_mode_name(uint32_t m) { return m == 0 ? "network" : m == 1 ? "device" : "?"; }
+const char* past_mode_name(uint32_t m) {
+  switch (m) {
+    case 0: return "no sync";
+    case 1: return "sync, reports disabled";
+    case 2: return "sync, reports enabled";
+    case 3: return "sync, reports with duplicate filtering";
+    default: return "?";
+  }
+}
+const char* const kPaSyncOptions[] = {"use periodic advertiser list", "reporting initially disabled",
+                                      "duplicate filtering initially enabled"};
+const char* const kPaReceiveEnable[] = {"reporting", "duplicate filtering"};
+const char* const kAddrChangeReasons[] = {"advertising data", "scan response data"};
+const char* const kCteTypes[] = {"no AoA CTE", "no AoD CTE 1 us", "no AoD CTE 2 us", "no type 3 CTE", "only with CTE"};
+
+const char* io_cap_name(uint8_t c);
+
+// ---------------------------------------------------------------------------------------------
+// LE Audio: the LTV structures of BAP (codec configuration and capabilities, metadata), audio
+// contexts and locations (Assigned Numbers 6.12, 6.4, 6.12.1). Advertising (BASE, announcements)
+// and ATT values (ASE states, PAC records, BASS) carry them.
+
+const char* const kAudioContexts[] = {"unspecified", "conversational", "media", "game", "instructional",
+                                      "voice assistants", "live", "sound effects", "notifications", "ringtone",
+                                      "alerts", "emergency alarm"};
+std::string contexts_str(uint16_t v) { return sf("0x%04x (%s)", v, bit_names(v, kAudioContexts, 12).c_str()); }
+
+const char* const kAudioLocations[] = {"FL",  "FR",  "FC",  "LFE1", "BL",  "BR",  "FLC", "FRC", "BC",  "LFE2",
+                                       "SL",  "SR",  "TFL", "TFR",  "TFC", "TC",  "TBL", "TBR", "TSL", "TSR",
+                                       "TBC", "BFC", "BFL", "BFR",  "FLW", "FRW", "LS",  "RS"};
+std::string locations_str(uint32_t v) {
+  return sf("0x%08x (%s)", v, v ? bit_names(v, kAudioLocations, 28).c_str() : "mono");
+}
+// The short form for summaries: "FL+FR", "mono".
+std::string locations_short(uint32_t v) {
+  if (!v) return "mono";
+  std::string s;
+  for (unsigned b = 0; b < 32; ++b)
+    if (v >> b & 1) s += (s.empty() ? "" : "+") + std::string(b < 28 ? kAudioLocations[b] : "?");
+  return s;
+}
+
+const char* lc3_freq_name(uint8_t f) {
+  static const char* const names[] = {"?", "8 kHz", "11.025 kHz", "16 kHz", "22.05 kHz", "24 kHz", "32 kHz",
+                                      "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "176.4 kHz", "192 kHz", "384 kHz"};
+  return f < sizeof names / sizeof *names ? names[f] : "?";
+}
+const char* const kLc3FreqBits[] = {"8", "11.025", "16", "22.05", "24", "32", "44.1", "48", "88.2", "96",
+                                    "176.4", "192", "384"};
+
+enum class Ltv { kCodecConfig, kCodecCaps, kMetadata };
+
+// One list of LTV structures ({length, type, value}): every one in the tree, by name with its
+// value; returns the words for a summary ("48 kHz, 10 ms, 100 octets, FL"). lc3: the codec is LC3
+// (Assigned Numbers 6.12.4/6.12.5 define the codec types for it; a vendor codec's are its own).
+std::string ltvs(Out& o, const uint8_t* p, size_t n, Ltv kind, bool lc3 = true) {
+  std::string sum;
+  auto add = [&](const std::string& w) { sum += (sum.empty() ? "" : ", ") + w; };
+  size_t at = 0;
+  while (at < n) {
+    const size_t l = p[at];
+    const uint8_t* e = p + at;
+    if (l == 0) {
+      ++at;
+      continue;
+    }
+    if (at + 1 + l > n) {
+      F("Truncated LTV", hexbytes(e, n - at), e, n - at);
+      break;
+    }
+    const uint8_t t = e[1];
+    const uint8_t* v = e + 2;
+    const size_t vn = l - 1;
+    std::string name, val;
+    if (kind == Ltv::kMetadata) {
+      switch (t) {
+        case 0x01:
+        case 0x02:
+          if (vn < 2) break;
+          name = t == 1 ? "Preferred audio contexts" : "Streaming audio contexts";
+          val = contexts_str(le16(v));
+          if (t == 2) add(bit_names(le16(v), kAudioContexts, 12));
+          break;
+        case 0x03: name = "Program info"; val = quoted(v, vn, 200); add(quoted(v, vn, 40)); break;
+        case 0x04: name = "Language"; val = quoted(v, vn, 8); add(printable(v, vn, 8)); break;
+        case 0x05:
+          name = "CCID list";
+          for (size_t i = 0; i < vn; ++i) val += sf("%s%u", i ? ", " : "", v[i]);
+          break;
+        case 0x06: if (vn >= 1) { name = "Parental rating"; val = v[0] ? sf("age %u+", (v[0] & 0x0f) + 3) : "no rating"; } break;
+        case 0x07: name = "Program info URI"; val = quoted(v, vn, 200); break;
+        case 0x08:
+          if (vn >= 1) {
+            static const char* const st[] = {"no audio data", "audio data", "?"};
+            name = "Audio active state";
+            val = st[std::min<unsigned>(v[0], 2)];
+          }
+          break;
+        case 0x09: name = "Broadcast audio immediate rendering"; val = "set"; break;
+        case 0x0a: if (vn >= 1) { name = "Assisted listening stream"; val = v[0] ? "assisted" : "unspecified"; } break;
+        case 0x0b: name = "Broadcast name"; val = quoted(v, vn, 200); add(quoted(v, vn, 40)); break;
+        case 0xfe: name = "Extended metadata"; val = hexbytes(v, vn); break;
+        case 0xff:
+          if (vn >= 2) {
+            const char* c = company_name(le16(v));
+            name = "Vendor metadata";
+            val = sf("company 0x%04x%s%s%s, ", le16(v), c ? " (" : "", c ? c : "", c ? ")" : "") + hexbytes(v + 2, vn - 2);
+          }
+          break;
+        default: break;
+      }
+    } else if (lc3 && kind == Ltv::kCodecConfig) {
+      switch (t) {
+        case 0x01: if (vn >= 1) { name = "Sampling frequency"; val = sf("0x%02x (%s)", v[0], lc3_freq_name(v[0])); add(lc3_freq_name(v[0])); } break;
+        case 0x02: if (vn >= 1) { name = "Frame duration"; val = v[0] == 0 ? "7.5 ms" : v[0] == 1 ? "10 ms" : "?"; add(val); } break;
+        case 0x03: if (vn >= 4) { name = "Audio channel allocation"; val = locations_str(le32(v)); add(locations_short(le32(v))); } break;
+        case 0x04: if (vn >= 2) { name = "Octets per codec frame"; val = std::to_string(le16(v)); add(sf("%u octets", le16(v))); } break;
+        case 0x05: if (vn >= 1) { name = "Codec frame blocks per SDU"; val = std::to_string(v[0]); } break;
+        default: break;
+      }
+    } else if (lc3) {  // capabilities
+      switch (t) {
+        case 0x01:
+          if (vn >= 2) {
+            name = "Supported sampling frequencies";
+            val = sf("0x%04x (%s kHz)", le16(v), bit_names(le16(v), kLc3FreqBits, 13).c_str());
+            add(bit_names(le16(v), kLc3FreqBits, 13) + " kHz");
+          }
+          break;
+        case 0x02:
+          if (vn >= 1) {
+            static const char* const d[] = {"7.5 ms", "10 ms", nullptr, nullptr, "7.5 ms preferred", "10 ms preferred"};
+            name = "Supported frame durations";
+            val = sf("0x%02x (%s)", v[0], bit_names(v[0], d, 6).c_str());
+          }
+          break;
+        case 0x03:
+          if (vn >= 1) {
+            name = "Supported audio channel counts";
+            for (unsigned b = 0; b < 8; ++b)
+              if (v[0] >> b & 1) val += sf("%s%u", val.empty() ? "" : ", ", b + 1);
+          }
+          break;
+        case 0x04:
+          if (vn >= 4) {
+            name = "Supported octets per codec frame";
+            val = sf("%u-%u", le16(v), le16(v + 2));
+            add(val + " octets");
+          }
+          break;
+        case 0x05: if (vn >= 1) { name = "Supported max codec frames per SDU"; val = std::to_string(v[0]); } break;
+        default: break;
+      }
+    }
+    if (o.detail) {
+      if (name.empty()) o.add(sf("LTV type 0x%02x", t), hexbytes(v, vn), e, l + 1);
+      else o.add(name, val, e, l + 1);
+    }
+    at += l + 1;
+  }
+  return sum;
+}
+
+// A codec ID, its configuration (or capabilities) and metadata, each a length then LTVs: the
+// shape PAC records, ASE states and BASE subgroups share. Returns the codec and its words.
+std::string codec_ltvs(Rd& r, Ltv kind, const char* len_name, const char* list_name) {
+  Out& o = r.o;
+  std::string sum;
+  if (!r.has(5)) return sum;
+  const uint8_t* id = r.cur();
+  r.with("Codec", 5, [&](uint32_t) { return codec_id_str(id); });
+  sum = id[0] == 0xff ? codec_id_str(id) : coding_format_name(id[0]);
+  const uint8_t l = r.u8(len_name);
+  if (l && r.has(1)) {
+    OPEN(list_name, "", r.cur(), std::min<size_t>(l, r.left()));
+    const std::string w = ltvs(o, r.cur(), std::min<size_t>(l, r.left()), kind, id[0] == 0x06);
+    CLOSE();
+    if (!w.empty()) sum += " " + w;
+    r.skip(l);
+  }
+  return sum;
+}
+
+void metadata(Rd& r, const char* len_name = "Metadata length", std::string* sum = nullptr) {
+  Out& o = r.o;
+  const uint8_t l = r.u8(len_name);
+  if (!l || !r.has(1)) return;
+  OPEN("Metadata", "", r.cur(), std::min<size_t>(l, r.left()));
+  const std::string w = ltvs(o, r.cur(), std::min<size_t>(l, r.left()), Ltv::kMetadata);
+  CLOSE();
+  if (sum && !w.empty()) *sum += (sum->empty() ? "" : ", ") + w;
+  r.skip(l);
+}
+
+// The Broadcast Audio Source Endpoint structure (BAP 3.7.2.2), the Basic Audio Announcement's
+// service data in periodic advertising: presentation delay, then subgroups of BISes with their
+// codec configuration. Returns "2 BIS, LC3 48 kHz, 10 ms, 100 octets".
+std::string base(Out& o, const uint8_t* p, size_t n) {
+  Rd r(o, p, n);
+  r.u24("Presentation delay", "%u us");
+  const uint8_t groups = r.u8("Subgroups");
+  unsigned bis_total = 0;
+  std::string first;
+  for (unsigned g = 0; g < groups && r.has(7); ++g) {
+    OPEN(sf("Subgroup %u", g), "", r.cur(), r.left());
+    const uint8_t k = r.u8("BISes");
+    bis_total += k;
+    const std::string c = codec_ltvs(r, Ltv::kCodecConfig, "Codec configuration length", "Codec configuration");
+    std::string meta;
+    metadata(r, "Metadata length", &meta);
+    if (g == 0) first = c + (meta.empty() ? "" : ", " + meta);
+    for (unsigned b = 0; b < k && r.has(2); ++b) {
+      const uint8_t* bp = r.cur();
+      OPEN(sf("BIS %u", bp[0]), "", bp, std::min<size_t>(2 + bp[1], r.left()));
+      r.u8("BIS index");
+      const uint8_t l = r.u8("Codec configuration length");
+      if (l && r.has(1)) {
+        const std::string w = ltvs(o, r.cur(), std::min<size_t>(l, r.left()), Ltv::kCodecConfig);
+        if (!w.empty() && g == 0 && b == 0) first += " (BIS: " + w + ")";
+        r.skip(l);
+      }
+      CLOSE();
+    }
+    CLOSE();
+  }
+  return sf("BASE %u BIS", bis_total) + (first.empty() ? "" : ", " + first);
+}
+
+// TMAP and GMAP roles (TMAP 4.7, GMAP 4.2), as their services advertise them.
+const char* const kTmapRoles[] = {"call gateway", "call terminal", "unicast media sender", "unicast media receiver",
+                                  "broadcast media sender", "broadcast media receiver"};
+const char* const kGmapRoles[] = {"unicast game gateway", "unicast game terminal", "broadcast game sender",
+                                  "broadcast game receiver"};
+
+bool le_audio_service_data(uint16_t uuid) {
+  return uuid == 0x1852 || uuid == 0x1851 || uuid == 0x184e || uuid == 0x1853 || uuid == 0x1856 || uuid == 0x1855 ||
+         uuid == 0x1858;
+}
+
+// The service data of the LE Audio services (BAP 3.5.3, 3.7.2.1, PBP 4.1, CAP 8.1, TMAP 4.7):
+// each field in the tree; returns the words for the summary ("Broadcast ID 0x34a656").
+std::string service_data16(Out& o, uint16_t uuid, const uint8_t* v, size_t n) {
+  Rd r(o, v, n);
+  switch (uuid) {
+    case 0x1852: {  // Broadcast Audio Announcement
+      const uint32_t id = r.u24("Broadcast ID", "0x%06x");
+      return n >= 3 ? sf("Broadcast ID 0x%06x", id) : std::string();
+    }
+    case 0x1851:  // Basic Audio Announcement
+      return base(o, v, n);
+    case 0x184e: {  // ASCS: a unicast server's announcement
+      const uint8_t t = r.with("Announcement type", 1, [](uint32_t x) { return std::string(x ? "targeted" : "general"); });
+      r.with("Available sink contexts", 2, [](uint32_t x) { return contexts_str(static_cast<uint16_t>(x)); });
+      r.with("Available source contexts", 2, [](uint32_t x) { return contexts_str(static_cast<uint16_t>(x)); });
+      metadata(r);
+      return n >= 1 ? std::string(t ? "ASCS targeted" : "ASCS general") : std::string();
+    }
+    case 0x1853: {  // CAS: a CAP acceptor's announcement
+      const uint8_t t = r.with("Announcement type", 1, [](uint32_t x) { return std::string(x ? "targeted" : "general"); });
+      return n >= 1 ? std::string(t ? "CAP targeted" : "CAP general") : std::string();
+    }
+    case 0x1856: {  // Public Broadcast Announcement
+      static const char* const f[] = {"encrypted", "standard quality", "high quality"};
+      const uint8_t feat = static_cast<uint8_t>(r.flags("Features", 1, f, 3));
+      std::string meta;
+      metadata(r, "Metadata length", &meta);
+      return n >= 1 ? "PBP " + bit_names(feat, f, 3) + (meta.empty() ? "" : ", " + meta) : std::string();
+    }
+    case 0x1855:  // TMAS
+      r.flags("TMAP role", 2, kTmapRoles, 6);
+      return {};
+    case 0x1858:  // GMAS
+      r.flags("GMAP role", 1, kGmapRoles, 4);
+      return {};
+    default:
+      return {};
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Advertising / EIR data: AD structures of { length, type, data }.
+
+const char* ad_type_name(uint8_t t) {
+  switch (t) {
+    case 0x01: return "Flags";
+    case 0x02: return "16-bit UUIDs (incomplete)";
+    case 0x03: return "16-bit UUIDs";
+    case 0x04: return "32-bit UUIDs (incomplete)";
+    case 0x05: return "32-bit UUIDs";
+    case 0x06: return "128-bit UUIDs (incomplete)";
+    case 0x07: return "128-bit UUIDs";
+    case 0x08: return "Short name";
+    case 0x09: return "Name";
+    case 0x0a: return "TX power";
+    case 0x0d: return "Class of device";
+    case 0x0e: return "Simple pairing hash C";
+    case 0x0f: return "Simple pairing randomizer R";
+    case 0x10: return "Device ID";
+    case 0x11: return "Security manager OOB flags";
+    case 0x12: return "Peripheral connection interval range";
+    case 0x14: return "16-bit solicitation UUIDs";
+    case 0x15: return "128-bit solicitation UUIDs";
+    case 0x16: return "Service data (16-bit UUID)";
+    case 0x17: return "Public target address";
+    case 0x18: return "Random target address";
+    case 0x19: return "Appearance";
+    case 0x1a: return "Advertising interval";
+    case 0x1b: return "LE device address";
+    case 0x1c: return "LE role";
+    case 0x1f: return "32-bit solicitation UUIDs";
+    case 0x20: return "Service data (32-bit UUID)";
+    case 0x21: return "Service data (128-bit UUID)";
+    case 0x24: return "URI";
+    case 0x27: return "LE supported features";
+    case 0x29: return "PB-ADV";
+    case 0x2a: return "Mesh message";
+    case 0x2b: return "Mesh beacon";
+    case 0x2c: return "BIGInfo";
+    case 0x2d: return "Broadcast code";
+    case 0x2e: return "Resolvable set identifier";
+    case 0x2f: return "Advertising interval (long)";
+    case 0x30: return "Broadcast name";
+    case 0x31: return "Encrypted advertising data";
+    case 0x32: return "Periodic advertising response timing";
+    case 0xff: return "Manufacturer data";
+    default: return nullptr;
+  }
+}
+
+// Appearance categories (Assigned Numbers 2.6.2), the upper ten bits.
+const char* appearance_name(uint16_t a) {
+  switch (a >> 6) {
+    case 0: return "unknown";
+    case 1: return "phone";
+    case 2: return "computer";
+    case 3: return "watch";
+    case 4: return "clock";
+    case 5: return "display";
+    case 6: return "remote control";
+    case 7: return "eye-glasses";
+    case 8: return "tag";
+    case 9: return "keyring";
+    case 10: return "media player";
+    case 11: return "barcode scanner";
+    case 12: return "thermometer";
+    case 13: return "heart rate sensor";
+    case 14: return "blood pressure";
+    case 15: return "human interface device";
+    case 16: return "glucose meter";
+    case 17: return "running walking sensor";
+    case 18: return "cycling";
+    case 19: return "control device";
+    case 20: return "network device";
+    case 21: return "sensor";
+    case 22: return "light fixtures";
+    case 31: return "light source";
+    case 33: return "audio sink";
+    case 34: return "audio source";
+    case 37: return "wearable audio device";
+    case 39: return "AV equipment";
+    case 40: return "display equipment";
+    case 41: return "hearing aid";
+    case 42: return "gaming";
+    default: return "?";
+  }
+}
+
+std::string cod_str(uint32_t c);
+
+// One AD structure's value in the tree: a leaf, or a node with the fields of an LE Audio service's
+// data. *info gets the words the summary shows besides the name (a Broadcast ID, a BASE).
+void ad_struct(Out& o, uint8_t t, const uint8_t* e, size_t el, std::string* info) {
+  const uint8_t* v = e + 2;
+  const size_t vn = el - 2;
+  const char* tn = ad_type_name(t);
+  const std::string name = tn ? tn : sf("AD type 0x%02x", t);
+  std::string val;
+  switch (t) {
+    case 0x01: {
+      static const char* const fl[] = {"LE limited discoverable", "LE general discoverable", "BR/EDR not supported",
+                                       "LE and BR/EDR (controller)", "LE and BR/EDR (host)"};
+      if (vn >= 1) val = sf("0x%02x (%s)", v[0], bit_names(v[0], fl, 5).c_str());
+      break;
+    }
+    case 0x02:
+    case 0x03:
+    case 0x14:
+      for (size_t i = 0; i + 1 < vn; i += 2) val += (val.empty() ? "" : ", ") + uuid_str(v + i, 2);
+      break;
+    case 0x04:
+    case 0x05:
+    case 0x1f:
+      for (size_t i = 0; i + 3 < vn; i += 4) val += (val.empty() ? "" : ", ") + uuid_str(v + i, 4);
+      break;
+    case 0x06:
+    case 0x07:
+    case 0x15:
+      for (size_t i = 0; i + 15 < vn; i += 16) val += (val.empty() ? "" : ", ") + uuid_str(v + i, 16);
+      break;
+    case 0x08:
+    case 0x09:
+    case 0x30:
+      val = "\"" + printable(v, vn) + "\"";
+      break;
+    case 0x0a:
+      if (vn >= 1) val = sf("%d dBm", static_cast<int8_t>(v[0]));
+      break;
+    case 0x0d:
+      if (vn >= 3) val = cod_str(le24(v));
+      break;
+    case 0x10:
+      if (vn >= 8) {
+        const char* c = le16(v) == 1 ? company_name(le16(v + 2)) : nullptr;
+        val = sf("%s vendor 0x%04x%s%s%s, product 0x%04x, version 0x%04x", le16(v) == 1 ? "Bluetooth SIG" : le16(v) == 2 ? "USB" : "?",
+                 le16(v + 2), c ? " (" : "", c ? c : "", c ? ")" : "", le16(v + 4), le16(v + 6));
+      }
+      break;
+    case 0x12:
+      if (vn >= 4) val = sf("%.2f-%.2f ms", le16(v) * 1.25, le16(v + 2) * 1.25);
+      break;
+    case 0x17:
+    case 0x18:
+      for (size_t i = 0; i + 5 < vn; i += 6) val += (val.empty() ? "" : ", ") + bdaddr_str(v + i);
+      break;
+    case 0x19:
+      if (vn >= 2) val = sf("0x%04x (%s)", le16(v), appearance_name(le16(v)));
+      break;
+    case 0x1a:
+      if (vn >= 2) val = sf("%.2f ms", le16(v) * 0.625);
+      break;
+    case 0x2f:
+      if (vn >= 3) val = sf("%.2f ms", (vn >= 4 ? le32(v) : le24(v)) * 0.625);
+      break;
+    case 0x1b:
+      if (vn >= 7) val = bdaddr_str(v) + (v[6] & 1 ? " (random)" : " (public)");
+      break;
+    case 0x1c: {
+      static const char* const roles[] = {"peripheral only", "central only", "both, peripheral preferred",
+                                          "both, central preferred"};
+      if (vn >= 1) val = v[0] < 4 ? roles[v[0]] : "?";
+      break;
+    }
+    case 0x24:
+      val = vn >= 1 ? sf("scheme 0x%02x ", v[0]) + quoted(v + 1, vn - 1, 200) : std::string();
+      break;
+    case 0x27:
+      if (vn >= 1) {
+        uint8_t f[8] = {};
+        std::memcpy(f, v, std::min<size_t>(vn, 8));
+        val = le_features_str(f);
+      }
+      break;
+    case 0xff:
+      if (vn >= 2) {
+        const char* c = company_name(le16(v));
+        val = sf("company 0x%04x%s%s%s, ", le16(v), c ? " (" : "", c ? c : "", c ? ")" : "") + hexbytes(v + 2, vn - 2);
+      }
+      break;
+    case 0x16:
+      if (vn >= 2) {
+        const uint16_t u = le16(v);
+        // LE Audio's announcements get a node of their own with every field; other services'
+        // data stays bytes.
+        if (le_audio_service_data(u)) {
+          OPEN(name, uuid_str(v, 2), e, el);
+          const std::string w = service_data16(o, u, v + 2, vn - 2);
+          rest(o, v + 2, vn - 2, "Data");
+          CLOSE();
+          if (info && !w.empty()) *info += (info->empty() ? "" : ", ") + w;
+          return;
+        }
+        val = uuid_str(v, 2) + (vn > 2 ? ": " + hexbytes(v + 2, vn - 2) : std::string());
+      }
+      break;
+    case 0x20:
+      if (vn >= 4) val = uuid_str(v, 4) + ": " + hexbytes(v + 4, vn - 4);
+      break;
+    case 0x21:
+      if (vn >= 16) val = uuid_str(v, 16) + ": " + hexbytes(v + 16, vn - 16);
+      break;
+    default:
+      val = hexbytes(v, vn);
+  }
+  o.add(name, val, e, el);
+}
+
+// Returns the local name, if the data carries one; in detail mode lists every structure. *info,
+// when given, gets what the LE Audio announcements say (Broadcast ID, the BASE's streams); the
+// summary pays for that only when the data has one.
+std::string ad_data(Out& o, const uint8_t* p, size_t n, std::string* info) {
+  std::string name;
+  while (n >= 2) {
+    const size_t l = p[0];
+    if (l == 0) break;  // EIR is zero-padded to 240 bytes
+    if (l + 1 > n) break;
+    const uint8_t t = p[1];
+    const uint8_t* v = p + 2;
+    const size_t vn = l - 1;
+    if ((t == 0x08 || t == 0x09 || t == 0x30) && (name.empty() || t == 0x09)) {
+      name = printable(v, vn, 40);
+    }
+    if (o.detail) {
+      ad_struct(o, t, p, l + 1, info);
+    } else if (info && t == 0x16 && vn >= 2 && le_audio_service_data(le16(v))) {
+      const std::string w = service_data16(o, le16(v), v + 2, vn - 2);
+      if (!w.empty()) *info += (info->empty() ? "" : ", ") + w;
+    }
+    p += l + 1;
+    n -= l + 1;
+  }
+  return name;
+}
+
+std::string ad_data(Out& o, const uint8_t* p, size_t n) { return ad_data(o, p, n, nullptr); }
+
+// The LE Extended Create Connection parameters of one initiating PHY.
+void ext_conn_phy(Rd& r, const char* phy) {
+  OPEN_R(r, phy, "", r.cur(), std::min<size_t>(16, r.left()));
+  r.time("Scan interval", 2, 0.625);
+  r.time("Scan window", 2, 0.625);
+  r.time("Min connection interval", 2, 1.25);
+  r.time("Max connection interval", 2, 1.25);
+  r.u16("Peripheral latency");
+  r.time("Supervision timeout", 2, 10);
+  r.time("Min CE length", 2, 0.625);
+  r.time("Max CE length", 2, 0.625);
+  CLOSE_R(r);
+}
+
+// The LE Extended Advertising/Scan Response Data, Periodic Advertising Data: AD structures, with
+// the LE Audio announcements decoded. Appends the name and what an announcement says to *s.
+void adv_data_block(Out& o, const uint8_t* p, size_t n, std::string* s) {
+  OPEN("Advertising data", sf("%zu bytes", n), p, n);
+  std::string info;
+  const std::string name = ad_data(o, p, n, &info);
+  CLOSE();
+  if (!name.empty()) *s += " \"" + name + "\"";
+  if (!info.empty()) *s += " " + info;
+}
+
 void hci_command(Out& o, const uint8_t* d, size_t len) {
   if (len < 3) {
     o.summary = "Command (truncated)";
@@ -1075,6 +1999,7 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
   OPEN("HCI Command", name, d, len);
   F("Opcode", sf("0x%04x (OGF 0x%02x, OCF 0x%03x) %s", op, op >> 10, op & 0x3ff, name.c_str()), d, 2);
   F("Parameter length", std::to_string(d[2]), d + 2, 1);
+  o.mark(p);
 
   std::string s = name;
   auto handle_field = [&](size_t at) {
@@ -1085,21 +2010,58 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
     }
     return std::string();
   };
+  Rd r(o, p, n);
 
   switch (op) {
+    case 0x0401:  // Inquiry
+    case 0x0403: {  // Periodic Inquiry Mode
+      if (op == 0x0403) {
+        r.time("Max period", 2, 1280);
+        r.time("Min period", 2, 1280);
+      }
+      r.u24("LAP", "0x%06x");
+      const uint8_t l = r.u8("Length", "%u (x 1.28 s)");
+      r.u8("Responses", "%u (0: unlimited)");
+      if (n >= 4) s += sf(" %.2f s", l * 1.28);
+      break;
+    }
     case 0x0405:  // Create Connection
+      s += " " + r.addr();
+      r.flags("Packet type", 2, kAclPacketTypes, 16);
+      r.u8("Page scan repetition mode", "R%u");
+      r.skip(1);
+      r.with("Clock offset", 2, [](uint32_t v) { return sf("0x%04x%s", v & 0x7fff, v & 0x8000 ? " (valid)" : ""); });
+      r.yes_no("Allow role switch", "yes", "no");
+      if (n < 6) s = name;
+      break;
     case 0x0419:  // Remote Name Request
+      s += " " + r.addr();
+      r.u8("Page scan repetition mode", "R%u");
+      r.skip(1);
+      r.with("Clock offset", 2, [](uint32_t v) { return sf("0x%04x%s", v & 0x7fff, v & 0x8000 ? " (valid)" : ""); });
+      if (n < 6) s = name;
+      break;
+    case 0x040b:  // Link Key Request Reply
+      s += " " + r.addr();
+      r.hex("Link key", 16);
+      if (n < 6) s = name;
+      break;
+    case 0x040d:  // PIN Code Request Reply
+      s += " " + r.addr();
+      r.u8("PIN length");
+      r.hex("PIN", 16);
+      if (n < 6) s = name;
+      break;
     case 0x0409:  // Accept Connection Request
     case 0x040a:  // Reject Connection Request
-    case 0x040b:
     case 0x040c:
-    case 0x040d:
     case 0x040e:
     case 0x042b:
     case 0x042c:
     case 0x042d:
     case 0x042e:
     case 0x042f:
+    case 0x0433:
     case 0x0434:
     case 0x080b:  // Switch Role
     case 0x0408:
@@ -1108,20 +2070,18 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         F("Address", bdaddr_str(p), p, 6);
         s += " " + bdaddr_str(p);
       }
-      if (op == 0x040a && n >= 7) {
+      if ((op == 0x040a || op == 0x0434) && n >= 7) {
         F("Reason", status_str(p[6]), p + 6, 1);
       } else if ((op == 0x0409 || op == 0x080b) && n >= 7) {
         F("Role", p[6] ? "peripheral" : "central", p + 6, 1);
         s += p[6] ? " (peripheral)" : " (central)";
       } else if (op == 0x042b && n >= 9) {
-        F("IO capability", std::to_string(p[6]), p + 6, 1);
-        F("OOB data", std::to_string(p[7]), p + 7, 1);
-        F("Authentication", sf("0x%02x", p[8]), p + 8, 1);
+        F("IO capability", sf("0x%02x (%s)", p[6], io_cap_name(p[6])), p + 6, 1);
+        F("OOB data", sf("0x%02x (%s)", p[7], oob_present_name(p[7])), p + 7, 1);
+        F("Authentication", sf("0x%02x (%s)", p[8], auth_req_name(p[8])), p + 8, 1);
+        s += std::string(" ") + io_cap_name(p[6]);
       } else if (op == 0x042e && n >= 10) {
         F("Passkey", sf("%06u", le32(p + 6)), p + 6, 4);
-      } else if (op == 0x0405 && n >= 13) {
-        F("Packet type", sf("0x%04x", le16(p + 6)), p + 6, 2);
-        F("Allow role switch", p[12] ? "yes" : "no", p + 12, 1);
       }
       break;
     case 0x0406:  // Disconnect
@@ -1131,12 +2091,74 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         s += sf(" reason 0x%02x", p[2]);
       }
       break;
+    case 0x040f:  // Change Connection Packet Type
+      s += sf(" handle %u", r.handle());
+      r.flags("Packet type", 2, kAclPacketTypes, 16);
+      break;
     case 0x0413:  // Set Connection Encryption
       s += handle_field(0);
       if (n >= 3) {
         F("Encryption", p[2] ? "on" : "off", p + 2, 1);
         s += p[2] ? " on" : " off";
       }
+      break;
+    case 0x041c:  // Read Remote Extended Features
+      s += sf(" handle %u", r.handle());
+      s += sf(" page %u", r.u8("Page"));
+      break;
+    case 0x0428:  // Setup Synchronous Connection
+    case 0x0429: {  // Accept Synchronous Connection Request
+      if (op == 0x0428) s += sf(" handle %u", r.handle());
+      else s += " " + r.addr();
+      r.u32("TX bandwidth", "%u bytes/s");
+      r.u32("RX bandwidth", "%u bytes/s");
+      r.with("Max latency", 2, [](uint32_t v) { return v == 0xffff ? std::string("don't care") : sf("%u ms", v); });
+      const uint16_t vs = static_cast<uint16_t>(r.with("Voice setting", 2, voice_setting_str));
+      r.named("Retransmission effort", 1, retrans_effort_name);
+      r.flags("Packet type", 2, kSyncPacketTypes, 10);
+      if (n >= 14) s += (vs & 3) == 3 ? " transparent" : " CVSD";
+      break;
+    }
+    case 0x042a:  // Reject Synchronous Connection Request
+      s += " " + r.addr();
+      r.status("Reason");
+      break;
+    case 0x043d:    // Enhanced Setup Synchronous Connection
+    case 0x043e: {  // Enhanced Accept Synchronous Connection Request
+      if (op == 0x043d) s += sf(" handle %u", r.handle());
+      else s += " " + r.addr();
+      r.u32("TX bandwidth", "%u bytes/s");
+      r.u32("RX bandwidth", "%u bytes/s");
+      const uint8_t air = r.has(5) ? r.cur()[0] : 0;
+      r.with("TX coding format", 5, [&](uint32_t) { return codec_id_str(r.cur()); });
+      r.with("RX coding format", 5, [&](uint32_t) { return codec_id_str(r.cur()); });
+      r.u16("TX codec frame size", "%u bytes");
+      r.u16("RX codec frame size", "%u bytes");
+      r.u32("Input bandwidth", "%u bytes/s");
+      r.u32("Output bandwidth", "%u bytes/s");
+      r.with("Input coding format", 5, [&](uint32_t) { return codec_id_str(r.cur()); });
+      r.with("Output coding format", 5, [&](uint32_t) { return codec_id_str(r.cur()); });
+      r.u16("Input coded data size", "%u bits");
+      r.u16("Output coded data size", "%u bits");
+      static const char* const pcm[] = {"n/a", "1's complement", "2's complement", "sign-magnitude", "unsigned"};
+      r.with("Input PCM data format", 1, [](uint32_t v) { return std::string(v < 5 ? pcm[v] : "?"); });
+      r.with("Output PCM data format", 1, [](uint32_t v) { return std::string(v < 5 ? pcm[v] : "?"); });
+      r.u8("Input PCM sample payload MSB position");
+      r.u8("Output PCM sample payload MSB position");
+      r.with("Input data path", 1, [](uint32_t v) { return sf("0x%02x (%s)", v, v ? "vendor" : "HCI"); });
+      r.with("Output data path", 1, [](uint32_t v) { return sf("0x%02x (%s)", v, v ? "vendor" : "HCI"); });
+      r.u8("Input transport unit size", "%u bits");
+      r.u8("Output transport unit size", "%u bits");
+      r.with("Max latency", 2, [](uint32_t v) { return v == 0xffff ? std::string("don't care") : sf("%u ms", v); });
+      r.flags("Packet type", 2, kSyncPacketTypes, 10);
+      r.named("Retransmission effort", 1, retrans_effort_name);
+      if (n >= 15) s += std::string(" ") + coding_format_name(air);
+      break;
+    }
+    case 0x0801:  // Hold Mode
+      s += sf(" handle %u", r.handle());
+      r.time("Max interval", 2, 0.625);
+      r.time("Min interval", 2, 0.625);
       break;
     case 0x0803:  // Sniff Mode
       s += handle_field(0);
@@ -1150,7 +2172,28 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
       break;
     case 0x080d:  // Write Link Policy Settings
       s += handle_field(0);
-      if (n >= 4) F("Policy", sf("0x%04x", le16(p + 2)), p + 2, 2);
+      if (n >= 4) F("Policy", sf("0x%04x (%s)", le16(p + 2), bit_names(le16(p + 2), kLinkPolicy, 4).c_str()), p + 2, 2);
+      break;
+    case 0x080f:  // Write Default Link Policy Settings
+      r.flags("Policy", 2, kLinkPolicy, 4);
+      break;
+    case 0x0811:  // Sniff Subrating
+      s += sf(" handle %u", r.handle());
+      r.time("Max latency", 2, 0.625);
+      r.time("Min remote timeout", 2, 0.625);
+      r.time("Min local timeout", 2, 0.625);
+      break;
+    case 0x0c01:  // Set Event Mask
+    case 0x0c63:  // Set Event Mask Page 2
+      r.hex("Mask", 8);
+      break;
+    case 0x0c0a:  // Write PIN Type
+      r.with("PIN type", 1, [](uint32_t v) { return std::string(v ? "fixed" : "variable"); });
+      break;
+    case 0x0c0d:  // Read Stored Link Key
+    case 0x0c12:  // Delete Stored Link Key
+      r.addr();
+      r.yes_no(op == 0x0c0d ? "Read all" : "Delete all", "yes", "no");
       break;
     case 0x0c13:  // Write Local Name
       if (n) {
@@ -1158,6 +2201,10 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         F("Name", "\"" + nm + "\"", p, n);
         s += " \"" + nm + "\"";
       }
+      break;
+    case 0x0c16:  // Write Connection Accept Timeout
+    case 0x0c18:  // Write Page Timeout
+      r.time("Timeout", 2, 0.625);
       break;
     case 0x0c1a:  // Write Scan Enable
       if (n >= 1) {
@@ -1167,12 +2214,70 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         s += std::string(" ") + m;
       }
       break;
+    case 0x0c1c:  // Write Page Scan Activity
+    case 0x0c1e:  // Write Inquiry Scan Activity
+      r.time("Interval", 2, 0.625);
+      r.time("Window", 2, 0.625);
+      break;
+    case 0x0c20:  // Write Authentication Enable
+      r.yes_no("Authentication");
+      break;
     case 0x0c24:  // Write Class of Device
       if (n >= 3) {
         F("Class", cod_str(le24(p)), p, 3);
         s += " " + cod_str(le24(p));
       }
       break;
+    case 0x0c26:  // Write Voice Setting
+      r.with("Voice setting", 2, voice_setting_str);
+      break;
+    case 0x0c28:  // Write Automatic Flush Timeout
+      s += sf(" handle %u", r.handle());
+      r.with("Timeout", 2, [](uint32_t v) { return v ? sf("%.2f ms (0x%04x)", v * 0.625, v) : std::string("infinite"); });
+      break;
+    case 0x0c2d:  // Read Transmit Power Level
+      s += sf(" handle %u", r.handle());
+      r.with("Type", 1, [](uint32_t v) { return std::string(v ? "maximum" : "current"); });
+      break;
+    case 0x0c31:  // Set Controller To Host Flow Control
+      r.with("Flow control", 1, [](uint32_t v) {
+        static const char* const m[] = {"off", "ACL on, SCO off", "ACL off, SCO on", "ACL and SCO on"};
+        return std::string(v < 4 ? m[v] : "?");
+      });
+      break;
+    case 0x0c33:  // Host Buffer Size
+      r.u16("ACL MTU");
+      r.u8("SCO MTU");
+      r.u16("ACL packets");
+      r.u16("SCO packets");
+      break;
+    case 0x0c35: {  // Host Number of Completed Packets
+      const uint8_t k = r.u8("Handles");
+      for (unsigned i = 0; i < k && r.has(4); ++i) {
+        const uint8_t* q = r.cur();
+        F(sf("Handle %u", le16(q) & 0x0fff), sf("%u packets", le16(q + 2)), q, 4);
+        r.skip(4);
+      }
+      break;
+    }
+    case 0x0c37:  // Write Link Supervision Timeout
+      s += sf(" handle %u", r.handle());
+      r.time("Timeout", 2, 0.625);
+      break;
+    case 0x0c3a: {  // Write Current IAC LAP
+      const uint8_t k = r.u8("Number of IACs");
+      for (unsigned i = 0; i < k && r.has(3); ++i) r.u24("IAC LAP", "0x%06x");
+      break;
+    }
+    case 0x0c43:  // Write Inquiry Scan Type
+    case 0x0c47:  // Write Page Scan Type
+      r.with("Type", 1, [](uint32_t v) { return std::string(v ? "interlaced" : "standard"); });
+      break;
+    case 0x0c45: {  // Write Inquiry Mode
+      const uint8_t m = static_cast<uint8_t>(r.named("Mode", 1, inquiry_mode_name));
+      if (n) s += std::string(" ") + inquiry_mode_name(m);
+      break;
+    }
     case 0x0c52:  // Write Extended Inquiry Response
       if (n >= 1) {
         F("FEC required", p[0] ? "yes" : "no", p, 1);
@@ -1182,15 +2287,81 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         if (!name.empty()) s += " \"" + name + "\"";
       }
       break;
+    case 0x0c59:  // Write Inquiry Transmit Power Level
+      r.dbm("TX power");
+      break;
+    case 0x0c5b:  // Write Default Erroneous Data Reporting
+      r.yes_no("Erroneous data reporting");
+      break;
+    case 0x0c5f:  // Enhanced Flush
+      s += sf(" handle %u", r.handle());
+      r.u8("Packet type", "%u (automatically flushable only)");
+      break;
+    case 0x0c6d:  // Write LE Host Supported
+      r.yes_no("LE supported (host)");
+      r.u8("Simultaneous LE and BR/EDR", "%u");
+      if (n) s += p[0] ? " on" : " off";
+      break;
+    case 0x0c7c:  // Write Authenticated Payload Timeout
+      s += sf(" handle %u", r.handle());
+      r.time("Timeout", 2, 10);
+      break;
     case 0x0c2f:  // Write Synchronous Flow Control Enable
     case 0x0c56:  // Write Simple Pairing Mode
     case 0x0c7a:
     case 0x200a:  // LE Set Advertising Enable
+    case 0x202d:  // LE Set Address Resolution Enable
       if (n >= 1) {
         F("Enable", p[0] ? "yes" : "no", p, 1);
         s += p[0] ? " on" : " off";
       }
       break;
+    case 0x1004:  // Read Local Extended Features
+      s += sf(" page %u", r.u8("Page"));
+      break;
+    case 0x100e:    // Read Local Supported Codec Capabilities
+    case 0x100f: {  // Read Local Supported Controller Delay
+      if (r.has(5)) s += " " + codec_id_str(r.cur());
+      r.with("Codec", 5, [&](uint32_t) { return codec_id_str(r.cur()); });
+      static const char* const tr[] = {"BR/EDR ACL", "BR/EDR SCO", "LE CIS", "LE BIS"};
+      r.with("Transport", 1, [](uint32_t v) { return sf("0x%02x (%s)", v, bit_names(v, tr, 4).c_str()); });
+      r.with("Direction", 1, [](uint32_t v) { return std::string(v ? "output (controller to host)" : "input (host to controller)"); });
+      if (op == 0x100f) r.hex("Codec configuration", r.u8("Codec configuration length"));
+      break;
+    }
+    case 0x2001:  // LE Set Event Mask
+      if (r.has(8)) {
+        uint64_t m = 0;
+        for (int i = 7; i >= 0; --i) m = m << 8 | p[i];
+        std::string ev;
+        for (unsigned b = 0; b < 64; ++b) {
+          if (!(m >> b & 1)) continue;
+          const char* nm = le_sub_name(static_cast<uint8_t>(b + 1));
+          ev += (ev.empty() ? "" : ", ") + (nm ? std::string(nm + 3) : sf("0x%02x", b + 1));
+        }
+        F("Mask", hexbytes(p, 8) + " (" + (ev.empty() ? "none" : ev) + ")", p, 8);
+      }
+      break;
+    case 0x2006:  // LE Set Advertising Parameters
+      r.time("Min interval", 2, 0.625);
+      r.time("Max interval", 2, 0.625);
+      s += std::string(" ") + adv_type_name(r.named("Type", 1, adv_type_name));
+      r.own_atype();
+      r.atype("Peer address type");
+      r.addr("Peer address");
+      r.flags("Channel map", 1, kAdvChannels, 3);
+      r.named("Filter policy", 1, adv_filter_name);
+      if (n < 5) s = name;
+      break;
+    case 0x2008:    // LE Set Advertising Data
+    case 0x2009: {  // LE Set Scan Response Data
+      const uint8_t l = r.u8("Data length");
+      if (r.has(1)) {
+        adv_data_block(o, r.cur(), std::min<size_t>(l, r.left()), &s);
+        r.skip(r.left());  // the rest of the 31 bytes is padding
+      }
+      break;
+    }
     case 0x200c:  // LE Set Scan Enable
       if (n >= 2) {
         F("Enable", p[0] ? "yes" : "no", p, 1);
@@ -1201,20 +2372,23 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
     case 0x2042:  // LE Set Extended Scan Enable
       if (n >= 6) {
         F("Enable", p[0] ? "yes" : "no", p, 1);
-        F("Filter duplicates", std::to_string(p[1]), p + 1, 1);
-        F("Duration", sf("%u ms", le16(p + 2) * 10), p + 2, 2);
-        F("Period", sf("%.2f s", le16(p + 4) * 1.28), p + 4, 2);
+        static const char* const dup[] = {"no", "yes", "yes, reset each period"};
+        F("Filter duplicates", sf("%u (%s)", p[1], p[1] < 3 ? dup[p[1]] : "?"), p + 1, 1);
+        F("Duration", le16(p + 2) ? sf("%u ms", le16(p + 2) * 10) : std::string("until disabled"), p + 2, 2);
+        F("Period", le16(p + 4) ? sf("%.2f s", le16(p + 4) * 1.28) : std::string("none"), p + 4, 2);
         s += p[0] ? " on" : " off";
       }
       break;
     case 0x2039:  // LE Set Extended Advertising Enable
       if (n >= 2) {
         F("Enable", p[0] ? "yes" : "no", p, 1);
-        F("Number of sets", std::to_string(p[1]), p + 1, 1);
+        F("Number of sets", p[1] ? std::to_string(p[1]) : std::string("0 (all)"), p + 1, 1);
         s += p[0] ? " on" : " off";
         for (size_t i = 0; i < p[1] && 2 + 4 * (i + 1) <= n; ++i) {
           const uint8_t* q = p + 2 + 4 * i;
-          F(sf("Set %zu", i), sf("handle %u, duration %u ms, max events %u", q[0], le16(q + 1) * 10, q[3]), q, 4);
+          F(sf("Set %zu", i), sf("handle %u, duration %s, max events %u", q[0],
+                                 le16(q + 1) ? sf("%u ms", le16(q + 1) * 10).c_str() : "none", q[3]), q, 4);
+          if (i < 4) s += sf("%s set %u", i ? "," : "", q[0]);
         }
       }
       break;
@@ -1223,8 +2397,8 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         F("Type", p[0] ? "active" : "passive", p, 1);
         F("Interval", sf("%.2f ms", le16(p + 1) * 0.625), p + 1, 2);
         F("Window", sf("%.2f ms", le16(p + 3) * 0.625), p + 3, 2);
-        F("Own address type", addr_type_name(p[5]), p + 5, 1);
-        F("Filter policy", std::to_string(p[6]), p + 6, 1);
+        F("Own address type", own_addr_type_name(p[5]), p + 5, 1);
+        F("Filter policy", sf("0x%02x (%s)", p[6], scan_filter_name(p[6])), p + 6, 1);
         s += p[0] ? " active" : " passive";
       }
       break;
@@ -1236,44 +2410,55 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
       break;
     case 0x2011:  // LE Add/Remove Device To/From Filter Accept List
     case 0x2012:
-      if (n >= 7) {
-        F("Address type", addr_type_name(p[0]), p, 1);
-        F("Address", bdaddr_str(p + 1), p + 1, 6);
-        s += " " + bdaddr_str(p + 1);
-      }
+    case 0x2028:  // LE Remove Device From Resolving List
+    case 0x2047:  // LE Add/Remove Device To/From Periodic Advertiser List
+    case 0x2048:
+      r.atype();
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr();
+      if (op >= 0x2047) r.u8("SID");
       break;
     case 0x2027:  // LE Add Device To Resolving List
-    case 0x2028:
-      if (n >= 7) {
-        F("Address type", addr_type_name(p[0]), p, 1);
-        F("Address", bdaddr_str(p + 1), p + 1, 6);
-        s += " " + bdaddr_str(p + 1);
-      }
+      r.atype();
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr();
+      r.hex("Peer IRK", 16);
+      r.hex("Local IRK", 16);
       break;
     case 0x200d:  // LE Create Connection
       if (n >= 25) {
         F("Scan interval", sf("%.2f ms", le16(p) * 0.625), p, 2);
         F("Scan window", sf("%.2f ms", le16(p + 2) * 0.625), p + 2, 2);
-        F("Filter policy", std::to_string(p[4]), p + 4, 1);
+        F("Filter policy", p[4] ? "accept list" : "peer address", p + 4, 1);
         F("Peer address type", addr_type_name(p[5]), p + 5, 1);
         F("Peer address", bdaddr_str(p + 6), p + 6, 6);
-        F("Own address type", addr_type_name(p[12]), p + 12, 1);
+        F("Own address type", own_addr_type_name(p[12]), p + 12, 1);
         F("Interval", sf("%.2f-%.2f ms", le16(p + 13) * 1.25, le16(p + 15) * 1.25), p + 13, 4);
         F("Latency", std::to_string(le16(p + 17)), p + 17, 2);
         F("Supervision timeout", sf("%u ms", le16(p + 19) * 10), p + 19, 2);
+        F("CE length", sf("%.2f-%.2f ms", le16(p + 21) * 0.625, le16(p + 23) * 0.625), p + 21, 4);
         s += p[4] ? " (accept list)" : " " + bdaddr_str(p + 6);
       }
       break;
-    case 0x2043:  // LE Extended Create Connection
-      if (n >= 10) {
-        F("Filter policy", std::to_string(p[0]), p, 1);
-        F("Own address type", addr_type_name(p[1]), p + 1, 1);
-        F("Peer address type", addr_type_name(p[2]), p + 2, 1);
-        F("Peer address", bdaddr_str(p + 3), p + 3, 6);
-        F("PHYs", sf("0x%02x", p[9]), p + 9, 1);
-        s += p[0] ? " (accept list)" : " " + bdaddr_str(p + 3);
+    case 0x2043:    // LE Extended Create Connection
+    case 0x2085: {  // LE Extended Create Connection v2
+      if (op == 0x2085) {
+        r.with("Advertising handle", 1, [](uint32_t v) { return v == 0xff ? std::string("none (0xff)") : std::to_string(v); });
+        r.with("Subevent", 1, [](uint32_t v) { return v == 0xff ? std::string("none (0xff)") : std::to_string(v); });
       }
+      const uint8_t* at = r.cur();
+      const uint8_t filter = static_cast<uint8_t>(r.with("Filter policy", 1, [](uint32_t v) {
+        return std::string(v ? "accept list" : "peer address");
+      }));
+      r.own_atype();
+      r.atype("Peer address type");
+      const std::string peer = r.addr("Peer address");
+      const uint8_t phys = r.phys("Initiating PHYs");
+      for (unsigned b = 0; b < 3; ++b)
+        if (phys >> b & 1) ext_conn_phy(r, kPhyBits[b]);
+      if (at + 10 <= p + n) s += filter ? " (accept list)" : " " + peer;
       break;
+    }
     case 0x2013:  // LE Connection Update
       s += handle_field(0);
       if (n >= 10) {
@@ -1282,6 +2467,14 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         F("Supervision timeout", sf("%u ms", le16(p + 8) * 10), p + 8, 2);
         s += sf(" interval %.2f-%.2f ms", le16(p + 2) * 1.25, le16(p + 4) * 1.25);
       }
+      if (n >= 14) F("CE length", sf("%.2f-%.2f ms", le16(p + 10) * 0.625, le16(p + 12) * 0.625), p + 10, 4);
+      break;
+    case 0x2014:  // LE Set Host Channel Classification
+      r.hex("Channel map", 5);
+      break;
+    case 0x2017:  // LE Encrypt
+      r.hex("Key", 16);
+      r.hex("Plaintext", 16);
       break;
     case 0x2019:  // LE Enable Encryption
       s += handle_field(0);
@@ -1291,6 +2484,23 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         F("LTK", hexbytes(p + 12, 16), p + 12, 16);
       }
       break;
+    case 0x201a:  // LE Long Term Key Request Reply
+      s += sf(" handle %u", r.handle());
+      r.hex("LTK", 16);
+      break;
+    case 0x2020:  // LE Remote Connection Parameter Request Reply
+      s += sf(" handle %u", r.handle());
+      r.time("Min interval", 2, 1.25);
+      r.time("Max interval", 2, 1.25);
+      r.u16("Latency");
+      r.time("Supervision timeout", 2, 10);
+      r.time("Min CE length", 2, 0.625);
+      r.time("Max CE length", 2, 0.625);
+      break;
+    case 0x2021:  // LE Remote Connection Parameter Request Negative Reply
+      s += sf(" handle %u", r.handle());
+      r.status("Reason");
+      break;
     case 0x2022:  // LE Set Data Length
       s += handle_field(0);
       if (n >= 6) {
@@ -1299,11 +2509,350 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
         s += sf(" %u octets", le16(p + 2));
       }
       break;
+    case 0x2024:  // LE Write Suggested Default Data Length
+      s += sf(" %u octets", r.u16("TX octets"));
+      r.u16("TX time", "%u us");
+      break;
+    case 0x2026:  // LE Generate DHKey
+    case 0x205e:
+      r.hex("Remote P-256 public key", 64);
+      if (op == 0x205e) r.u8("Key type", "%u");
+      break;
+    case 0x202e:  // LE Set Resolvable Private Address Timeout
+      s += sf(" %u s", r.u16("Timeout", "%u s"));
+      break;
+    case 0x2031:  // LE Set Default PHY
+    case 0x2032: {  // LE Set PHY
+      if (op == 0x2032) s += sf(" handle %u", r.handle());
+      static const char* const all[] = {"no TX preference", "no RX preference"};
+      r.flags("All PHYs", 1, all, 2);
+      r.phys("TX PHYs");
+      r.phys("RX PHYs");
+      if (op == 0x2032) {
+        r.with("PHY options", 2, [](uint32_t v) {
+          static const char* const o2[] = {"no preference", "S=2", "S=8", "?"};
+          return sf("0x%04x (coded %s)", v, o2[v & 3]);
+        });
+      }
+      break;
+    }
+    case 0x2035:  // LE Set Advertising Set Random Address
+      s += sf(" set %u", r.u8("Advertising handle"));
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr();
+      break;
+    case 0x2036:    // LE Set Extended Advertising Parameters
+    case 0x207f: {  // LE Set Extended Advertising Parameters v2
+      const uint8_t h = r.u8("Advertising handle");
+      const uint16_t props = static_cast<uint16_t>(r.flags("Properties", 2, kAdvProps, 7));
+      const uint32_t mn = r.time("Min interval", 3, 0.625);
+      const uint32_t mx = r.time("Max interval", 3, 0.625);
+      r.flags("Channel map", 1, kAdvChannels, 3);
+      r.own_atype();
+      r.atype("Peer address type");
+      r.addr("Peer address");
+      r.named("Filter policy", 1, adv_filter_name);
+      r.with("TX power", 1, [](uint32_t v) { return v == 0x7f ? std::string("no preference (0x7f)") : sf("%d dBm", static_cast<int8_t>(v)); });
+      r.phy("Primary PHY");
+      r.u8("Secondary max skip");
+      r.phy("Secondary PHY");
+      r.u8("SID");
+      r.yes_no("Scan request notifications");
+      if (op == 0x207f) {
+        r.with("Primary PHY options", 1, [](uint32_t v) { return sf("0x%02x", v); });
+        r.with("Secondary PHY options", 1, [](uint32_t v) { return sf("0x%02x", v); });
+      }
+      if (n >= 9) {
+        s += sf(" set %u %.2f-%.2f ms", h, mn * 0.625, mx * 0.625);
+        s += props & 0x10 ? " legacy" : props & 1 ? " connectable" : props & 2 ? " scannable" : "";
+      }
+      break;
+    }
+    case 0x2037:    // LE Set Extended Advertising Data
+    case 0x2038:    // LE Set Extended Scan Response Data
+    case 0x203f: {  // LE Set Periodic Advertising Data
+      const uint8_t h = r.u8("Advertising handle");
+      r.named("Operation", 1, adv_data_op_name);
+      if (op != 0x203f) {
+        r.with("Fragment preference", 1, [](uint32_t v) { return std::string(v ? "minimize fragmentation" : "may fragment"); });
+      }
+      const uint8_t l = r.u8("Data length");
+      if (n >= 1) s += sf(" set %u", h);
+      if (r.has(1)) {
+        adv_data_block(o, r.cur(), std::min<size_t>(l, r.left()), &s);
+        r.skip(l);
+      }
+      break;
+    }
+    case 0x203c:  // LE Remove Advertising Set
+      s += sf(" set %u", r.u8("Advertising handle"));
+      break;
+    case 0x203e:    // LE Set Periodic Advertising Parameters
+    case 0x2086: {  // v2
+      const uint8_t h = r.u8("Advertising handle");
+      const uint16_t mn = static_cast<uint16_t>(r.time("Min interval", 2, 1.25));
+      const uint16_t mx = static_cast<uint16_t>(r.time("Max interval", 2, 1.25));
+      static const char* const props[] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, "include TX power"};
+      r.flags("Properties", 2, props, 7);
+      if (op == 0x2086) {
+        r.u8("Subevents");
+        r.time("Subevent interval", 1, 1.25);
+        r.time("Response slot delay", 1, 1.25);
+        r.time("Response slot spacing", 1, 0.125);
+        r.u8("Response slots");
+      }
+      if (n >= 5) s += sf(" set %u %.2f-%.2f ms", h, mn * 1.25, mx * 1.25);
+      break;
+    }
+    case 0x2040: {  // LE Set Periodic Advertising Enable
+      static const char* const en[] = {"enabled", "include ADI"};
+      const uint8_t e = static_cast<uint8_t>(r.flags("Enable", 1, en, 2));
+      const uint8_t h = r.u8("Advertising handle");
+      if (n >= 2) s += sf("%s set %u", e & 1 ? " on" : " off", h);
+      break;
+    }
+    case 0x2041: {  // LE Set Extended Scan Parameters
+      r.own_atype();
+      r.named("Filter policy", 1, scan_filter_name);
+      const uint8_t phys = r.phys("Scanning PHYs");
+      for (unsigned b = 0; b < 3; ++b) {
+        if (!(phys >> b & 1)) continue;
+        OPEN_R(r, kPhyBits[b], "", r.cur(), std::min<size_t>(5, r.left()));
+        const uint8_t type = r.yes_no("Type", "active", "passive");
+        r.time("Interval", 2, 0.625);
+        r.time("Window", 2, 0.625);
+        CLOSE_R(r);
+        if (s == name) s += type ? " active" : " passive";
+      }
+      break;
+    }
+    case 0x2044: {  // LE Periodic Advertising Create Sync
+      const uint8_t opt = static_cast<uint8_t>(r.flags("Options", 1, kPaSyncOptions, 3));
+      const uint8_t sid = r.u8("SID");
+      r.atype();
+      const std::string a = r.addr();
+      r.u16("Skip");
+      r.time("Sync timeout", 2, 10);
+      r.flags("Sync CTE type", 1, kCteTypes, 5);
+      if (n >= 9) s += opt & 1 ? " (periodic advertiser list)" : sf(" %s SID %u", a.c_str(), sid);
+      break;
+    }
+    case 0x2046:  // LE Periodic Advertising Terminate Sync
+      s += sf(" sync handle %u", r.handle("Sync handle"));
+      break;
+    case 0x204e:  // LE Set Privacy Mode
+      r.atype("Peer address type");
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr("Peer address");
+      r.named("Mode", 1, privacy_mode_name);
+      break;
+    case 0x2059:  // LE Set Periodic Advertising Receive Enable
+      s += sf(" sync handle %u", r.handle("Sync handle"));
+      r.flags("Enable", 1, kPaReceiveEnable, 2);
+      break;
+    case 0x205a:  // LE Periodic Advertising Sync Transfer
+    case 0x205b:  // LE Periodic Advertising Set Info Transfer
+      s += sf(" handle %u", r.handle());
+      r.u16("Service data", "0x%04x");
+      if (op == 0x205a) s += sf(" sync handle %u", r.handle("Sync handle"));
+      else s += sf(" set %u", r.u8("Advertising handle"));
+      break;
+    case 0x205c:  // LE Set Periodic Advertising Sync Transfer Parameters
+    case 0x205d:
+      if (op == 0x205c) s += sf(" handle %u", r.handle());
+      r.named("Mode", 1, past_mode_name);
+      r.u16("Skip");
+      r.time("Sync timeout", 2, 10);
+      r.flags("CTE type", 1, kCteTypes, 5);
+      break;
+    case 0x2061:  // LE Read ISO TX Sync
+      s += sf(" handle %u", r.handle());
+      break;
+    case 0x2062:    // LE Set CIG Parameters
+    case 0x2063: {  // LE Set CIG Parameters Test
+      const bool test = op == 0x2063;
+      const uint8_t cig = r.u8("CIG ID");
+      r.u24("SDU interval C to P", "%u us");
+      r.u24("SDU interval P to C", "%u us");
+      if (test) {
+        r.u8("FT C to P");
+        r.u8("FT P to C");
+        r.time("ISO interval", 2, 1.25);
+      }
+      r.named("Worst case SCA", 1, sca_name);
+      r.with("Packing", 1, [](uint32_t v) { return std::string(v ? "interleaved" : "sequential"); });
+      r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "framed" : "unframed"); });
+      if (!test) {
+        r.u16("Max transport latency C to P", "%u ms");
+        r.u16("Max transport latency P to C", "%u ms");
+      }
+      const uint8_t k = r.u8("CIS count");
+      const size_t each = test ? 14 : 9;
+      for (unsigned i = 0; i < k && r.has(each); ++i) {
+        OPEN_R(r, sf("CIS %u", r.cur()[0]), "", r.cur(), each);
+        r.u8("CIS ID");
+        if (test) r.u8("NSE");
+        r.u16("Max SDU C to P");
+        r.u16("Max SDU P to C");
+        if (test) {
+          r.u16("Max PDU C to P");
+          r.u16("Max PDU P to C");
+        }
+        r.phys("PHY C to P");
+        r.phys("PHY P to C");
+        if (test) {
+          r.u8("BN C to P");
+          r.u8("BN P to C");
+        } else {
+          r.u8("RTN C to P");
+          r.u8("RTN P to C");
+        }
+        CLOSE_R(r);
+      }
+      if (n >= 1) s += sf(" CIG %u, %u CIS", cig, k);
+      break;
+    }
+    case 0x2064: {  // LE Create CIS
+      const uint8_t k = r.u8("CIS count");
+      for (unsigned i = 0; i < k && r.has(4); ++i) {
+        const uint8_t* q = r.cur();
+        F(sf("CIS %u", i), sf("CIS handle %u, ACL handle %u", le16(q) & 0x0fff, le16(q + 2) & 0x0fff), q, 4);
+        if (i < 3) s += sf("%s CIS %u ACL %u", i ? "," : "", le16(q) & 0x0fff, le16(q + 2) & 0x0fff);
+        r.skip(4);
+      }
+      if (k > 3) s += sf(" (+%u more)", k - 3);
+      break;
+    }
+    case 0x2065:  // LE Remove CIG
+      s += sf(" CIG %u", r.u8("CIG ID"));
+      break;
+    case 0x2067:  // LE Reject CIS Request
+      s += sf(" handle %u", r.handle());
+      r.status("Reason");
+      break;
+    case 0x2068:    // LE Create BIG
+    case 0x2069: {  // LE Create BIG Test
+      const bool test = op == 0x2069;
+      const uint8_t big = r.u8("BIG handle");
+      const uint8_t adv = r.u8("Advertising handle");
+      const uint8_t k = r.u8("Number of BIS");
+      r.u24("SDU interval", "%u us");
+      if (test) {
+        r.time("ISO interval", 2, 1.25);
+        r.u8("NSE");
+      }
+      r.u16("Max SDU");
+      if (test) r.u16("Max PDU");
+      else r.u16("Max transport latency", "%u ms");
+      if (!test) r.u8("RTN");
+      r.phys("PHY");
+      r.with("Packing", 1, [](uint32_t v) { return std::string(v ? "interleaved" : "sequential"); });
+      r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "framed" : "unframed"); });
+      if (test) {
+        r.u8("BN");
+        r.u8("IRC");
+        r.u8("PTO");
+      }
+      const uint8_t enc = r.yes_no("Encryption", "yes", "no");
+      r.hex("Broadcast code", 16);
+      if (n >= 3) s += sf(" BIG %u adv set %u, %u BIS%s", big, adv, k, enc ? ", encrypted" : "");
+      break;
+    }
+    case 0x206a:  // LE Terminate BIG
+      s += sf(" BIG %u", r.u8("BIG handle"));
+      r.status("Reason");
+      break;
+    case 0x206b: {  // LE BIG Create Sync
+      const uint8_t big = r.u8("BIG handle");
+      const uint16_t sh = r.handle("Sync handle");
+      const uint8_t enc = r.yes_no("Encryption", "yes", "no");
+      r.hex("Broadcast code", 16);
+      r.with("Max subevents", 1, [](uint32_t v) { return v ? std::to_string(v) : std::string("any (0)"); });
+      r.time("Sync timeout", 2, 10);
+      const uint8_t k = r.u8("Number of BIS");
+      std::string bis;
+      for (unsigned i = 0; i < k && r.has(1); ++i) bis += sf("%s%u", i ? "," : "", r.u8("BIS index"));
+      if (n >= 3) s += sf(" BIG %u sync handle %u", big, sh) + (bis.empty() ? "" : " BIS " + bis) + (enc ? ", encrypted" : "");
+      break;
+    }
+    case 0x206c:  // LE BIG Terminate Sync
+      s += sf(" BIG %u", r.u8("BIG handle"));
+      break;
+    case 0x206d:  // LE Request Peer SCA
+      s += sf(" handle %u", r.handle());
+      break;
+    case 0x206e: {  // LE Setup ISO Data Path
+      s += sf(" handle %u", r.handle());
+      const uint8_t dir = r.with("Direction", 1, [](uint32_t v) {
+        return std::string(v ? "output (controller to host)" : "input (host to controller)");
+      });
+      const uint8_t path = static_cast<uint8_t>(r.named("Data path", 1, data_path_name));
+      if (r.has(5)) {
+        if (n >= 4) s += sf(" %s %s %s", dir ? "output" : "input", data_path_name(path), coding_format_name(r.cur()[0]));
+      }
+      r.with("Codec", 5, [&](uint32_t) { return codec_id_str(r.cur()); });
+      r.u24("Controller delay", "%u us");
+      r.hex("Codec configuration", r.u8("Codec configuration length"));
+      break;
+    }
+    case 0x206f: {  // LE Remove ISO Data Path
+      s += sf(" handle %u", r.handle());
+      static const char* const dirs[] = {"input", "output"};
+      r.flags("Direction", 1, dirs, 2);
+      break;
+    }
+    case 0x2074:    // LE Set Host Feature
+    case 0x2097: {  // v2
+      const uint16_t bit = static_cast<uint16_t>(r.with("Bit number", op == 0x2097 ? 2 : 1, [](uint32_t v) {
+        return sf("%u (%s)", v, v < kLeFeatureCount ? kLeFeatures[v] : "?");
+      }));
+      const uint8_t v = r.yes_no("Bit value", "on", "off");
+      if (n >= 2) s += sf(" bit %u (%s) %s", bit, bit < kLeFeatureCount ? kLeFeatures[bit] : "?", v ? "on" : "off");
+      break;
+    }
+    case 0x2076:  // LE Enhanced Read Transmit Power Level
+    case 0x2077:  // LE Read Remote Transmit Power Level
+      s += sf(" handle %u", r.handle());
+      r.with("PHY", 1, [](uint32_t v) {
+        static const char* const ph[] = {"?", "LE 1M", "LE 2M", "LE Coded S=8", "LE Coded S=2"};
+        return sf("0x%02x (%s)", v, v < 5 ? ph[v] : "?");
+      });
+      break;
+    case 0x2078:  // LE Set Path Loss Reporting Parameters
+      s += sf(" handle %u", r.handle());
+      r.u8("High threshold", "%u dB");
+      r.u8("High hysteresis", "%u dB");
+      r.u8("Low threshold", "%u dB");
+      r.u8("Low hysteresis", "%u dB");
+      r.u16("Min time spent", "%u connection events");
+      break;
+    case 0x2079:  // LE Set Path Loss Reporting Enable
+      s += sf(" handle %u", r.handle());
+      r.yes_no("Enable");
+      break;
+    case 0x207a:  // LE Set Transmit Power Reporting Enable
+      s += sf(" handle %u", r.handle());
+      r.yes_no("Local");
+      r.yes_no("Remote");
+      break;
+    case 0x207c:  // LE Set Data Related Address Changes
+      s += sf(" set %u", r.u8("Advertising handle"));
+      r.flags("Change reasons", 1, kAddrChangeReasons, 2);
+      break;
+    case 0x207d:  // LE Set Default Subrate
+    case 0x207e:  // LE Subrate Request
+      if (op == 0x207e) s += sf(" handle %u", r.handle());
+      r.u16("Min subrate factor");
+      r.u16("Max subrate factor");
+      r.u16("Max peripheral latency");
+      r.u16("Continuation number");
+      r.time("Supervision timeout", 2, 10);
+      break;
     default:
       if (hci_cmd_has_handle(op)) s += handle_field(0);
       break;
   }
-  if (o.detail && n) F("Parameters", hexbytes(p, n, 64), p, n);
+  rest(o, p, n);
   CLOSE();
   o.summary = s;
 }
@@ -1311,19 +2860,66 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
 // ---------------------------------------------------------------------------------------------
 // HCI events
 
-// The return parameters of a Command Complete for the commands people read the answer of.
+// The codecs of Read Local Supported Codecs (v1: IDs; v2: each with the transports it runs over).
+void local_codecs(Rd& rd, bool v2) {
+  static const char* const tr[] = {"BR/EDR ACL", "BR/EDR SCO", "LE CIS", "LE BIS"};
+  auto transports = [](uint32_t v) { return sf("0x%02x (%s)", v, bit_names(v, tr, 4).c_str()); };
+  const uint8_t k = rd.u8("Supported codecs");
+  for (unsigned i = 0; i < k && rd.has(v2 ? 2 : 1); ++i) {
+    const uint8_t* q = rd.cur();
+    if (rd.o.detail) {
+      rd.o.add("Codec", sf("%s (0x%02x)", coding_format_name(q[0]), q[0]) + (v2 ? ", " + transports(q[1]) : ""), q, v2 ? 2 : 1);
+    }
+    rd.skip(v2 ? 2 : 1);
+  }
+  const uint8_t kv = rd.u8("Vendor codecs");
+  for (unsigned i = 0; i < kv && rd.has(v2 ? 5 : 4); ++i) {
+    const uint8_t* q = rd.cur();
+    if (rd.o.detail) {
+      const char* c = company_name(le16(q));
+      rd.o.add("Vendor codec", sf("0x%04x:0x%04x", le16(q), le16(q + 2)) + (c ? std::string(" (") + c + ")" : "") +
+                                   (v2 ? ", " + transports(q[4]) : ""), q, v2 ? 5 : 4);
+    }
+    rd.skip(v2 ? 5 : 4);
+  }
+}
+
+// The return parameters of a Command Complete: every field of the commands people read the answer
+// of, the handle of the per-connection ones.
 std::string cmd_return(Out& o, uint16_t op, const uint8_t* r, size_t n) {
   if (n < 1) return {};
   F("Status", status_str(r[0]), r, 1);
   std::string s = r[0] ? sf(" status 0x%02x (%s)", r[0], error_name(r[0])) : "";
+  // A failed command returns only the status, or zeroes after it: nothing worth decoding.
   if (r[0] != 0) return s;
+  o.mark(r + 1);
+  Rd rd(o, r + 1, n - 1);
+  auto inquiry_scan_type = [](uint32_t v) { return std::string(v ? "interlaced" : "standard"); };
   switch (op) {
-    case 0x1001:
+    case 0x1001:  // Read Local Version Information
       if (n >= 9) {
-        F("HCI version", sf("%u (revision 0x%04x)", r[1], le16(r + 2)), r + 1, 3);
-        F("LMP version", sf("%u (subversion 0x%04x)", r[4], le16(r + 7)), r + 4, 1);
-        F("Manufacturer", sf("%u", le16(r + 5)), r + 5, 2);
+        F("HCI version", sf("%u (Bluetooth %s, revision 0x%04x)", r[1], bt_version_name(r[1]), le16(r + 2)), r + 1, 3);
+        F("LMP version", sf("%u (Bluetooth %s)", r[4], bt_version_name(r[4])), r + 4, 1);
+        F("Manufacturer", company_str(le16(r + 5)), r + 5, 2);
+        F("LMP subversion", sf("0x%04x", le16(r + 7)), r + 7, 2);
         s += sf(" HCI %u, manufacturer %u", r[1], le16(r + 5));
+      }
+      break;
+    case 0x1002:  // Read Local Supported Commands
+      if (n >= 65) {
+        unsigned bits = 0;
+        for (size_t i = 1; i < 65; ++i) bits += static_cast<unsigned>(__builtin_popcount(r[i]));
+        F("Commands", sf("%u supported: ", bits) + hexbytes(r + 1, 64, 64), r + 1, 64);
+      }
+      break;
+    case 0x1003:  // Read Local Supported Features
+      if (n >= 9) F("Features", hexbytes(r + 1, 8) + " (" + lmp_features_str(r + 1, 0) + ")", r + 1, 8);
+      break;
+    case 0x1004:  // Read Local Extended Features
+      if (n >= 11) {
+        F("Page", sf("%u of %u", r[1], r[2]), r + 1, 2);
+        F("Features", hexbytes(r + 3, 8) + " (" + lmp_features_str(r + 3, r[1]) + ")", r + 3, 8);
+        s += sf(" page %u", r[1]);
       }
       break;
     case 0x1009:
@@ -1332,12 +2928,151 @@ std::string cmd_return(Out& o, uint16_t op, const uint8_t* r, size_t n) {
         s += " " + bdaddr_str(r + 1);
       }
       break;
+    case 0x100b:  // Read Local Supported Codecs
+    case 0x100d:  // v2
+      local_codecs(rd, op == 0x100d);
+      break;
+    case 0x100c:  // Read Local Simple Pairing Options
+      {
+        static const char* const spo[] = {"remote public key validation"};
+        rd.flags("Options", 1, spo, 1);
+      }
+      rd.u8("Max encryption key size");
+      break;
+    case 0x100e: {  // Read Local Supported Codec Capabilities
+      const uint8_t k = rd.u8("Codec capabilities");
+      for (unsigned i = 0; i < k && rd.has(1); ++i) {
+        const uint8_t l = rd.raw(1);
+        rd.hex("Capability", 1 + l);
+      }
+      break;
+    }
+    case 0x100f:  // Read Local Supported Controller Delay
+      rd.u24("Min controller delay", "%u us");
+      rd.u24("Max controller delay", "%u us");
+      break;
     case 0x0c14:
       if (n >= 2) {
         const std::string nm = printable(r + 1, n - 1, 64);
         F("Name", "\"" + nm + "\"", r + 1, n - 1);
         s += " \"" + nm + "\"";
       }
+      break;
+    case 0x0c09:  // Read PIN Type
+      rd.with("PIN type", 1, [](uint32_t v) { return std::string(v ? "fixed" : "variable"); });
+      break;
+    case 0x0c0d:  // Read Stored Link Key
+      rd.u16("Max keys");
+      rd.u16("Keys read");
+      break;
+    case 0x0c12:  // Delete Stored Link Key
+      rd.u16("Keys deleted");
+      break;
+    case 0x0c15:  // Read Connection Accept Timeout
+    case 0x0c17:  // Read Page Timeout
+      rd.time("Timeout", 2, 0.625);
+      break;
+    case 0x0c19:  // Read Scan Enable
+      rd.with("Scan enable", 1, [](uint32_t v) {
+        static const char* modes[] = {"off", "inquiry scan", "page scan", "inquiry + page scan"};
+        return std::string(v < 4 ? modes[v] : "?");
+      });
+      break;
+    case 0x0c1b:  // Read Page Scan Activity
+    case 0x0c1d:  // Read Inquiry Scan Activity
+      rd.time("Interval", 2, 0.625);
+      rd.time("Window", 2, 0.625);
+      break;
+    case 0x0c1f:  // Read Authentication Enable
+      rd.yes_no("Authentication");
+      break;
+    case 0x0c23:  // Read Class of Device
+      if (n >= 4) {
+        F("Class", cod_str(le24(r + 1)), r + 1, 3);
+        s += " " + cod_str(le24(r + 1));
+      }
+      break;
+    case 0x0c25:  // Read Voice Setting
+      rd.with("Voice setting", 2, voice_setting_str);
+      break;
+    case 0x0c27:  // Read Automatic Flush Timeout
+      s += sf(" handle %u", rd.handle());
+      rd.with("Timeout", 2, [](uint32_t v) { return v ? sf("%.2f ms (0x%04x)", v * 0.625, v) : std::string("infinite"); });
+      break;
+    case 0x0c2d:  // Read Transmit Power Level
+      s += sf(" handle %u", rd.handle());
+      if (rd.has(1)) s += sf(" %d dBm", static_cast<int8_t>(rd.cur()[0]));
+      rd.dbm("TX power");
+      break;
+    case 0x0c2e:  // Read Synchronous Flow Control Enable
+    case 0x0c55:  // Read Simple Pairing Mode
+    case 0x0c5a:  // Read Default Erroneous Data Reporting
+    case 0x0c79:  // Read Secure Connections Host Support
+      rd.yes_no("Enable");
+      break;
+    case 0x0c36:  // Read Link Supervision Timeout
+      s += sf(" handle %u", rd.handle());
+      rd.time("Timeout", 2, 0.625);
+      break;
+    case 0x0c38:  // Read Number of Supported IAC
+      rd.u8("Supported IACs");
+      break;
+    case 0x0c39: {  // Read Current IAC LAP
+      const uint8_t k = rd.u8("Number of IACs");
+      for (unsigned i = 0; i < k && rd.has(3); ++i) rd.u24("IAC LAP", "0x%06x");
+      break;
+    }
+    case 0x0c42:  // Read Inquiry Scan Type
+    case 0x0c46:  // Read Page Scan Type
+      rd.with("Type", 1, inquiry_scan_type);
+      break;
+    case 0x0c44:  // Read Inquiry Mode
+      rd.named("Mode", 1, inquiry_mode_name);
+      break;
+    case 0x0c51:  // Read Extended Inquiry Response
+      if (rd.has(1)) {
+        rd.yes_no("FEC required", "yes", "no");
+        OPEN("EIR", "", rd.cur(), rd.left());
+        const std::string nm = ad_data(o, rd.cur(), rd.left());
+        CLOSE();
+        if (!nm.empty()) s += " \"" + nm + "\"";
+      }
+      break;
+    case 0x0c58:  // Read Inquiry Response TX Power Level
+      rd.dbm("TX power");
+      break;
+    case 0x0c66:  // Read Flow Control Mode
+      rd.with("Mode", 1, [](uint32_t v) { return std::string(v ? "data block based" : "packet based"); });
+      break;
+    case 0x0c6c:  // Read LE Host Supported
+      rd.yes_no("LE supported (host)");
+      rd.u8("Simultaneous LE and BR/EDR");
+      break;
+    case 0x0c7b:  // Read Authenticated Payload Timeout
+      s += sf(" handle %u", rd.handle());
+      rd.time("Timeout", 2, 10);
+      break;
+    case 0x0c57:  // Read Local OOB Data
+      rd.hex("Hash C", 16);
+      rd.hex("Randomizer R", 16);
+      break;
+    case 0x0c7d:  // Read Local OOB Extended Data
+      rd.hex("Hash C (P-192)", 16);
+      rd.hex("Randomizer R (P-192)", 16);
+      rd.hex("Hash C (P-256)", 16);
+      rd.hex("Randomizer R (P-256)", 16);
+      break;
+    case 0x0809:  // Role Discovery
+      s += sf(" handle %u", rd.handle());
+      if (rd.has(1)) s += rd.cur()[0] ? " peripheral" : " central";
+      rd.with("Role", 1, [](uint32_t v) { return std::string(v ? "peripheral" : "central"); });
+      break;
+    case 0x080c:  // Read Link Policy Settings
+      s += sf(" handle %u", rd.handle());
+      rd.flags("Policy", 2, kLinkPolicy, 4);
+      break;
+    case 0x080e:  // Read Default Link Policy Settings
+      rd.flags("Policy", 2, kLinkPolicy, 4);
       break;
     case 0x1005:
       if (n >= 8) {
@@ -1361,12 +3096,30 @@ std::string cmd_return(Out& o, uint16_t op, const uint8_t* r, size_t n) {
         s += sf(", ISO %u x %u", le16(r + 4), r[6]);
       }
       break;
+    case 0x1401:  // Read Failed Contact Counter
+      s += sf(" handle %u", rd.handle());
+      rd.u16("Failed contact counter");
+      break;
+    case 0x1403:  // Read Link Quality
+      s += sf(" handle %u", rd.handle());
+      rd.u8("Link quality", "%u/255");
+      break;
     case 0x1405:  // Read RSSI
       if (n >= 4) {
         F("Handle", std::to_string(le16(r + 1) & 0x0fff), r + 1, 2);
         F("RSSI", sf("%d dB", static_cast<int8_t>(r[3])), r + 3, 1);
         s += sf(" handle %u RSSI %d", le16(r + 1) & 0x0fff, static_cast<int8_t>(r[3]));
       }
+      break;
+    case 0x1406:  // Read AFH Channel Map
+      s += sf(" handle %u", rd.handle());
+      rd.yes_no("AFH mode");
+      rd.hex("Channel map", 10);
+      break;
+    case 0x1407:  // Read Clock
+      s += sf(" handle %u", rd.handle());
+      rd.u32("Clock", "0x%08x");
+      rd.with("Accuracy", 2, [](uint32_t v) { return v == 0xffff ? std::string("unknown") : sf("+/- %.4f ms", v * 0.3125); });
       break;
     case 0x1408:  // Read Encryption Key Size
       if (n >= 4) {
@@ -1375,14 +3128,144 @@ std::string cmd_return(Out& o, uint16_t op, const uint8_t* r, size_t n) {
         s += sf(" handle %u key size %u", le16(r + 1) & 0x0fff, r[3]);
       }
       break;
+    case 0x2003:  // LE Read Local Supported Features
+      if (n >= 9) F("Features", hexbytes(r + 1, 8) + " (" + le_features_str(r + 1) + ")", r + 1, 8);
+      break;
+    case 0x2007:  // LE Read Advertising Channel TX Power
+      rd.dbm("TX power");
+      break;
+    case 0x200f:  // LE Read Filter Accept List Size
+    case 0x202a:  // LE Read Resolving List Size
+    case 0x204a:  // LE Read Periodic Advertiser List Size
+      if (rd.has(1)) s += sf(" %u", rd.cur()[0]);
+      rd.u8("List size");
+      break;
+    case 0x2015:  // LE Read Channel Map
+      s += sf(" handle %u", rd.handle());
+      rd.hex("Channel map", 5);
+      break;
+    case 0x2017:  // LE Encrypt
+      rd.hex("Encrypted data", 16);
+      break;
+    case 0x2018:  // LE Rand
+      rd.hex("Random number", 8);
+      break;
+    case 0x201c:  // LE Read Supported States
+      rd.hex("States", 8);
+      break;
+    case 0x2023:  // LE Read Suggested Default Data Length
+      if (rd.has(2)) s += sf(" %u octets", le16(rd.cur()));
+      rd.u16("TX octets");
+      rd.u16("TX time", "%u us");
+      break;
+    case 0x202f:  // LE Read Maximum Data Length
+      rd.u16("Max TX octets");
+      rd.u16("Max TX time", "%u us");
+      rd.u16("Max RX octets");
+      rd.u16("Max RX time", "%u us");
+      break;
+    case 0x2030: {  // LE Read PHY
+      s += sf(" handle %u", rd.handle());
+      const uint8_t tx = rd.phy("TX PHY");
+      const uint8_t rx = rd.phy("RX PHY");
+      if (n >= 5) s += sf(" TX %s RX %s", phy_name(tx), phy_name(rx));
+      break;
+    }
+    case 0x2036:  // LE Set Extended Advertising Parameters
+    case 0x207f:
+      if (rd.has(1)) s += sf(" TX power %d dBm", static_cast<int8_t>(rd.cur()[0]));
+      rd.dbm("Selected TX power");
+      break;
+    case 0x203a:  // LE Read Maximum Advertising Data Length
+      rd.u16("Max data length");
+      break;
+    case 0x203b:  // LE Read Number of Supported Advertising Sets
+      if (rd.has(1)) s += sf(" %u", rd.cur()[0]);
+      rd.u8("Advertising sets");
+      break;
+    case 0x204b:  // LE Read Transmit Power
+      rd.dbm("Min TX power");
+      rd.dbm("Max TX power");
+      break;
+    case 0x204c:  // LE Read RF Path Compensation
+      rd.with("TX path compensation", 2, [](uint32_t v) { return sf("%.1f dB", static_cast<int16_t>(v) / 10.0); });
+      rd.with("RX path compensation", 2, [](uint32_t v) { return sf("%.1f dB", static_cast<int16_t>(v) / 10.0); });
+      break;
+    case 0x2061:  // LE Read ISO TX Sync
+      s += sf(" handle %u", rd.handle());
+      rd.u16("Sequence number");
+      rd.u32("Timestamp", "%u us");
+      rd.u24("Time offset", "%u us");
+      break;
+    case 0x2062:    // LE Set CIG Parameters
+    case 0x2063: {  // LE Set CIG Parameters Test
+      const uint8_t cig = rd.u8("CIG ID");
+      const uint8_t k = rd.u8("CIS count");
+      std::string hs;
+      for (unsigned i = 0; i < k && rd.has(2); ++i) hs += sf("%s%u", i ? "," : "", rd.handle("CIS handle"));
+      if (n >= 3) s += sf(" CIG %u", cig) + (hs.empty() ? "" : " CIS " + hs);
+      break;
+    }
+    case 0x2065:  // LE Remove CIG
+      s += sf(" CIG %u", rd.u8("CIG ID"));
+      break;
+    case 0x206c:  // LE BIG Terminate Sync
+      s += sf(" BIG %u", rd.u8("BIG handle"));
+      break;
+    case 0x2072:  // LE ISO Read Test Counters
+      s += sf(" handle %u", rd.handle());
+      rd.u32("Received packets");
+      rd.u32("Missed packets");
+      rd.u32("Failed packets");
+      break;
+    case 0x2073:  // LE ISO Test End
+      s += sf(" handle %u", rd.handle());
+      rd.u32("Received packets");
+      rd.u32("Missed packets");
+      rd.u32("Failed packets");
+      break;
+    case 0x2075:  // LE Read ISO Link Quality
+      s += sf(" handle %u", rd.handle());
+      rd.u32("TX unacked packets");
+      rd.u32("TX flushed packets");
+      rd.u32("TX last subevent packets");
+      rd.u32("Retransmitted packets");
+      rd.u32("CRC error packets");
+      rd.u32("RX unreceived packets");
+      rd.u32("Duplicate packets");
+      break;
+    case 0x2076:  // LE Enhanced Read Transmit Power Level
+      s += sf(" handle %u", rd.handle());
+      rd.phy("PHY");
+      if (rd.has(1)) s += sf(" %d dBm", static_cast<int8_t>(rd.cur()[0]));
+      rd.dbm("Current TX power");
+      rd.dbm("Max TX power");
+      break;
+    case 0x0408:  // Create Connection Cancel
+    case 0x040b:  // Link Key Request Reply, the other replies about a device
+    case 0x040c:
+    case 0x040d:
+    case 0x040e:
+    case 0x041a:  // Remote Name Request Cancel
+    case 0x042b:
+    case 0x042c:
+    case 0x042d:
+    case 0x042e:
+    case 0x042f:
+    case 0x0430:
+    case 0x0433:
+    case 0x0434:
+      if (rd.has(6)) s += " " + bdaddr_str(rd.cur());
+      rd.addr();
+      break;
     default:
-      if (hci_cmd_has_handle(op) && n >= 3) {
+      if ((hci_cmd_has_handle(op) || op == 0x2067 || op == 0x205a || op == 0x205b || op == 0x205c) && n >= 3) {
         F("Handle", std::to_string(le16(r + 1) & 0x0fff), r + 1, 2);
         s += sf(" handle %u", le16(r + 1) & 0x0fff);
       }
       break;
   }
-  if (o.detail && n > 1) F("Return parameters", hexbytes(r + 1, n - 1, 64), r + 1, n - 1);
+  rest(o, r + 1, n - 1, "Return parameters");
   return s;
 }
 
@@ -1392,6 +3275,31 @@ const char* mode_name(uint8_t m) {
     case 1: return "hold";
     case 2: return "sniff";
     case 3: return "park";
+    default: return "?";
+  }
+}
+
+const char* link_key_type_name(uint8_t t) {
+  switch (t) {
+    case 0x00: return "combination";
+    case 0x01: return "local unit";
+    case 0x02: return "remote unit";
+    case 0x03: return "debug combination";
+    case 0x04: return "unauthenticated combination P-192";
+    case 0x05: return "authenticated combination P-192";
+    case 0x06: return "changed combination";
+    case 0x07: return "unauthenticated combination P-256";
+    case 0x08: return "authenticated combination P-256";
+    default: return "?";
+  }
+}
+
+const char* air_mode_name(uint8_t m) {
+  switch (m) {
+    case 0x00: return "u-law";
+    case 0x01: return "A-law";
+    case 0x02: return "CVSD";
+    case 0x03: return "transparent";
     default: return "?";
   }
 }
@@ -1407,6 +3315,30 @@ const char* io_cap_name(uint8_t c) {
   }
 }
 
+// The central's sleep clock accuracy of LE (Enhanced) Connection Complete and PAST/PA sync events.
+const char* clock_accuracy_name(uint32_t a) {
+  static const char* const names[] = {"500 ppm", "250 ppm", "150 ppm", "100 ppm", "75 ppm", "50 ppm", "30 ppm", "20 ppm"};
+  return a < 8 ? names[a] : "?";
+}
+
+// The Extended Advertising Report's event type: the PDU's properties and how complete the data is.
+std::string ext_adv_type_str(uint16_t et) {
+  static const char* const bits[] = {"connectable", "scannable", "directed", "scan response", "legacy"};
+  static const char* const status[] = {"complete", "incomplete, more to come", "incomplete, truncated", "?"};
+  return sf("0x%04x (%s; data %s)", et, bit_names(et & 0x1f, bits, 5).c_str(), status[(et >> 5) & 3]);
+}
+
+// The data status of a (periodic) advertising report: whether more fragments follow.
+const char* data_status_name(uint32_t s) {
+  switch (s) {
+    case 0: return "complete";
+    case 1: return "incomplete, more to come";
+    case 2: return "incomplete, truncated";
+    case 0xff: return "failed to receive";
+    default: return "?";
+  }
+}
+
 std::string le_meta(Out& o, const uint8_t* p, size_t n) {
   if (n < 1) return "LE Meta Event (truncated)";
   const uint8_t sub = p[0];
@@ -1415,6 +3347,8 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
   F("Subevent", sf("0x%02x (%s)", sub, nm ? nm : "unknown"), p, 1);
   const uint8_t* q = p + 1;
   const size_t m = n - 1;
+  o.mark(q);
+  Rd r(o, q, m);
 
   switch (sub) {
     case 0x01:
@@ -1427,10 +3361,19 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
         F("Peer address type", addr_type_name(q[4]), q + 4, 1);
         F("Peer address", bdaddr_str(q + 5), q + 5, 6);
         const size_t at = sub == 0x01 ? 11 : 23;  // enhanced: + local and peer RPA
+        if (sub != 0x01 && m >= 23) {
+          F("Local resolvable private address", bdaddr_str(q + 11), q + 11, 6);
+          F("Peer resolvable private address", bdaddr_str(q + 17), q + 17, 6);
+        }
         if (m >= at + 6) {
           F("Interval", sf("%.2f ms", le16(q + at) * 1.25), q + at, 2);
           F("Latency", std::to_string(le16(q + at + 2)), q + at + 2, 2);
           F("Supervision timeout", sf("%u ms", le16(q + at + 4) * 10), q + at + 4, 2);
+        }
+        if (m >= at + 7) F("Central clock accuracy", clock_accuracy_name(q[at + 6]), q + at + 6, 1);
+        if (sub == 0x29 && m >= at + 10) {
+          F("Advertising handle", q[at + 7] == 0xff ? std::string("none") : std::to_string(q[at + 7]), q + at + 7, 1);
+          F("Sync handle", le16(q + at + 8) == 0xffff ? std::string("none") : std::to_string(le16(q + at + 8)), q + at + 8, 2);
         }
         if (q[0]) {
           s += " " + bdaddr_str(q + 5) + " failed: " + status_str(q[0]);
@@ -1448,20 +3391,21 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
       size_t off = 1;
       std::string first;
       for (size_t i = 0; i < q[0] && off + 9 <= m; ++i) {
-        const uint8_t* r = q + off;
-        const size_t dl = r[8];
+        const uint8_t* a = q + off;
+        const size_t dl = a[8];
         if (off + 9 + dl + 1 > m) break;
-        const int8_t rssi = static_cast<int8_t>(r[9 + dl]);
-        OPEN(sf("Report %zu", i), bdaddr_str(r + 2), r, 10 + dl);
-        F("Event type", r[0] < 5 ? types[r[0]] : "?", r, 1);
-        F("Address type", addr_type_name(r[1]), r + 1, 1);
-        F("Address", bdaddr_str(r + 2), r + 2, 6);
-        const std::string name = ad_data(o, r + 9, dl);
-        F("RSSI", sf("%d dBm", rssi), r + 9 + dl, 1);
+        const int8_t rssi = static_cast<int8_t>(a[9 + dl]);
+        OPEN(sf("Report %zu", i), bdaddr_str(a + 2), a, 10 + dl);
+        F("Event type", a[0] < 5 ? types[a[0]] : "?", a, 1);
+        F("Address type", addr_type_name(a[1]), a + 1, 1);
+        F("Address", bdaddr_str(a + 2), a + 2, 6);
+        F("Data length", std::to_string(dl), a + 8, 1);
+        const std::string name = ad_data(o, a + 9, dl);
+        F("RSSI", sf("%d dBm", rssi), a + 9 + dl, 1);
         CLOSE();
         if (i == 0) {
-          first = sf(" %s %s (%s) %d dBm", r[0] < 5 ? types[r[0]] : "?", bdaddr_str(r + 2).c_str(),
-                     addr_type_name(r[1]), rssi);
+          first = sf(" %s %s (%s) %d dBm", a[0] < 5 ? types[a[0]] : "?", bdaddr_str(a + 2).c_str(),
+                     addr_type_name(a[1]), rssi);
           if (!name.empty()) first += " \"" + name + "\"";
         }
         off += 10 + dl;
@@ -1470,32 +3414,57 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
       if (q[0] > 1) s += sf(" (+%u more)", q[0] - 1);
       break;
     }
+    case 0x0b: {  // Directed Advertising Report
+      const uint8_t k = r.u8("Reports");
+      for (unsigned i = 0; i < k && r.has(16); ++i) {
+        const uint8_t* a = r.cur();
+        OPEN_R(r, sf("Report %u", i), bdaddr_str(a + 2), a, 16);
+        r.named("Event type", 1, adv_type_name);
+        r.atype();
+        r.addr();
+        r.atype("Direct address type");
+        r.addr("Direct address");
+        r.with("RSSI", 1, [](uint32_t v) { return sf("%d dBm", static_cast<int8_t>(v)); });
+        CLOSE_R(r);
+        if (i == 0) s += sf(" %s (%s) %d dBm", bdaddr_str(a + 2).c_str(), addr_type_name(a[1]), static_cast<int8_t>(a[15]));
+      }
+      break;
+    }
     case 0x0d: {  // Extended Advertising Report
       if (m < 1) break;
       F("Reports", std::to_string(q[0]), q, 1);
       size_t off = 1;
       std::string first;
       for (size_t i = 0; i < q[0] && off + 24 <= m; ++i) {
-        const uint8_t* r = q + off;
-        const size_t dl = r[23];
+        const uint8_t* a = q + off;
+        const size_t dl = a[23];
         if (off + 24 + dl > m) break;
-        const uint16_t et = le16(r);
-        const int8_t rssi = static_cast<int8_t>(r[13]);
-        OPEN(sf("Report %zu", i), bdaddr_str(r + 3), r, 24 + dl);
-        F("Event type", sf("0x%04x%s%s%s%s", et, et & 0x01 ? " connectable" : "",
-                           et & 0x02 ? " scannable" : "", et & 0x08 ? " scan-response" : "",
-                           et & 0x10 ? " legacy" : ""), r, 2);
-        F("Address type", addr_type_name(r[2]), r + 2, 1);
-        F("Address", bdaddr_str(r + 3), r + 3, 6);
-        F("PHY", sf("primary %u, secondary %u", r[9], r[10]), r + 9, 2);
-        F("SID", std::to_string(r[11]), r + 11, 1);
-        F("TX power", sf("%d dBm", static_cast<int8_t>(r[12])), r + 12, 1);
-        F("RSSI", sf("%d dBm", rssi), r + 13, 1);
-        const std::string name = ad_data(o, r + 24, dl);
+        const uint16_t et = le16(a);
+        const int8_t rssi = static_cast<int8_t>(a[13]);
+        OPEN(sf("Report %zu", i), bdaddr_str(a + 3), a, 24 + dl);
+        F("Event type", ext_adv_type_str(et), a, 2);
+        F("Address type", a[2] == 0xff ? "anonymous" : addr_type_name(a[2]), a + 2, 1);
+        F("Address", bdaddr_str(a + 3), a + 3, 6);
+        F("Primary PHY", sf("0x%02x (%s)", a[9], phy_name(a[9])), a + 9, 1);
+        F("Secondary PHY", a[10] ? sf("0x%02x (%s)", a[10], phy_name(a[10])) : std::string("none"), a + 10, 1);
+        F("SID", a[11] == 0xff ? std::string("none (0xff)") : std::to_string(a[11]), a + 11, 1);
+        F("TX power", a[12] == 0x7f ? std::string("not available") : sf("%d dBm", static_cast<int8_t>(a[12])), a + 12, 1);
+        F("RSSI", rssi == 127 ? std::string("not available") : sf("%d dBm", rssi), a + 13, 1);
+        F("Periodic advertising interval", le16(a + 14) ? sf("%.2f ms", le16(a + 14) * 1.25) : std::string("none"), a + 14, 2);
+        if (et & 0x04) {
+          F("Direct address type", addr_type_name(a[16]), a + 16, 1);
+          F("Direct address", bdaddr_str(a + 17), a + 17, 6);
+        } else {
+          F("Direct address", "none", a + 16, 7);
+        }
+        F("Data length", std::to_string(dl), a + 23, 1);
+        std::string info;
+        const std::string name = ad_data(o, a + 24, dl, i == 0 ? &info : nullptr);
         CLOSE();
         if (i == 0) {
-          first = sf(" %s (%s) %d dBm", bdaddr_str(r + 3).c_str(), addr_type_name(r[2]), rssi);
+          first = sf(" %s (%s) %d dBm", bdaddr_str(a + 3).c_str(), addr_type_name(a[2]), rssi);
           if (!name.empty()) first += " \"" + name + "\"";
+          if (!info.empty()) first += " " + info;
         }
         off += 24 + dl;
       }
@@ -1519,7 +3488,7 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
       if (m >= 11) {
         F("Status", status_str(q[0]), q, 1);
         F("Handle", std::to_string(le16(q + 1) & 0x0fff), q + 1, 2);
-        F("Features", hexbytes(q + 3, 8), q + 3, 8);
+        F("Features", hexbytes(q + 3, 8) + (q[0] ? "" : " (" + le_features_str(q + 3) + ")"), q + 3, 8);
         s += sf(" handle %u", le16(q + 1) & 0x0fff) + (q[0] ? " " + status_str(q[0]) : "");
       }
       break;
@@ -1549,6 +3518,11 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
         s += sf(" handle %u TX %u RX %u octets", le16(q) & 0x0fff, le16(q + 2), le16(q + 6));
       }
       break;
+    case 0x08:  // Read Local P-256 Public Key Complete
+    case 0x09:  // Generate DHKey Complete
+      if (r.status() && m >= 1) s += " " + status_str(q[0]);
+      r.hex(sub == 0x08 ? "Public key" : "DHKey", sub == 0x08 ? 64 : 32);
+      break;
     case 0x0c:  // PHY Update Complete
       if (m >= 5) {
         static const char* phys[] = {"?", "1M", "2M", "Coded"};
@@ -1560,6 +3534,59 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
                 q[4] < 4 ? phys[q[4]] : "?");
       }
       break;
+    case 0x0e:    // Periodic Advertising Sync Established
+    case 0x24: {  // v2
+      const uint8_t st = r.status();
+      const uint16_t sh = r.handle("Sync handle");
+      const uint8_t sid = r.u8("SID");
+      r.atype();
+      const std::string a = r.addr();
+      r.phy("PHY");
+      const uint16_t iv = static_cast<uint16_t>(r.time("Interval", 2, 1.25));
+      r.named("Clock accuracy", 1, clock_accuracy_name);
+      if (sub == 0x24) {
+        r.u8("Subevents");
+        r.time("Subevent interval", 1, 1.25);
+        r.time("Response slot delay", 1, 1.25);
+        r.time("Response slot spacing", 1, 0.125);
+      }
+      if (m >= 1 && st) s += " " + a + " failed: " + status_str(st);
+      else if (m >= 15) s += sf(" sync handle %u %s SID %u interval %.2f ms", sh, a.c_str(), sid, iv * 1.25);
+      break;
+    }
+    case 0x0f:    // Periodic Advertising Report
+    case 0x25: {  // v2
+      const uint16_t sh = r.handle("Sync handle");
+      r.dbm("TX power");
+      const int8_t rssi = static_cast<int8_t>(r.with("RSSI", 1, [](uint32_t v) {
+        return static_cast<int8_t>(v) == 127 ? std::string("not available") : sf("%d dBm", static_cast<int8_t>(v));
+      }));
+      static const char* const cte[] = {"AoA", "AoD 1 us", "AoD 2 us"};
+      r.with("CTE type", 1, [](uint32_t v) { return v == 0xff ? std::string("none") : sf("0x%02x (%s)", v, v < 3 ? cte[v] : "?"); });
+      if (sub == 0x25) {
+        r.u16("Periodic event counter");
+        r.with("Subevent", 1, [](uint32_t v) { return v == 0xff ? std::string("none") : std::to_string(v); });
+      }
+      const uint8_t ds = static_cast<uint8_t>(r.named("Data status", 1, data_status_name));
+      const uint8_t dl = r.u8("Data length");
+      std::string name, info;
+      if (r.has(1) && dl) {
+        // A fragment that more follow (data status 1) is cut mid-structure: only a complete one
+        // is read for the summary.
+        name = ad_data(o, r.cur(), std::min<size_t>(dl, r.left()), ds == 0 ? &info : nullptr);
+        r.skip(dl);
+      }
+      if (m >= 7) {
+        s += sf(" sync handle %u %d dBm, %u bytes", sh, rssi, dl);
+        if (ds == 1 || ds == 2) s += sf(" (%s)", data_status_name(ds));
+        if (!name.empty()) s += " \"" + name + "\"";
+        if (!info.empty()) s += " " + info;
+      }
+      break;
+    }
+    case 0x10:  // Periodic Advertising Sync Lost
+      s += sf(" sync handle %u", r.handle("Sync handle"));
+      break;
     case 0x12:  // Advertising Set Terminated
       if (m >= 5) {
         F("Status", status_str(q[0]), q, 1);
@@ -1569,6 +3596,12 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
         s += sf(" set %u", q[1]) + (q[0] ? " " + status_str(q[0]) : sf(" handle %u", le16(q + 2) & 0x0fff));
       }
       break;
+    case 0x13:  // Scan Request Received
+      s += sf(" set %u", r.u8("Advertising handle"));
+      r.atype("Scanner address type");
+      if (r.has(6)) s += " from " + bdaddr_str(r.cur());
+      r.addr("Scanner address");
+      break;
     case 0x14:  // Channel Selection Algorithm
       if (m >= 3) {
         F("Handle", std::to_string(le16(q) & 0x0fff), q, 2);
@@ -1576,14 +3609,59 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
         s += sf(" handle %u #%u", le16(q) & 0x0fff, q[2] + 1);
       }
       break;
-    case 0x19:
-    case 0x2a:
-      if (m >= 3) {
-        F("Status", status_str(q[0]), q, 1);
-        F("CIS handle", std::to_string(le16(q + 1) & 0x0fff), q + 1, 2);
-        s += sf(" handle %u", le16(q + 1) & 0x0fff) + (q[0] ? " " + status_str(q[0]) : "");
+    case 0x18:    // Periodic Advertising Sync Transfer Received
+    case 0x26: {  // v2
+      const uint8_t st = r.status();
+      const uint16_t h = r.handle();
+      r.u16("Service data", "0x%04x");
+      const uint16_t sh = r.handle("Sync handle");
+      const uint8_t sid = r.u8("SID");
+      r.atype();
+      const std::string a = r.addr();
+      r.phy("PHY");
+      r.time("Interval", 2, 1.25);
+      r.named("Clock accuracy", 1, clock_accuracy_name);
+      if (sub == 0x26) {
+        r.u8("Subevents");
+        r.time("Subevent interval", 1, 1.25);
+        r.time("Response slot delay", 1, 1.25);
+        r.time("Response slot spacing", 1, 0.125);
       }
+      if (m >= 3) s += sf(" handle %u", h);
+      if (m >= 1 && st) s += " " + status_str(st);
+      else if (m >= 15) s += sf(" sync handle %u %s SID %u", sh, a.c_str(), sid);
       break;
+    }
+    case 0x19:    // CIS Established
+    case 0x2a: {  // v2
+      const uint8_t st = r.status();
+      const uint16_t h = r.handle("CIS handle");
+      r.u24("CIG sync delay", "%u us");
+      r.u24("CIS sync delay", "%u us");
+      const uint32_t lc = r.u24("Transport latency C to P", "%u us");
+      const uint32_t lp = r.u24("Transport latency P to C", "%u us");
+      r.phy("PHY C to P");
+      r.phy("PHY P to C");
+      r.u8("NSE");
+      r.u8("BN C to P");
+      r.u8("BN P to C");
+      r.u8("FT C to P");
+      r.u8("FT P to C");
+      r.u16("Max PDU C to P");
+      r.u16("Max PDU P to C");
+      const uint16_t iv = static_cast<uint16_t>(r.time("ISO interval", 2, 1.25));
+      if (sub == 0x2a) {
+        r.u24("Sub interval", "%u us");
+        r.u16("Max SDU C to P");
+        r.u16("Max SDU P to C");
+        r.u24("SDU interval C to P", "%u us");
+        r.u24("SDU interval P to C", "%u us");
+        r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "framed" : "unframed"); });
+      }
+      if (m >= 3) s += sf(" handle %u", h) + (st ? " " + status_str(st) : "");
+      if (!st && m >= 28) s += sf(" ISO interval %.2f ms, latency %.1f/%.1f ms", iv * 1.25, lc / 1000.0, lp / 1000.0);
+      break;
+    }
     case 0x1a:
       if (m >= 6) {
         F("ACL handle", std::to_string(le16(q) & 0x0fff), q, 2);
@@ -1593,14 +3671,122 @@ std::string le_meta(Out& o, const uint8_t* p, size_t n) {
         s += sf(" ACL %u CIS %u", le16(q) & 0x0fff, le16(q + 2) & 0x0fff);
       }
       break;
+    case 0x1b: {  // Create BIG Complete
+      const uint8_t st = r.status();
+      const uint8_t big = r.u8("BIG handle");
+      r.u24("BIG sync delay", "%u us");
+      const uint32_t lat = r.u24("Transport latency", "%u us");
+      r.phy("PHY");
+      r.u8("NSE");
+      r.u8("BN");
+      r.u8("PTO");
+      r.u8("IRC");
+      r.u16("Max PDU");
+      const uint16_t iv = static_cast<uint16_t>(r.time("ISO interval", 2, 1.25));
+      const uint8_t k = r.u8("Number of BIS");
+      std::string hs;
+      for (unsigned i = 0; i < k && r.has(2); ++i) hs += sf("%s%u", i ? "," : "", r.handle("BIS handle"));
+      if (m >= 1 && st) s += " " + status_str(st);
+      else if (m >= 2) s += sf(" BIG %u", big) + (hs.empty() ? "" : " BIS " + hs) +
+                            (m >= 18 ? sf(", ISO interval %.2f ms, latency %.1f ms", iv * 1.25, lat / 1000.0) : "");
+      break;
+    }
+    case 0x1c:  // Terminate BIG Complete
+    case 0x1e:  // BIG Sync Lost
+      s += sf(" BIG %u", r.u8("BIG handle"));
+      if (r.has(1)) s += sf(" reason 0x%02x (%s)", r.cur()[0], error_name(r.cur()[0]));
+      r.status("Reason");
+      break;
+    case 0x1d: {  // BIG Sync Established
+      const uint8_t st = r.status();
+      const uint8_t big = r.u8("BIG handle");
+      const uint32_t lat = r.u24("Transport latency", "%u us");
+      r.u8("NSE");
+      r.u8("BN");
+      r.u8("PTO");
+      r.u8("IRC");
+      r.u16("Max PDU");
+      const uint16_t iv = static_cast<uint16_t>(r.time("ISO interval", 2, 1.25));
+      const uint8_t k = r.u8("Number of BIS");
+      std::string hs;
+      for (unsigned i = 0; i < k && r.has(2); ++i) hs += sf("%s%u", i ? "," : "", r.handle("BIS handle"));
+      if (m >= 1 && st) s += " " + status_str(st);
+      else if (m >= 2) s += sf(" BIG %u", big) + (hs.empty() ? "" : " BIS " + hs) +
+                            (m >= 14 ? sf(", ISO interval %.2f ms, latency %.1f ms", iv * 1.25, lat / 1000.0) : "");
+      break;
+    }
+    case 0x1f: {  // Request Peer SCA Complete
+      const uint8_t st = r.status();
+      s += sf(" handle %u", r.handle());
+      if (st) s += " " + status_str(st);
+      r.named("Peer clock accuracy", 1, sca_name);
+      break;
+    }
+    case 0x20:  // Path Loss Threshold
+      s += sf(" handle %u", r.handle());
+      if (r.has(1)) s += sf(" %u dB", r.cur()[0]);
+      r.with("Current path loss", 1, [](uint32_t v) { return v == 0xff ? std::string("unavailable") : sf("%u dB", v); });
+      r.with("Zone entered", 1, [](uint32_t v) {
+        static const char* const z[] = {"low", "middle", "high"};
+        return std::string(v < 3 ? z[v] : "?");
+      });
+      break;
+    case 0x21: {  // Transmit Power Reporting
+      const uint8_t st = r.status();
+      s += sf(" handle %u", r.handle());
+      if (st) s += " " + status_str(st);
+      r.with("Reason", 1, [](uint32_t v) {
+        static const char* const why[] = {"local power changed", "remote power changed", "read remote completed"};
+        return std::string(v < 3 ? why[v] : "?");
+      });
+      r.with("PHY", 1, [](uint32_t v) {
+        static const char* const ph[] = {"?", "LE 1M", "LE 2M", "LE Coded S=8", "LE Coded S=2"};
+        return std::string(v < 5 ? ph[v] : "?");
+      });
+      if (r.has(1)) s += sf(" %d dBm", static_cast<int8_t>(r.cur()[0]));
+      r.with("TX power", 1, [](uint32_t v) {
+        return v == 0x7e ? std::string("remote not managing power") : v == 0x7f ? std::string("not available")
+                                                                                 : sf("%d dBm", static_cast<int8_t>(v));
+      });
+      static const char* const fl[] = {"at minimum", "at maximum"};
+      r.flags("Flags", 1, fl, 2);
+      r.with("Delta", 1, [](uint32_t v) { return v == 0x7f ? std::string("not available") : sf("%d dB", static_cast<int8_t>(v)); });
+      break;
+    }
+    case 0x22: {  // BIGInfo Advertising Report
+      const uint16_t sh = r.handle("Sync handle");
+      const uint8_t k = r.u8("Number of BIS");
+      r.u8("NSE");
+      const uint16_t iv = static_cast<uint16_t>(r.time("ISO interval", 2, 1.25));
+      r.u8("BN");
+      r.u8("PTO");
+      r.u8("IRC");
+      r.u16("Max PDU");
+      r.u24("SDU interval", "%u us");
+      const uint16_t sdu = r.u16("Max SDU");
+      r.phy("PHY");
+      r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "framed" : "unframed"); });
+      const uint8_t enc = r.yes_no("Encryption", "yes", "no");
+      if (m >= 19) s += sf(" sync handle %u, %u BIS, ISO interval %.2f ms, max SDU %u%s", sh, k, iv * 1.25, sdu, enc ? ", encrypted" : "");
+      break;
+    }
+    case 0x23: {  // Subrate Change
+      const uint8_t st = r.status();
+      s += sf(" handle %u", r.handle());
+      if (st) s += " " + status_str(st);
+      const uint16_t f = r.u16("Subrate factor");
+      r.u16("Peripheral latency");
+      r.u16("Continuation number");
+      r.time("Supervision timeout", 2, 10);
+      if (!st && m >= 5) s += sf(" factor %u", f);
+      break;
+    }
+    case 0x11:  // Scan Timeout: no parameters
+      break;
     default:
-      if (m >= 1 && (sub == 0x1b || sub == 0x1d || sub == 0x08 || sub == 0x09 || sub == 0x0e)) {
-        F("Status", status_str(q[0]), q, 1);
-        if (q[0]) s += " " + status_str(q[0]);
-      }
       break;
   }
-  if (o.detail && m) F("Parameters", hexbytes(q, m, 64), q, m);
+  rest(o, q, m);
   return s;
 }
 
@@ -1618,6 +3804,8 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
   OPEN("HCI Event", s, d, len);
   F("Event code", sf("0x%02x (%s)", code, nm ? nm : "unknown"), d, 1);
   F("Parameter length", std::to_string(d[1]), d + 1, 1);
+  o.mark(p);
+  Rd r(o, p, n);
 
   auto status_handle = [&]() {
     if (n >= 3) {
@@ -1707,20 +3895,22 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
     case 0x0c:  // Read Remote Version Information Complete
       status_handle();
       if (n >= 8) {
-        F("LMP version", sf("%u (subversion 0x%04x)", p[3], le16(p + 6)), p + 3, 1);
-        F("Manufacturer", std::to_string(le16(p + 4)), p + 4, 2);
+        F("LMP version", sf("%u (Bluetooth %s)", p[3], bt_version_name(p[3])), p + 3, 1);
+        F("Manufacturer", company_str(le16(p + 4)), p + 4, 2);
+        F("LMP subversion", sf("0x%04x", le16(p + 6)), p + 6, 2);
         if (!p[0]) s += sf(" LMP %u manufacturer %u", p[3], le16(p + 4));
       }
       break;
     case 0x0b:  // Read Remote Supported Features Complete
       status_handle();
-      if (n >= 11) F("Features", hexbytes(p + 3, 8), p + 3, 8);
+      if (n >= 11) F("Features", hexbytes(p + 3, 8) + (p[0] ? "" : " (" + lmp_features_str(p + 3, 0) + ")"), p + 3, 8);
       break;
     case 0x23:
       status_handle();
       if (n >= 13) {
         F("Page", sf("%u of %u", p[3], p[4]), p + 3, 2);
-        F("Features", hexbytes(p + 5, 8), p + 5, 8);
+        F("Features", hexbytes(p + 5, 8) + (p[0] ? "" : " (" + lmp_features_str(p + 5, p[3]) + ")"), p + 5, 8);
+        if (!p[0]) s += sf(" page %u", p[3]);
       }
       break;
     case 0x10:  // Hardware Error
@@ -1759,7 +3949,7 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
       if (n >= 23) {
         F("Address", bdaddr_str(p), p, 6);
         F("Link key", hexbytes(p + 6, 16), p + 6, 16);
-        F("Key type", std::to_string(p[22]), p + 22, 1);
+        F("Key type", sf("0x%02x (%s)", p[22], link_key_type_name(p[22])), p + 22, 1);
         s += " " + bdaddr_str(p) + sf(" type %u", p[22]);
       }
       break;
@@ -1767,8 +3957,8 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
       if (n >= 9) {
         F("Address", bdaddr_str(p), p, 6);
         F("IO capability", io_cap_name(p[6]), p + 6, 1);
-        F("OOB data", std::to_string(p[7]), p + 7, 1);
-        F("Authentication", sf("0x%02x", p[8]), p + 8, 1);
+        F("OOB data", sf("0x%02x (%s)", p[7], oob_present_name(p[7])), p + 7, 1);
+        F("Authentication", sf("0x%02x (%s)", p[8], auth_req_name(p[8])), p + 8, 1);
         s += " " + bdaddr_str(p) + " " + io_cap_name(p[6]);
       }
       break;
@@ -1798,10 +3988,11 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
       for (size_t i = 0; i < p[0] && 1 + 14 * (i + 1) <= n; ++i) {
         const uint8_t* q = p + 1 + 14 * i;
         if (code == 0x22) {
-          F(sf("Response %zu", i), sf("%s class 0x%06x RSSI %d", bdaddr_str(q).c_str(), le24(q + 8),
-                                      static_cast<int8_t>(q[13])), q, 14);
+          F(sf("Response %zu", i), sf("%s %s, RSSI %d dBm, R%u, clock offset 0x%04x", bdaddr_str(q).c_str(),
+                                      cod_str(le24(q + 8)).c_str(), static_cast<int8_t>(q[13]), q[6], le16(q + 11) & 0x7fff), q, 14);
         } else {
-          F(sf("Response %zu", i), sf("%s class 0x%06x", bdaddr_str(q).c_str(), le24(q + 9)), q, 14);
+          F(sf("Response %zu", i), sf("%s %s, R%u, clock offset 0x%04x", bdaddr_str(q).c_str(),
+                                      cod_str(le24(q + 9)).c_str(), q[6], le16(q + 12) & 0x7fff), q, 14);
         }
         if (i == 0) s += " " + bdaddr_str(q);
       }
@@ -1826,11 +4017,90 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
         F("Handle", std::to_string(le16(p + 1) & 0x0fff), p + 1, 2);
         F("Address", bdaddr_str(p + 3), p + 3, 6);
         F("Link type", p[9] == 2 ? "eSCO" : "SCO", p + 9, 1);
-        F("Air mode", std::to_string(p[16]), p + 16, 1);
+        F("TX interval", sf("%u slots", p[10]), p + 10, 1);
+        F("Retransmission window", sf("%u slots", p[11]), p + 11, 1);
+        F("RX packet length", std::to_string(le16(p + 12)), p + 12, 2);
+        F("TX packet length", std::to_string(le16(p + 14)), p + 14, 2);
+        F("Air mode", sf("0x%02x (%s)", p[16], air_mode_name(p[16])), p + 16, 1);
         s += p[0] ? " " + bdaddr_str(p + 3) + " failed: " + status_str(p[0])
                   : sf(" handle %u %s (%s)", le16(p + 1) & 0x0fff, bdaddr_str(p + 3).c_str(),
                        p[9] == 2 ? "eSCO" : "SCO");
+        if (!p[0]) s += std::string(" ") + air_mode_name(p[16]);
       }
+      break;
+    case 0x0d:  // QoS Setup Complete
+    case 0x21:  // Flow Specification Complete
+      status_handle();
+      r.skip(3);
+      if (code == 0x0d) r.u8("Unused");
+      else r.with("Flow direction", 1, [](uint32_t v) { return std::string(v ? "incoming" : "outgoing"); });
+      r.with("Service type", 1, [](uint32_t v) {
+        static const char* const t[] = {"no traffic", "best effort", "guaranteed"};
+        return std::string(v < 3 ? t[v] : "?");
+      });
+      r.u32("Token rate", "%u bytes/s");
+      if (code == 0x21) r.u32("Token bucket size", "%u bytes");
+      r.u32("Peak bandwidth", "%u bytes/s");
+      r.u32(code == 0x0d ? "Latency" : "Access latency", "%u us");
+      if (code == 0x0d) r.u32("Delay variation", "%u us");
+      break;
+    case 0x15: {  // Return Link Keys
+      const uint8_t k = r.u8("Keys");
+      for (unsigned i = 0; i < k && r.has(22); ++i) {
+        r.addr();
+        r.hex("Link key", 16);
+      }
+      break;
+    }
+    case 0x1a:  // Data Buffer Overflow
+      r.with("Link type", 1, [](uint32_t v) { return std::string(v == 1 ? "ACL" : v == 0 ? "SCO" : "?"); });
+      break;
+    case 0x1c:  // Read Clock Offset Complete
+      status_handle();
+      r.skip(3);
+      r.with("Clock offset", 2, [](uint32_t v) { return sf("0x%04x", v & 0x7fff); });
+      break;
+    case 0x1d:  // Connection Packet Type Changed
+      status_handle();
+      r.skip(3);
+      r.flags("Packet type", 2, kAclPacketTypes, 16);
+      break;
+    case 0x1e:  // QoS Violation
+      s += sf(" handle %u", r.handle());
+      break;
+    case 0x20:  // Page Scan Repetition Mode Change
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr();
+      r.u8("Page scan repetition mode", "R%u");
+      break;
+    case 0x2d:  // Synchronous Connection Changed
+      status_handle();
+      r.skip(3);
+      r.u8("TX interval", "%u slots");
+      r.u8("Retransmission window", "%u slots");
+      r.u16("RX packet length");
+      r.u16("TX packet length");
+      break;
+    case 0x2e:  // Sniff Subrating
+      status_handle();
+      r.skip(3);
+      r.time("Max TX latency", 2, 0.625);
+      r.time("Max RX latency", 2, 0.625);
+      r.time("Min remote timeout", 2, 0.625);
+      r.time("Min local timeout", 2, 0.625);
+      break;
+    case 0x3c:  // Keypress Notification
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr();
+      r.with("Type", 1, [](uint32_t v) {
+        static const char* const t[] = {"entry started", "digit entered", "digit erased", "cleared", "entry completed"};
+        return std::string(v < 5 ? t[v] : "?");
+      });
+      break;
+    case 0x3d:  // Remote Host Supported Features Notification
+      if (r.has(6)) s += " " + bdaddr_str(r.cur());
+      r.addr();
+      if (r.has(8)) F("Features", hexbytes(r.cur(), 8) + " (" + lmp_features_str(r.cur(), 1) + ")", r.cur(), 8);
       break;
     case 0x11:  // Flush Occurred
     case 0x1b:  // Max Slots Change
@@ -1857,16 +4127,19 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
     default:
       // The rest that start with status + handle.
       switch (code) {
-        case 0x06: case 0x09: case 0x0a: case 0x0d: case 0x1c: case 0x1d: case 0x21:
-        case 0x2d: case 0x2e: case 0x30:
+        case 0x06: case 0x09: case 0x30:
           status_handle();
+          break;
+        case 0x0a:  // Link Key Type Changed
+          status_handle();
+          if (n >= 4) F("Key flag", p[3] ? "temporary" : "semi-permanent", p + 3, 1);
           break;
         default:
           break;
       }
-      if (o.detail && n) F("Parameters", hexbytes(p, n, 64), p, n);
       break;
   }
+  rest(o, p, n);
   CLOSE();
   o.summary = s;
 }
@@ -1984,7 +4257,24 @@ std::string l2cap_sig(Out& o, const uint8_t* d, size_t len, bool le) {
           t += std::string(" ") + (it < 4 ? types[it] : "?");
           if (code == 0x0b && n >= 4) {
             F("Result", le16(p + 2) ? "not supported" : "success", p + 2, 2);
-            if (n > 4) F("Data", hexbytes(p + 4, n - 4), p + 4, n - 4);
+            // The answer per type (Core Vol 3 Part A 4.12): an MTU or a bit mask.
+            static const char* const feat[] = {"flow control", "retransmission", "bi-directional QoS",
+                                               "enhanced retransmission", "streaming", "FCS option",
+                                               "extended flow specification", "fixed channels", "extended window size",
+                                               "unicast connectionless data", "enhanced credit based flow control"};
+            static const char* const fixed[] = {nullptr, "L2CAP signalling", "connectionless", "AMP manager",
+                                                nullptr, nullptr, nullptr, "BR/EDR security manager"};
+            if (!le16(p + 2) && it == 1 && n >= 6) {
+              F("Connectionless MTU", std::to_string(le16(p + 4)), p + 4, 2);
+            } else if (!le16(p + 2) && it == 2 && n >= 8) {
+              F("Features", sf("0x%08x (%s)", le32(p + 4), bit_names(le32(p + 4), feat, 11).c_str()), p + 4, 4);
+            } else if (!le16(p + 2) && it == 3 && n >= 12) {
+              uint64_t v = 0;
+              for (int i = 7; i >= 0; --i) v = v << 8 | p[4 + i];
+              F("Fixed channels", hexbytes(p + 4, 8) + " (" + bit_names(v, fixed, 8) + ")", p + 4, 8);
+            } else if (n > 4) {
+              F("Data", hexbytes(p + 4, n - 4), p + 4, n - 4);
+            }
           }
         }
         break;
@@ -3114,6 +5404,7 @@ std::string avdtp(Out& o, const uint8_t* d, size_t n) {
   }
   const uint8_t* p = d + 2;
   const size_t m = n - 2;
+  o.mark(p);
   if (mtype == 0) {
     switch (signal) {
       case 0x03:  // SET_CONFIGURATION
@@ -3183,9 +5474,7 @@ std::string avdtp(Out& o, const uint8_t* d, size_t n) {
       if (seid_first && m >= 1) s += sf(" (acp %u)", p[0] >> 2);
     }
   }
-  if (o.detail && m && mtype != 0 && signal != 0x01 && signal != 0x02 && signal != 0x04 && signal != 0x0c) {
-    F("Parameters", hexbytes(p, m, 64), p, m);
-  }
+  rest(o, p, m);
   CLOSE();
   return s;
 }
@@ -3753,6 +6042,7 @@ std::string avrcp_browsing(Out& o, const uint8_t* p, size_t m, bool rsp) {
   F("Parameter length", std::to_string(be16(p + 1)), p + 1, 2);
   const uint8_t* v = p + 3;
   const size_t n = std::min<size_t>(m - 3, be16(p + 1));
+  o.mark(v);
   std::string s = std::string(nm ? nm : sf("PDU 0x%02x", pdu).c_str()) + (rsp ? " rsp" : "");
   std::string d;
   if (pdu == 0xa0 && n >= 1) {
@@ -3873,7 +6163,7 @@ std::string avrcp_browsing(Out& o, const uint8_t* p, size_t m, bool rsp) {
         break;
     }
   }
-  if (o.detail && pdu != 0x71 && pdu != 0x73 && pdu != 0x70 && n) F("Parameters", hexbytes(v, n, 64), v, n);
+  rest(o, v, n);
   CLOSE();
   return d.empty() ? s : s + ": " + d;
 }
@@ -3995,11 +6285,12 @@ std::string avc(Out& o, const uint8_t* p, size_t m, bool rsp) {
       if (vn) F("Continuation", hexbytes(v, vn, 64), v, vn);
       s += sf(" (%s, %zu bytes)", pts[pt], vn);
     } else {
+      o.mark(v);
       const std::string d = avrcp_vendor_params(o, pdu, rsp, ctype, v, vn);
       if (pt == 1) s += " (start)";
       // "RegisterNotification CHANGED VOLUME_CHANGED: 87 (69%)": the event reads as part of the name.
       if (!d.empty()) s += (pdu == 0x31 && ctype != 0xa ? " " : ": ") + d;
-      if (o.detail && vn && pdu != 0x20 && pdu != 0x31) F("Parameters", hexbytes(v, vn, 64), v, vn);
+      rest(o, v, vn);
     }
   } else {
     F("Opcode", sf("0x%02x%s", opcode, opcode == 0x30 ? " (UNIT INFO)" : opcode == 0x31 ? " (SUBUNIT INFO)" : ""), p + 2, 1);
@@ -4241,7 +6532,9 @@ void sco_iso(Out& o, const uint8_t* d, size_t len, bool iso) {
   const uint16_t dl = le16(d + 2) & 0x3fff;
   OPEN("HCI ISO", sf("handle %u", hf & 0x0fff), d, len);
   F("Handle", std::to_string(hf & 0x0fff), d, 2);
-  F("Packet boundary", std::to_string(pb), d + 1, 1);
+  static const char* const pbs[] = {"first fragment", "continuation", "complete SDU", "last fragment"};
+  F("Packet boundary", sf("%u (%s)", pb, pbs[pb]), d + 1, 1);
+  F("Timestamp present", tsf ? "yes" : "no", d + 1, 1);
   F("Data length", std::to_string(dl), d + 2, 2);
   std::string s = sf("ISO %zu bytes", len - 4);
   size_t at = 4;
@@ -4251,8 +6544,11 @@ void sco_iso(Out& o, const uint8_t* d, size_t len, bool iso) {
       at += 4;
     }
     if (at + 4 <= len) {
+      // The packet status flag only means something from the controller (Core Vol 4 Part E 5.4.5).
+      static const char* const st[] = {"valid", "possibly invalid", "lost", "?"};
       F("Sequence number", std::to_string(le16(d + at)), d + at, 2);
       F("SDU length", std::to_string(le16(d + at + 2) & 0x0fff), d + at + 2, 2);
+      F("Packet status", st[le16(d + at + 2) >> 14], d + at + 3, 1);
       s = sf("ISO seq %u, SDU %u bytes", le16(d + at), le16(d + at + 2) & 0x0fff);
       if ((le16(d + at + 2) >> 14) == 2) s += " (lost)";
       at += 4;

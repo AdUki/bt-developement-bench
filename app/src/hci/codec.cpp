@@ -171,19 +171,7 @@ void decode_mpeg(const uint8_t* p, size_t len, CodecInfo* c) {
   field(c, "Bitrate index", sf("0x%04x", be16(p + 2) & 0x7fff));
 }
 
-const char* vendor_company(uint32_t v) {
-  switch (v) {
-    case 0x000a: return "Qualcomm (CSR)";
-    case 0x004f: return "APT Licensing";
-    case 0x0075: return "Samsung";
-    case 0x00d7: return "Qualcomm";
-    case 0x00e0: return "Google";
-    case 0x012d: return "Sony";
-    case 0x05f1: return "The Linux Foundation";
-    case 0x08a9: return "Fraunhofer IIS";
-    default: return nullptr;
-  }
-}
+const char* vendor_company(uint32_t v) { return v <= 0xffff ? company_name(static_cast<uint16_t>(v)) : nullptr; }
 
 // One direction of PipeWire's Opus: channels, coupled streams, audio location, frame durations,
 // maximum bitrate in units of 1024 bit/s (0: any).
@@ -324,6 +312,41 @@ bool decode_media_codec(const uint8_t* p, size_t len, CodecInfo* out) {
     }
   }
   return true;
+}
+
+// The companies whose IDs (Assigned Numbers 7.1) show up on the bench: controller makers, the
+// phones and earbuds it talks to, and A2DP vendor codecs' owners. Not the whole list (thousands).
+const char* company_name(uint16_t c) {
+  switch (c) {
+    case 0x0000: return "Ericsson";
+    case 0x0001: return "Nokia";
+    case 0x0002: return "Intel";
+    case 0x0006: return "Microsoft";
+    case 0x000a: return "Qualcomm (CSR)";
+    case 0x000d: return "Texas Instruments";
+    case 0x000f: return "Broadcom";
+    case 0x001d: return "Qualcomm";
+    case 0x0030: return "STMicroelectronics";
+    case 0x0046: return "MediaTek";
+    case 0x004c: return "Apple";
+    case 0x004f: return "APT Licensing";
+    case 0x0059: return "Nordic Semiconductor";
+    case 0x005d: return "Realtek";
+    case 0x0075: return "Samsung";
+    case 0x0087: return "Garmin";
+    case 0x009e: return "Bose";
+    case 0x00d7: return "Qualcomm";
+    case 0x00e0: return "Google";
+    case 0x012d: return "Sony";
+    case 0x0131: return "Cypress";
+    case 0x0171: return "Amazon";
+    case 0x027d: return "Huawei";
+    case 0x02e5: return "Espressif";
+    case 0x038f: return "Xiaomi";
+    case 0x05f1: return "The Linux Foundation";
+    case 0x08a9: return "Fraunhofer IIS";
+    default: return nullptr;
+  }
 }
 
 const char* avdtp_signal_name(uint8_t id) {

@@ -28,6 +28,8 @@ struct CodecInfo {
 bool decode_media_codec(const uint8_t* p, size_t len, CodecInfo* out);
 
 const char* avdtp_signal_name(uint8_t id);
+// A Bluetooth SIG company ID by name, for the ones the bench meets; nullptr otherwise.
+const char* company_name(uint16_t id);
 // AVDTP and A2DP error codes (AVDTP 8.20.6.2, A2DP 5.1.3), nullptr if unknown.
 const char* avdtp_error_name(uint8_t e);
 
