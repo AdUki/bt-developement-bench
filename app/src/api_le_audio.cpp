@@ -40,12 +40,14 @@ json le_audio_state(BtManager& bt, audio::AudioEngine& engine) {
 json le_audio_state(Deps& d) { return le_audio_state(d.bt, d.audio); }
 
 // PipeWire's graph followed with pw-dump --monitor, which writes each change as it happens:
-// until() asks `ready` once at the start and again on every change, up to `timeout_ms`.
+// until() asks `ready` once at the start and again on every change, up to `timeout_ms`. pw-dump
+// never flushes, so into a pipe a change would wait in its 4 KB stdio buffer: stdbuf makes it
+// write each line as it comes.
 class PwWatch {
  public:
   PwWatch() {
     std::string err;
-    if (!spawn({"pw-dump", "--monitor"}, &p_, &err)) LOG_WARN("le-audio: pw-dump --monitor: {}", err);
+    if (!spawn({"stdbuf", "-oL", "pw-dump", "--monitor"}, &p_, &err)) LOG_WARN("le-audio: pw-dump --monitor: {}", err);
   }
   ~PwWatch() {
     if (p_.pid <= 0) return;
@@ -241,7 +243,8 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
     std::vector<json> nodes;  // the broadcast's sinks, in transport (BIS) order
     const auto find = [&](bool fresh) {
       nodes.clear();
-      for (const json& e : d.audio.endpoints(fresh)["sinks"])
+      const json eps = d.audio.endpoints(fresh);
+      for (const json& e : eps["sinks"])
         if (e["transport"].is_string() && starts_with(e["transport"].get<std::string>(), prefix)) nodes.push_back(e);
       std::sort(nodes.begin(), nodes.end(), [](const json& a, const json& b) { return a["transport"] < b["transport"]; });
       return nodes.size() >= cs.size();
@@ -284,7 +287,8 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
         nodes.push_back(b["node"].get<std::string>());
     json outputs = json::array();
     bool routed = false;
-    for (const json& k : d.route.get()["outputs"]) {
+    const json route = d.route.get();
+    for (const json& k : route["outputs"]) {
       const bool mine = std::find(nodes.begin(), nodes.end(), k.value("target", std::string{})) != nodes.end();
       routed = routed || mine;
       if (!mine) outputs.push_back(k);
