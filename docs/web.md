@@ -192,17 +192,18 @@ whether it broadcasts, receives or both). *Broadcast from the board* starts a br
 quality (BAP's broadcast configurations, 48 kHz 10 ms low latency first), stereo or mono, and a
 Broadcast Code to encrypt it (empty: anyone listens), the presentation delay under *Options*. Each
 broadcast is a row: BIG and BIS, *on air* or *ready · off air* (it transmits only while something
-plays into it), its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it
-(each with Stop), *Tone* for a test tone and *Stop broadcast* (which stops what plays into it,
-waits until it is off air — PipeWire lets it go a few seconds later — and then clears it). It is a sink like any other: pick
-*Auracast broadcast* as the output in Listen or Streams to send a station, a phone's audio or a
-file. The board's broadcast carries no Broadcast Name, so receivers list it by address.
+plays into it), its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it,
+*Play to* and *Stop broadcast* (which takes it off Listen's outputs, stops anything else playing
+into it, waits until it is off air — PipeWire lets it go a few seconds later — and then clears
+it). *Play to* is the same toggle as the broadcast in Listen → Play to: what Listen plays goes on
+air (not while Listen's input is a broadcast received). The board's broadcast carries no Broadcast Name, so receivers list it by address.
 *Broadcasts in range* scans (LE, 30 s) and shows each broadcaster as a card: its name (the
 Broadcast Name), address, Broadcast ID, signal, encrypted and paired; then its streams, one per
 BIS, once BlueZ has read them (location, codec, state, and the Program_Info the broadcaster sends,
 in bold). *Listen* syncs to one — a Broadcast Code
-field comes first on an encrypted one — and it plays on the board's default output; *syncing…*
-until the BIG is up, *receiving* then, with *Listen here* to hear it in the browser, and *Stop*.
+field comes first on an encrypted one — and makes it Listen's input, played on Listen's outputs
+(the board's own broadcasts are taken off them); *syncing…* until the BIG is up, *receiving* then,
+and *Stop*, which ends it as the input too. To hear it here, turn on *This browser* in Listen.
 Nothing is retried: a stream that does not sync stays as it is, and Listen again is the retry.
 *Players*: AVRCP only — each connected device's player with its track (title, artist, album,
 genre, track n of m), a progress bar that moves between the phone's updates, its cover art (AVRCP

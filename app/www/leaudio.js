@@ -1,10 +1,17 @@
 'use strict';
 // Audio → LE Audio: Auracast both ways (GET /api/le-audio). The board's own broadcasts — a BIG
-// each, which goes on air while something plays into its node (a stream from here, Streams or
-// Listen) — and the broadcasts in range, each stream (BIS) received on request. States are BlueZ's
-// as they are: a stream that does not sync stays where it got to, and Listen again is the retry.
+// each, which goes on air while something plays into its node — and the broadcasts in range, each
+// stream (BIS) received on request. What plays goes through Listen's route, as everywhere: a
+// broadcast here is turned on or off as one of its outputs, and one received becomes its input.
+// States are BlueZ's as they are: a stream that does not sync stays where it got to, and Listen
+// again is the retry.
 
-const la = {s: null, streams: [], poll: null, btT: null, busy: {}, codes: {}, ending: {}};
+const la = {s: null, streams: [], route: null, poll: null, btT: null, busy: {}, codes: {}, ending: {}};
+// The route's outputs, and whether the board's broadcast `node` is one of them.
+const laOuts = () => la.route ? la.route.outputs : [];
+const laOn = node => laOuts().some(k => k.target === node);
+// The route's input is a broadcast received: the board does not broadcast as well (as in Listen).
+const laReceiving = () => !!la.route && la.route.input.type === 'bluetooth' && la.route.input.devices.some(d => d.kind === 'broadcast');
 
 // The Front Left, Front Right … bits of an audio location, as the BAP spec names them.
 const LOC = ['FL', 'FR', 'FC', 'LFE', 'BL', 'BR', 'FLC', 'FRC', 'BC', 'LFE2', 'SL', 'SR'];
@@ -44,15 +51,18 @@ function qosLine(q, codec) {
 function broadcastRow(b) {
   const on = b.state === 'active';
   const st = on ? pill('on air', 'good') : b.state === 'idle' ? pill('ready · off air') : pill(b.state, 'warn');
-  const plays = la.streams.filter(s => (s.sinks || []).some(k => k.target === b.node) && s.state !== 'ended');
-  const playing = plays.length ? plays.map(s => `<span>${esc(s.label.split(' → ')[0])} <button class="small-btn" data-la-stop="${s.id}">Stop</button></span>`).join(' ')
-    : `<span class="muted">nothing plays into it${b.node ? '' : ' (PipeWire has no node for it yet)'}</span>`;
+  const out = b.node && laOn(b.node), blocked = !out && laReceiving();
+  // Streams started elsewhere into it (Audio → Streams, bench) are named; Listen's is its input.
+  const others = la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === b.node) && s.state !== 'ended');
+  const playing = [out ? 'what Listen plays' : '', ...others.map(s => esc(s.label.split(' → ')[0]))].filter(Boolean).join(', ') ||
+    `<span class="muted">${!b.node ? 'nothing (PipeWire has no node for it yet)' : blocked ? 'nothing: Listen receives a broadcast' : 'nothing: turn on Play to, here or in Listen'}</span>`;
   return `<div class="rw"><div class="rw-main"><span class="rw-led${on ? ' on' : ''}"></span>
       <div class="rw-title"><b>BIG ${b.big}${b.bis != null && b.bis !== 255 ? ' · BIS ' + b.bis : ''}</b> ${st}${b.encrypted ? ' ' + pill('encrypted') : ''}
         <span class="rw-sub"><span>${esc(b.codec.summary)}${b.codec.channels ? ' · ' + (b.codec.channels === 2 ? 'stereo' : 'mono') : ''}</span><span>${esc(qosLine(b.qos, b.codec))}</span></span></div>
-      <div class="rw-acts">${b.node ? `<button data-la-tone="${esc(b.node)}" title="A 1 kHz test tone into the broadcast">Tone</button>` : ''}
+      <div class="rw-acts">${b.node ? `<button data-la-out="${esc(b.node)}" class="${out ? 'on' : ''}" aria-pressed="${!!out}"${blocked ? ' disabled' : ''}
+          title="One of Listen's outputs: what Listen plays goes on air">${out ? 'Playing to it' : 'Play to'}</button>` : ''}
         <button data-la-end="${b.big}" class="danger"${la.ending[b.big] ? ' disabled' : ''}>${la.ending[b.big] ? 'going off air…' : 'Stop broadcast'}</button></div></div>
-    <div class="rw-note small">Plays: ${playing}${b.node ? ` · <span class="muted">or pick <b>Auracast broadcast</b> as the output in Listen or Streams</span>` : ''}</div></div>`;
+    <div class="rw-note small">Plays: ${playing}</div></div>`;
 }
 
 // ---------------------------------------------------------------- broadcasts in range
@@ -68,8 +78,9 @@ function streamRow(src, t) {
       <span class="ad-codec">${t.program_info ? `<b>${esc(t.program_info)}</b> ` : ''}<span class="small">${esc(t.codec.summary)}</span></span>
       <span class="ad-state">${st}${t.encrypted ? ' ' + pill('encrypted') : ''}</span>
       <span class="ad-acts">${code}
-        <button class="small-btn" data-la-rx="${esc(t.path)}" data-on="${selected ? 0 : 1}"${busy ? ' disabled' : ''}>${busy ? '…' : selected ? 'Stop' : 'Listen'}</button>
-        ${t.state === 'active' && t.node ? `<button class="small-btn" data-la-hear="${esc(t.node)}" data-title="${esc(src.name || src.address)}" title="Hear it in this browser">Listen here</button>` : ''}</span>
+        <button class="small-btn" data-la-rx="${esc(t.path)}" data-addr="${esc(src.address)}" data-on="${selected ? 0 : 1}"${busy ? ' disabled' : ''}
+          title="${selected ? 'Stop receiving it' : 'Receive it as Listen’s input'}">${busy ? '…' : selected ? 'Stop' : 'Listen'}</button>
+</span>
     </div>`;
 }
 
@@ -122,8 +133,8 @@ function renderLeAudio(s) {
 }
 
 function refreshLeAudio() {
-  return Promise.all([api('/le-audio'), api('/audio/streams').catch(() => ({streams: []}))])
-    .then(([s, st]) => { la.streams = st.streams || []; renderLeAudio(s); })
+  return Promise.all([api('/le-audio'), api('/audio/streams').catch(() => ({streams: []})), api('/audio/route').catch(() => null)])
+    .then(([s, st, r]) => { la.streams = st.streams || []; la.route = r; renderLeAudio(s); })
     .catch(e => { ldFail(e, $('la-bcasts'), $('la-sources')); setText($('la-caps'), e.message); });
 }
 
@@ -137,7 +148,11 @@ function endBroadcast(btn, a) {
   la.ending[big] = true;
   btn.disabled = true;
   setText(btn, 'going off air…');
-  const plays = b ? la.streams.filter(s => (s.sinks || []).some(k => k.target === b.node) && s.state !== 'ended') : [];
+  // Taken off Listen's outputs (the route's stream plays on to the others), and the streams
+  // started elsewhere into it stopped.
+  const node = b && b.node;
+  const plays = b ? la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === node) && s.state !== 'ended') : [];
+  const offRoute = node && laOn(node) ? put('/audio/route', {outputs: laOuts().filter(k => k.target !== node)}) : Promise.resolve();
   const deadline = Date.now() + 20000;
   const clear = () => api('/le-audio').then(s => {
     const now = s.broadcasts.find(x => x.big === big && (!a || x.adapter === a.adapter));
@@ -147,7 +162,7 @@ function endBroadcast(btn, a) {
     }
     return now ? del(`/le-audio/broadcasts/${big}?adapter=${a ? a.adapter : ''}`) : null;
   });
-  Promise.all(plays.map(s => del(`/audio/streams/${s.id}`).catch(() => {}))).then(clear)
+  offRoute.then(() => Promise.all(plays.map(s => del(`/audio/streams/${s.id}`).catch(() => {})))).then(clear)
     .catch(fail).finally(() => { delete la.ending[big]; refreshLeAudio(); });
 }
 
@@ -168,31 +183,32 @@ function setupLeAudio() {
     }).catch(err => setText($('la-msg'), err.message));
   };
   $('la-bcasts').onclick = e => {
-    const end = e.target.closest('[data-la-end]'), tone = e.target.closest('[data-la-tone]'), stop = e.target.closest('[data-la-stop]');
-    const a = laAdapter();
-    if (end) endBroadcast(end, a); else if (tone) {
-      post('/audio/streams', {source: {type: 'tone', freq: 1000, level_db: -12}, sinks: [{type: 'pipewire', target: tone.dataset.laTone}],
-        rate: 48000, channels: 2, gain_db: 0}).then(refreshLeAudio).catch(fail);
-    } else if (stop) {
-      del(`/audio/streams/${stop.dataset.laStop}`).then(refreshLeAudio).catch(fail);
+    const end = e.target.closest('[data-la-end]'), out = e.target.closest('[data-la-out]');
+    if (end) endBroadcast(end, laAdapter()); else if (out) {
+      const node = out.dataset.laOut;
+      const next = laOn(node) ? laOuts().filter(k => k.target !== node) : laOuts().concat([{type: 'pipewire', target: node}]);
+      if (next.length > 4) { toast('The board plays to at most 4 outputs at once.'); return; }
+      out.disabled = true;
+      put('/audio/route', {outputs: next}).then(refreshLeAudio).catch(fail);
     }
   };
   $('la-sources').oninput = e => { if (e.target.classList.contains('la-code')) la.codes[e.target.dataset.path] = e.target.value; };
   $('la-sources').onclick = e => {
-    const rx = e.target.closest('[data-la-rx]'), hear = e.target.closest('[data-la-hear]');
-    if (rx) {
-      const path = rx.dataset.laRx, on = rx.dataset.on === '1';
-      la.busy[path] = true;
-      renderLeAudio(la.s);
-      put('/le-audio/streams', {path, receive: on, code: la.codes[path] || ''}).catch(fail)
-        .finally(() => { delete la.busy[path]; refreshLeAudio(); });
-    } else if (hear) {
-      // The AudioContext from the click itself (audio.js), before the request.
-      const ctx = newAudioContext();
-      if (!ctx) return;
-      startStream({type: 'capture', backend: 'pipewire', target: hear.dataset.laHear, title: 'Auracast · ' + hear.dataset.title}, [], true,
-        {rate: 48000, channels: 2, gain_db: 0}, ctx).then(() => toast('Listening: the stream is in Audio → Streams.')).catch(fail);
-    }
+    const rx = e.target.closest('[data-la-rx]');
+    if (!rx) return;
+    // Listen: received, and Listen's input from then on (its outputs keep playing it; the board's
+    // own broadcasts go off them, as Listen does). Stop: no longer the input, then let go.
+    const path = rx.dataset.laRx, on = rx.dataset.on === '1', addr = rx.dataset.addr;
+    const isInput = !!la.route && la.route.input.type === 'bluetooth' && la.route.input.devices.some(d => d.kind === 'broadcast' && d.address.toUpperCase() === addr.toUpperCase());
+    const own = la.s.broadcasts.map(b => b.node).filter(Boolean);
+    const outs = laOuts().filter(k => !own.includes(k.target));
+    la.busy[path] = true;
+    renderLeAudio(la.s);
+    const receive = () => put('/le-audio/streams', {path, receive: on, code: la.codes[path] || ''});
+    (on ? receive().then(() => put('/audio/route', Object.assign({input: {type: 'bluetooth', devices: [{address: addr, kind: 'broadcast'}]}},
+      outs.length !== laOuts().length ? {outputs: outs} : {})))
+      : (isInput ? put('/audio/route', {input: {type: 'none'}}) : Promise.resolve()).then(receive))
+      .catch(fail).finally(() => { delete la.busy[path]; refreshLeAudio(); });
   };
   $('la-scan').onclick = () => {
     const a = laAdapter();
