@@ -1769,32 +1769,4 @@ std::vector<uint16_t> Decoder::silent(int64_t now_us, int64_t for_us) const {
   return out;
 }
 
-std::vector<LinkSeed> Decoder::links() const {
-  std::vector<LinkSeed> out;
-  for (const auto& a : adapters_) {
-    for (const auto& c : a->conns) {
-      if (!c->connected) continue;
-      LinkSeed s;
-      s.index = a->index;
-      s.handle = c->handle;
-      s.type = link_name(c->type);
-      s.in_flight = static_cast<uint16_t>(c->fifo_n);
-      for (const auto& ch : c->chans) {
-        // Fixed channels are known by their CID anyway, and a channel without a PSM (opened
-        // before the trace) would teach the view nothing.
-        if (ch->fixed || ch->closed || !ch->open || !ch->psm) continue;
-        LinkSeed::Chan sc;
-        sc.lcid = ch->lcid;
-        sc.rcid = ch->rcid;
-        sc.psm = ch->psm;
-        sc.avdtp_sig = ch->role == kRoleAvdtpSig;
-        sc.avdtp_media = ch->role == kRoleAvdtpMedia;
-        s.chans.push_back(sc);
-      }
-      out.push_back(std::move(s));
-    }
-  }
-  return out;
-}
-
 }  // namespace btb::hci

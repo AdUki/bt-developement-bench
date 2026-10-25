@@ -13,7 +13,6 @@
 #include "context.h"
 #include "decoder.h"
 #include "hci_monitor.h"
-#include "live.h"
 #include "packet_view.h"
 #include "pcap.h"
 
@@ -45,15 +44,11 @@ struct Monitor::Impl {
   const std::shared_ptr<Capture> capture;
   // The packet view of the capture files: indexes cached across requests, own locking.
   const std::shared_ptr<PacketStore> packets;
-  // The live packet view: fed by the reader thread under mu while someone watches, own locking.
-  const std::shared_ptr<LiveView> live;
-  // Called with mu held, for each packet, before the Decoder sees it (so a seed taken from the
-  // Decoder describes the stream up to, not including, this packet).
-  void feed_live(int64_t ts, uint16_t index, uint16_t opcode, const uint8_t* data, size_t len) {
-    if (!live->active()) return;
-    if (live->needs_seed()) live->seed(dec.links());
-    live->push(ts, index, opcode, data, len);
-  }
+  // A replay has no btmon writing the ring, so the monitor records what it replays into the
+  // capture directory itself (opts.replay_record): the packet view's live end then shows the
+  // replay as it would a board's traffic. Touched by the replay thread only.
+  BtsnoopWriter rec;
+  std::string rec_name;  // "" while nothing is recorded
 
   // Everything the reader thread and the HTTP handlers both touch is under mu.
   mutable std::mutex mu;

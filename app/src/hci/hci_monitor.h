@@ -30,6 +30,9 @@ struct Options {
 
   // Beyond the contract (defaults are what the daemon wants):
   bool replay_fast = false;  // replay as fast as possible (tests)
+  // Record what is replayed into capture_dir as a ring file (hci-<start>.btsnoop), so the packet
+  // view's live end follows a replay as it follows btmon's file on a board. Tests turn it off.
+  bool replay_record = true;
   std::string systemctl = "systemctl";
   std::string btmon = "btmon";
 };
@@ -81,7 +84,8 @@ std::unique_ptr<Monitor> start(const Options& opts, Publish publish);
 
 // /api/hci/{stats,history,latency,events,mark,live.pcap} and /api/capture*. The Monitor must
 // outlive the server's request handling (stop the server before destroying it). A live pcap
-// stream holds one HTTP worker thread for as long as the client stays connected.
+// stream, and a packet list request waiting at the live end of the file being written, hold one
+// HTTP worker thread each for as long as the client stays connected.
 void register_routes(httplib::Server& svr, Monitor& mon);
 
 }  // namespace btb::hci

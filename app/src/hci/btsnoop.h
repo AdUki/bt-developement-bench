@@ -60,6 +60,9 @@ class BtsnoopWriter {
   bool write(int64_t ts_us, uint16_t index, uint16_t opcode, const uint8_t* data, size_t len);
   // For datalink 1002: the H4 type byte is prepended, direction goes in flags bit 0.
   bool write_h4(int64_t ts_us, uint8_t h4_type, bool received, const uint8_t* data, size_t len);
+  // Pushes what was written to the file now: a reader following the file (the packet view's
+  // live end) sees each record as it is recorded, as it does with btmon's.
+  void flush();
   void close();
 
  private:

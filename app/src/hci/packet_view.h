@@ -12,6 +12,7 @@
 //   - every request works against a deadline, and answers "not complete yet" with its progress
 //     instead of holding one of the three HTTP workers for seconds.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -21,8 +22,6 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
-
-#include "link_seed.h"
 
 namespace btb::hci {
 
@@ -205,7 +204,7 @@ struct ConnInfo {
 // live Decoder, cut down to what the index needs: links from their connection events (or first
 // data), L2CAP channels from the signalling so a dynamic CID maps to its PSM and protocol,
 // continuation fragments, and the HCI TX → NOCP FIFO. A capture file's index runs one over the
-// file; the live packet view runs one over the monitor stream while someone watches.
+// file (its context first, then its records as they are written).
 class Classifier {
  public:
   Classifier();
@@ -220,8 +219,6 @@ class Classifier {
                 uint32_t id, IndexEntry* e);
   std::function<void(uint32_t id, uint32_t lat_us)> on_latency;
 
-  // Forgets everything, then knows these links and channels (the live Decoder's view).
-  void seed(const std::vector<LinkSeed>& links);
   // Zeroes the per-connection counts, keeping the links and channels: after classifying a file's
   // context, which happened before the file and is not its traffic.
   void reset_counts();
@@ -327,16 +324,31 @@ class PacketStore {
   int budget_ms() const { return budget_ms_; }
 
   // The route bodies (docs/monitor.md "Packet view" has the shapes). Each takes the index's
-  // mutex for the duration of the request.
+  // mutex while it indexes, filters and builds its page, never while a tail request waits.
+  //
+  // A tail request (wait_ms > 0) is how the console and `bench mon packets` follow the file
+  // being written (docs/monitor.md "The live end"): when the page from `start` would be empty
+  // and the index and filter are complete, list() waits for the file to grow until a new match
+  // is there, the file goes, a new ring file appears in the directory ("newer" in the answer:
+  // after a rotation the live end is in that file), or wait_ms pass (an empty page). A page that
+  // is not full is answered kTailBatchMs after its first match was in hand, so a burst comes as
+  // one page rather than one request per packet. The file is watched with inotify for exactly
+  // the time the request waits, so nothing is watched while nobody looks. Each waiting request
+  // holds an HTTP worker: at most kMaxWaiters wait at once (503 beyond).
+  static constexpr int kMaxWaitMs = 30000;
+  static constexpr int kTailBatchMs = 150;
+  static constexpr int kMaxWaiters = 4;
   struct ListParams {
     std::string filter;
     size_t start = 0;
     size_t count = 200;
     double at_t = -1;     // >= 0: start at the first match at or after this time (s)
     int64_t at_n = -1;    // >= 1: start at the match holding (or following) this frame
+    int wait_ms = 0;      // > 0: a tail request, waiting up to this long (capped at kMaxWaitMs)
   };
   bool list(const std::string& name, const ListParams& p, nlohmann::json* out, int* status,
             std::string* err);
+  int waiters() const { return waiters_.load(std::memory_order_relaxed); }
   bool packet(const std::string& name, uint32_t n, nlohmann::json* out, int* status,
               std::string* err);
   static constexpr size_t kMaxPoints = 2000;
@@ -369,6 +381,7 @@ class PacketStore {
   int budget_ms_ = 400;
   std::mutex mu_;
   std::list<std::pair<std::string, std::shared_ptr<PacketIndex>>> lru_;  // most recent first
+  std::atomic<int> waiters_{0};  // tail requests waiting right now (32-bit: ARMv6)
 };
 
 }  // namespace btb::hci

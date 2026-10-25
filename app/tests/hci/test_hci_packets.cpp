@@ -5,12 +5,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <functional>
 #include <httplib.h>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "../check.h"
 #include "btsnoop.h"
@@ -548,6 +550,137 @@ json get_json(httplib::Client& cli, const std::string& path, int want = 200) {
   return json::parse(r->body, nullptr, false);
 }
 
+// The live end: a tail request (wait_ms) on the file being written answers with what is appended
+// after it was asked, a burst as one page, only matches of its filter; a new file in the
+// directory or the file's deletion end the wait at once; a file nobody writes gives an empty page
+// when the wait is over; and only so many requests wait at a time.
+void test_tail() {
+  const auto pkts = a2dp_session();
+  const std::string dir = tmp_path("tail");
+  mkdir(dir.c_str(), 0755);
+  const std::string name = "hci-20261009-140000.btsnoop";
+  btb::hci::BtsnoopWriter w;
+  CHECK(w.open(dir + "/" + name));
+  size_t written = 0;
+  auto append = [&](size_t n) {
+    for (; n > 0 && written < pkts.size(); --n, ++written) {
+      const Pkt& p = pkts[written];
+      CHECK(w.write(p.ts, p.index, p.opcode, p.data.data(), p.data.size()));
+      w.flush();
+    }
+  };
+  append(10);
+  PacketStore store(dir);
+  using clock = std::chrono::steady_clock;
+  auto ms_since = [](clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count();
+  };
+  PacketStore::ListParams p;
+  p.count = 1000;
+  json out;
+  int status = 0;
+  std::string err;
+  CHECK(store.list(name, p, &out, &status, &err));
+  CHECK_EQ(out["total"], 10);
+
+  // Nothing appended: the wait runs out and the page is empty, with no "newer".
+  p.start = 10;
+  p.wait_ms = 200;
+  auto t0 = clock::now();
+  CHECK(store.list(name, p, &out, &status, &err));
+  CHECK(out["packets"].empty());
+  CHECK(ms_since(t0) >= 150);
+  CHECK(!out.contains("newer"));
+  CHECK_EQ(store.waiters(), 0);
+
+  // Five records appended 100 ms into the wait: the request answers with the five, as one page,
+  // long before its wait is over.
+  p.wait_ms = 5000;
+  std::thread writer([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    append(5);
+  });
+  t0 = clock::now();
+  CHECK(store.list(name, p, &out, &status, &err));
+  writer.join();
+  CHECK_EQ(out["packets"].size(), 5u);
+  CHECK_EQ(out["start"], 10);
+  CHECK_EQ(out["total"], 15);
+  if (!out["packets"].empty()) CHECK_EQ(out["packets"][0]["n"], 11);
+  CHECK(ms_since(t0) < 2000);
+
+  // A filter: the records appended one by one are only answered once one of them matches.
+  p.filter = "proto:rtp";
+  p.start = 0;
+  p.wait_ms = 0;
+  CHECK(store.list(name, p, &out, &status, &err));
+  const size_t rtp_so_far = out["total"].get<size_t>();
+  p.start = rtp_so_far;
+  p.wait_ms = 5000;
+  std::thread feeder([&] {
+    for (int i = 0; i < 40 && written < pkts.size(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      append(1);
+    }
+  });
+  CHECK(store.list(name, p, &out, &status, &err));
+  feeder.join();
+  CHECK(!out["packets"].empty());
+  for (const auto& pk : out["packets"]) CHECK_EQ(pk["proto"], "rtp");
+  CHECK(out["total"].get<size_t>() > rtp_so_far);
+
+  // A new capture appearing in the directory (a rotation) ends the wait and is named.
+  p.filter = "";
+  p.start = written;
+  std::thread creator([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    btb::hci::BtsnoopWriter w2;
+    CHECK(w2.open(dir + "/hci-20261009-150000.btsnoop"));
+    w2.close();
+  });
+  t0 = clock::now();
+  CHECK(store.list(name, p, &out, &status, &err));
+  creator.join();
+  CHECK_EQ(out["newer"], "hci-20261009-150000.btsnoop");
+  CHECK(out["packets"].empty());
+  CHECK(ms_since(t0) < 2000);
+
+  // At most kMaxWaiters requests wait at once; one more is refused with 503.
+  {
+    std::vector<std::thread> waiters;
+    for (int i = 0; i < PacketStore::kMaxWaiters; ++i) {
+      waiters.emplace_back([&] {
+        PacketStore::ListParams q = p;
+        q.wait_ms = 1000;
+        json o;
+        int st = 0;
+        std::string e;
+        CHECK(store.list(name, q, &o, &st, &e));
+      });
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK_EQ(store.waiters(), PacketStore::kMaxWaiters);
+    json o;
+    CHECK(!store.list(name, p, &o, &status, &err));
+    CHECK_EQ(status, 503);
+    for (auto& t : waiters) t.join();
+    CHECK_EQ(store.waiters(), 0);
+  }
+
+  // The file deleted while a request waits: it answers (empty), and the next request finds no file.
+  std::thread remover([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    unlink((dir + "/" + name).c_str());
+  });
+  t0 = clock::now();
+  CHECK(store.list(name, p, &out, &status, &err));
+  remover.join();
+  CHECK(ms_since(t0) < 2000);
+  CHECK(!store.list(name, p, &out, &status, &err));
+  CHECK_EQ(status, 404);
+  w.close();
+}
+
 void test_routes() {
   const std::string dir = tmp_path("cap");
   mkdir(dir.c_str(), 0755);
@@ -619,6 +752,24 @@ void test_routes() {
   CHECK_EQ(j["conn"]["handle"], 64);
   CHECK(j["conns"].size() >= 2u);
 
+  // The live end over HTTP: a tail request on the newest file waits its time out when nothing is
+  // appended; one on an older file is answered at once with the newest file's name instead.
+  write_file(dir + "/hci-20261009-200000.btsnoop", a2dp_session());
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    j = get_json(cli, "/api/capture/files/hci-20261009-200000.btsnoop/packets?start=" +
+                          std::to_string(a2dp_session().size()) + "&wait=300");
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(j["packets"].empty());
+    CHECK_EQ(j["complete"], true);
+    CHECK(!j.contains("newer"));
+    CHECK(took >= 250);
+    j = get_json(cli, base + "/packets?start=" + std::to_string(total) + "&wait=5000");
+    CHECK_EQ(j["newer"], "hci-20261009-200000.btsnoop");
+    CHECK(j["packets"].empty());
+    CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3));
+  }
+
   // A text filter with no time to spare: partial answers with a resume point, until complete.
   mon->impl().packets->set_budget_ms(0);
   {
@@ -659,6 +810,7 @@ int main() {
   test_incremental();
   test_h4();
   test_graph();
+  test_tail();
   test_routes();
 
   if (std::system(("rm -rf '" + g_tmp + "'").c_str()) != 0) std::printf("cannot remove %s\n", g_tmp.c_str());

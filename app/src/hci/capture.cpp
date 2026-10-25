@@ -186,12 +186,13 @@ json Capture::status() const {
   const std::string state = unit_state();
   const bool running = state == "active" || state == "activating" || state == "reloading";
   const auto files = list();
+  const std::string own = writing();
   json arr = json::array();
   for (size_t i = 0; i < files.size(); ++i) {
     arr.push_back(json{{"name", files[i].name},
                        {"size", files[i].size},
                        {"mtime", files[i].mtime_ms},
-                       {"active", running && i == 0}});
+                       {"active", (running && i == 0) || files[i].name == own}});
   }
   return json{{"running", running},
               {"state", state},
@@ -201,10 +202,26 @@ json Capture::status() const {
 }
 
 bool Capture::is_active(const std::string& name) const {
+  if (name == writing()) return true;
   const auto files = list();
   if (files.empty() || files.front().name != name) return false;
   const std::string state = unit_state();
   return state == "active" || state == "activating" || state == "reloading";
+}
+
+std::string Capture::newest() const {
+  const auto files = list();
+  return files.empty() ? std::string() : files.front().name;
+}
+
+void Capture::set_writing(const std::string& name) {
+  std::lock_guard<std::mutex> lk(mu_);
+  writing_ = name;
+}
+
+std::string Capture::writing() const {
+  std::lock_guard<std::mutex> lk(mu_);
+  return writing_;
 }
 
 bool Capture::set_running(bool on, std::string* err) const {

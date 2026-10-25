@@ -3,6 +3,8 @@
 #include "packet_view.h"
 
 #include <fcntl.h>
+#include <poll.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -44,8 +46,6 @@ constexpr size_t kMaxEntries = 1000000;
 constexpr size_t kMaxQueries = 4;  // cached filter results per file
 constexpr size_t kTxFifo = 128;    // as the live decoder: TX timestamps awaiting NOCP per link
 constexpr size_t kMaxChans = 32;
-// The timestamp of a FIFO entry that stands for a packet sent before a seed (see LinkSeed).
-constexpr int64_t kSeededTx = INT64_MIN;
 
 double round3(double v) { return std::round(v * 1000.0) / 1000.0; }
 
@@ -761,38 +761,6 @@ Classifier::~Classifier() = default;
 
 const std::vector<ConnInfo>& Classifier::conns() const { return st_->conns; }
 
-void Classifier::seed(const std::vector<LinkSeed>& seeds) {
-  st_ = std::make_unique<State>();
-  for (const LinkSeed& s : seeds) {
-    if (st_->links.size() >= 64) break;
-    auto l = std::make_unique<Link>();
-    l->index = s.index;
-    l->handle = s.handle;
-    l->le = std::strcmp(s.type, "le") == 0;
-    ConnInfo ci;
-    ci.index = s.index;
-    ci.handle = s.handle;
-    ci.type = s.type;
-    st_->conns.push_back(ci);
-    l->info = st_->conns.size() - 1;
-    for (const LinkSeed::Chan& c : s.chans) {
-      if (l->chans.size() >= kMaxChans) break;
-      Chan ch{c.lcid, c.rcid, c.psm, proto_for_psm(c.psm), true};
-      if (c.avdtp_media) ch.proto = kProtoRtp;
-      if (c.avdtp_sig) {
-        l->avdtp_sig = true;
-        l->avdtp_sig_lcid = c.lcid;
-      }
-      l->chans.push_back(ch);
-    }
-    // Placeholders for what is in flight: their completions are consumed, measured for nobody.
-    for (uint16_t i = 0; i < s.in_flight && l->fifo.size() < kTxFifo; ++i) {
-      l->fifo.emplace_back(0, kSeededTx);
-    }
-    st_->links.push_back(std::move(l));
-  }
-}
-
 void Classifier::reset_counts() {
   for (ConnInfo& c : st_->conns) {
     c.first_us = c.last_us = 0;
@@ -904,7 +872,6 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
           for (uint16_t j = 0; j < count && !l->fifo.empty(); ++j) {
             const auto sent = l->fifo.front();
             l->fifo.pop_front();
-            if (sent.second == kSeededTx) continue;
             const int64_t lat = e.ts_us - sent.second;
             if (lat >= 0) {
               ++ci.lat_n;
@@ -1479,6 +1446,67 @@ void progress(PacketIndex& idx, const PacketIndex::Query* q, json* out) {
   }
 }
 
+// A tail request's eyes on the file being written, for the time it waits: inotify on the file
+// (it grew, it went) and on its directory (a new ring file: after a rotation the live end is in
+// it). One instance per waiting request, so nothing is watched while nobody looks, and the
+// waiters never take events from each other.
+class FileWatch {
+ public:
+  enum Event { kTimeout, kGrew, kGone, kNewFile };
+
+  ~FileWatch() {
+    if (fd_ >= 0) close(fd_);
+  }
+
+  bool open(const std::string& dir, const std::string& name) {
+    name_ = name;
+    fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (fd_ < 0) return false;
+    // IN_CLOSE_WRITE too: btmon's last write to a rotated-out file is followed by its close. The
+    // file's own deletion is seen on the directory (IN_DELETE with its name): the index keeps
+    // the file open, so its inode outlives the unlink and IN_DELETE_SELF would come too late.
+    file_wd_ = inotify_add_watch(fd_, (dir + "/" + name).c_str(), IN_MODIFY | IN_CLOSE_WRITE | IN_MOVE_SELF);
+    dir_wd_ = inotify_add_watch(fd_, dir.c_str(), IN_CREATE | IN_MOVED_TO | IN_DELETE | IN_MOVED_FROM);
+    return file_wd_ >= 0;
+  }
+
+  // Blocks up to ms for something to happen, then drains every queued event into the one answer
+  // that matters most: the file is gone > a new file appeared (its name in *newer) > it grew.
+  Event wait(int ms, std::string* newer) {
+    pollfd p{fd_, POLLIN, 0};
+    const int rc = poll(&p, 1, ms);
+    if (rc <= 0) return kTimeout;
+    Event ev = kTimeout;
+    alignas(inotify_event) char buf[4096];
+    for (;;) {
+      const ssize_t n = read(fd_, buf, sizeof buf);
+      if (n <= 0) break;
+      for (ssize_t at = 0; at < n;) {
+        const auto* e = reinterpret_cast<const inotify_event*>(buf + at);
+        at += static_cast<ssize_t>(sizeof(inotify_event) + e->len);
+        if (e->wd == file_wd_) {
+          if (e->mask & (IN_MOVE_SELF | IN_IGNORED)) ev = kGone;
+          else if (ev == kTimeout) ev = kGrew;
+        } else if (e->wd == dir_wd_ && e->len && ev != kGone) {
+          const std::string name(e->name);
+          if (name == name_) {
+            if (e->mask & (IN_DELETE | IN_MOVED_FROM)) ev = kGone;
+          } else if ((e->mask & (IN_CREATE | IN_MOVED_TO)) && Capture::valid_name(name)) {
+            // The journal's temporary and .ctx files appear here too: only a capture counts.
+            ev = kNewFile;
+            *newer = name;
+          }
+        }
+      }
+    }
+    return ev;
+  }
+
+ private:
+  std::string name_;
+  int fd_ = -1, file_wd_ = -1, dir_wd_ = -1;
+};
+
 // Bucket widths a person reads easily.
 int64_t nice_bucket_ms(double min_ms) {
   static const int64_t steps[] = {1,      2,      5,       10,      20,      50,       100,
@@ -1502,36 +1530,87 @@ bool PacketStore::list(const std::string& name, const ListParams& p, json* out, 
   }
   std::shared_ptr<PacketIndex> idx = get(name, status, err);
   if (!idx) return false;
-  std::lock_guard<std::mutex> lk(idx->mu);
-  const int64_t deadline = mono_us() + int64_t{budget_ms_} * 1000;
-  idx->extend(deadline);
-  PacketIndex::Query* q = idx->query(f, deadline);
-
-  size_t start = p.start;
-  const auto& m = q->matches;
-  if (p.at_n >= 1) {
-    start = static_cast<size_t>(std::lower_bound(m.begin(), m.end(), static_cast<uint32_t>(p.at_n - 1)) - m.begin());
-  } else if (p.at_t >= 0) {
-    // Matches are in file order, and timestamps nearly so: the first one at or after at_t.
-    const int64_t want = idx->t0_us() + static_cast<int64_t>(p.at_t * 1e6);
-    start = m.size();
-    for (size_t i = 0; i < m.size(); ++i) {
-      if (idx->at(m[i]).ts_us >= want) {
-        start = i;
-        break;
-      }
-    }
+  const int wait_ms = std::min(p.wait_ms, kMaxWaitMs);
+  if (wait_ms > 0 && waiters_.fetch_add(1) >= kMaxWaiters) {
+    waiters_.fetch_sub(1);
+    *status = 503;
+    *err = "too many tail requests waiting (" + std::to_string(kMaxWaiters) + " max): each one holds an HTTP worker";
+    return false;
   }
+  const int64_t give_up = mono_us() + int64_t{wait_ms} * 1000;
   const size_t count = std::min<size_t>(p.count, 1000);
-  json pkts = json::array();
-  for (size_t i = start; i < m.size() && i < start + count; ++i) {
-    const IndexEntry& e = idx->at(m[i]);
-    pkts.push_back(packet_json(e, m[i] + 1, static_cast<double>(e.ts_us - idx->t0_us()) / 1e6,
-                               idx->summary(m[i])));
+  FileWatch watch;
+  bool watching = false, settled = false;
+  std::string newer;
+  for (;;) {
+    bool empty, full;
+    {
+      std::lock_guard<std::mutex> lk(idx->mu);
+      const int64_t deadline = mono_us() + int64_t{budget_ms_} * 1000;
+      idx->extend(deadline);
+      PacketIndex::Query* q = idx->query(f, deadline);
+
+      size_t start = p.start;
+      const auto& m = q->matches;
+      if (p.at_n >= 1) {
+        start = static_cast<size_t>(std::lower_bound(m.begin(), m.end(), static_cast<uint32_t>(p.at_n - 1)) - m.begin());
+      } else if (p.at_t >= 0) {
+        // Matches are in file order, and timestamps nearly so: the first one at or after at_t.
+        const int64_t want = idx->t0_us() + static_cast<int64_t>(p.at_t * 1e6);
+        start = m.size();
+        for (size_t i = 0; i < m.size(); ++i) {
+          if (idx->at(m[i]).ts_us >= want) {
+            start = i;
+            break;
+          }
+        }
+      }
+      json pkts = json::array();
+      for (size_t i = start; i < m.size() && i < start + count; ++i) {
+        const IndexEntry& e = idx->at(m[i]);
+        pkts.push_back(packet_json(e, m[i] + 1, static_cast<double>(e.ts_us - idx->t0_us()) / 1e6,
+                                   idx->summary(m[i])));
+      }
+      empty = pkts.empty();
+      full = pkts.size() >= count;
+      *out = json{{"name", name}, {"filter", f.key}, {"total", m.size()}, {"start", start},
+                  {"packets", std::move(pkts)}};
+      progress(*idx, q, out);
+    }
+    if (!newer.empty()) (*out)["newer"] = newer;
+    // Not a tail request, or more to index or search first (the client continues at once, as
+    // for any partial answer), or the live end moved: this is the answer.
+    if (wait_ms <= 0 || !newer.empty() || !(*out)["complete"].get<bool>()) break;
+    // Matches in hand: a tail answer still takes one short breath (kTailBatchMs) for the rest of
+    // the burst they belong to, whether they were there when asked or arrived during the wait.
+    // A client at the live end asks again the moment it has an answer, so without it a busy
+    // link would cost one request per packet. A full page goes out at once.
+    if (!empty && (settled || full)) break;
+    const int64_t left_us = give_up - mono_us();
+    if (left_us <= 0) break;
+    if (!watching) {
+      watching = watch.open(dir_, name);
+      if (!watching) break;  // no inotify: answer the page as it is, the client asks again later
+      // The file may have grown between the index and the watch: the next loop sees it.
+    }
+    if (!empty) {
+      // The breath lasts its whole length whatever comes in (a record per event, on a busy link
+      // every few ms); only the file going or a new one ends it early.
+      const int64_t until = std::min(give_up, mono_us() + int64_t{kTailBatchMs} * 1000);
+      for (int64_t now; (now = mono_us()) < until;) {
+        const FileWatch::Event ev = watch.wait(static_cast<int>((until - now) / 1000) + 1, &newer);
+        if (ev == FileWatch::kGone || ev == FileWatch::kNewFile) break;
+      }
+      settled = true;
+      continue;
+    }
+    const FileWatch::Event ev = watch.wait(static_cast<int>(left_us / 1000), &newer);
+    // The file went with nothing to show: the empty page is the answer, and the next request
+    // learns it is gone. On a timeout the empty page goes out too, and the client waits again.
+    // A new file is reported with the page (the loop runs once more to rebuild it with "newer").
+    if (ev == FileWatch::kGone) break;
   }
-  *out = json{{"name", name}, {"filter", f.key}, {"total", m.size()}, {"start", start},
-              {"packets", std::move(pkts)}};
-  progress(*idx, q, out);
+  if (wait_ms > 0) waiters_.fetch_sub(1);
   return true;
 }
 

@@ -124,6 +124,7 @@ void test_replay_fast() {
   btb::hci::Options o;
   o.replay_file = path;
   o.replay_fast = true;
+  o.replay_record = false;  // the default capture directory is this PC's
   auto mon = btb::hci::start(o, [&](const std::string& topic, const json&) {
     if (topic == "hci.stats") ++n_stats;
     if (topic == "hci.event") ++n_events;
@@ -172,6 +173,7 @@ void test_replay_h4() {
   btb::hci::Options o;
   o.replay_file = path;
   o.replay_fast = true;
+  o.replay_record = false;  // the default capture directory is this PC's
   auto mon = btb::hci::start(o, nullptr);
   CHECK(mon->available());
   CHECK(mon->wait_replay_done(5000));
@@ -193,6 +195,7 @@ void test_paced_pcap() {
 
   btb::hci::Options o;
   o.replay_file = path;
+  o.replay_record = false;  // the default capture directory is this PC's
   auto mon = btb::hci::start(o, nullptr);
   httplib::Server svr;
   btb::hci::register_routes(svr, *mon);
@@ -239,6 +242,7 @@ void test_routes() {
   btb::hci::Options o;
   o.replay_file = path;
   o.replay_fast = true;
+  o.replay_record = false;  // the ring's files are counted below
   o.capture_dir = capdir;
   o.capture_unit = "test-btsnoop.service";
   o.systemctl = tmp_path("systemctl");
@@ -329,6 +333,87 @@ void test_routes() {
   th.join();
 }
 
+// A replay is recorded into the capture directory under a ring file's name, marked as being
+// written until it ends: the packet view's live end follows a replay as it follows btmon's file.
+void test_replay_record() {
+  // Ten ACL packets 150 ms apart, as in test_paced_pcap.
+  std::vector<Pkt> pkts;
+  for (int i = 0; i < 10; ++i) {
+    pkts.push_back({kT0 + i * 150000, 0, kMonAclRx, acl(9, 2, l2cap(0x0040, Bytes{1, 2, 3}))});
+  }
+  const std::string path = tmp_path("record.btsnoop");
+  write_monitor_file(path, pkts);
+  const std::string capdir = tmp_path("record-cap");
+  mkdir(capdir.c_str(), 0755);
+
+  btb::hci::Options o;
+  o.replay_file = path;
+  o.capture_dir = capdir;
+  o.systemctl = "/nonexistent/systemctl";
+  auto mon = btb::hci::start(o, nullptr);
+  httplib::Server svr;
+  btb::hci::register_routes(svr, *mon);
+  const int port = svr.bind_to_any_port("127.0.0.1");
+  std::thread th([&] { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  httplib::Client cli("127.0.0.1", port);
+  cli.set_read_timeout(10, 0);
+
+  // While it replays: one file, named like the ring's, active although no unit runs.
+  auto r = cli.Get("/api/capture");
+  CHECK(r && r->status == 200);
+  std::string name;
+  if (r) {
+    const json c = json::parse(r->body);
+    CHECK_EQ(c["running"], false);
+    CHECK_EQ(c["files"].size(), 1u);
+    if (c["files"].size() == 1) {
+      name = c["files"][0]["name"].get<std::string>();
+      CHECK(name.rfind("hci-", 0) == 0 && name.size() == std::string("hci-20261009-120000.btsnoop").size());
+      CHECK_EQ(c["files"][0]["active"], true);
+    }
+  }
+  // A tail request from the start answers with what has been replayed so far, then one from
+  // there waits for the next packets and gets them as they are recorded.
+  r = cli.Get("/api/capture/files/" + name + "/packets?count=1000&wait=3000");
+  CHECK(r && r->status == 200);
+  size_t have = 0;
+  if (r) {
+    const json j = json::parse(r->body);
+    have = j["packets"].size();
+    CHECK(have >= 1 && have < 10);
+    CHECK_EQ(j["complete"], true);
+  }
+  r = cli.Get("/api/capture/files/" + name + "/packets?start=" + std::to_string(have) + "&count=1000&wait=3000");
+  CHECK(r && r->status == 200);
+  if (r) {
+    const json j = json::parse(r->body);
+    CHECK(!j["packets"].empty());
+    CHECK_EQ(j["start"], have);
+    if (!j["packets"].empty()) CHECK_EQ(j["packets"][0]["n"], have + 1);
+  }
+  r = cli.Delete("/api/capture/files/" + name);
+  CHECK(r && r->status == 409);  // being written
+
+  CHECK(mon->wait_replay_done(5000));
+  // Over: the recording stays, complete, and is no longer marked active.
+  r = cli.Get("/api/capture");
+  if (r) {
+    const json c = json::parse(r->body);
+    CHECK_EQ(c["files"].size(), 1u);
+    if (c["files"].size() == 1) CHECK_EQ(c["files"][0]["active"], false);
+  }
+  r = cli.Get("/api/capture/files/" + name + "/packets?count=1000");
+  CHECK(r && r->status == 200);
+  if (r) {
+    const json j = json::parse(r->body);
+    CHECK_EQ(j["total"], 10);
+    CHECK_EQ(j["complete"], true);
+  }
+  svr.stop();
+  th.join();
+}
+
 void test_unavailable() {
   btb::hci::Options o;
   o.replay_file = tmp_path("does-not-exist.btsnoop");
@@ -376,6 +461,7 @@ int main() {
   test_replay_h4();
   test_paced_pcap();
   test_routes();
+  test_replay_record();
   test_unavailable();
 
   if (std::system(("rm -rf '" + g_tmp + "'").c_str()) != 0) std::printf("cannot remove %s\n", g_tmp.c_str());

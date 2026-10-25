@@ -129,6 +129,10 @@ bool BtsnoopWriter::write_h4(int64_t ts_us, uint8_t h4_type, bool received, cons
   return record(ts_us, flags, &h4_type, 1, data, len);
 }
 
+void BtsnoopWriter::flush() {
+  if (f_) std::fflush(f_);
+}
+
 void BtsnoopWriter::close() {
   if (f_) std::fclose(f_);
   f_ = nullptr;

@@ -854,13 +854,11 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 | `GET /api/hci/events?since=<seq>` | connections, disconnections, AVDTP, L2CAP, marks (a ring of 500) |
 | `POST /api/hci/mark` `{"text": "..."}` | a marker on the kernel's logging channel: it shows in btmon, the btsnoop ring and Wireshark |
 | `GET /api/hci/live.pcap` | live pcap (linktype 254, LINUX_BT_MONITOR): `curl -sN http://<board>/api/hci/live.pcap \| wireshark -k -i -` |
-| `GET /api/hci/live?filter=&since=SEQ` | live packets, filtered on the board (the capture filter syntax), as a chunked NDJSON stream: one packet per line in the capture packet list's shape plus `seq`, and `{"status": {seq, cursor, scanned, sent, dropped, skipped, ...}}` lines (first, whenever `dropped`/`skipped` grow, and at least every 2 s). Batched every 150 ms, at most 200 packet lines a batch (more matches: the newest are sent, the rest `skipped`; a client that falls behind loses the oldest: `dropped`). `since=SEQ` starts after that packet, `since=0` with everything the 2048-packet ring holds; without it, from now. At most 4 streams (503) |
-| `GET /api/hci/live/{seq}` | one packet of the live ring decoded: the packet object plus `fields` and `hex`, as for a capture file; 404 once the ring moved past it |
-| `GET /api/capture` | `{running, unit, dir, files: [{name, size, mtime, active}]}` — the always-on btsnoop ring |
+| `GET /api/capture` | `{running, unit, dir, files: [{name, size, mtime, active}]}` — the always-on btsnoop ring. `active`: the file being written (the newest while the unit runs, or the monitor's own recording of a replay) |
 | `PUT /api/capture` `{"running": false}` | stop or start `btbench-btsnoop.service` |
 | `GET` / `DELETE /api/capture/files/{name}` | download or delete one file |
 | `GET /api/capture/files/{name}/analyze` | `btmon -a` of it, as text |
-| `GET /api/capture/files/{name}/packets?filter=&start=0&count=200` | its packets, filtered and paged: `{total, start, complete, next, packets_in_file, packets: [{n, t, ts_ms, dir, type, proto, handle, cid, psm, len, lat_ms, summary}]}`. `at_t=SECONDS` or `at_n=FRAME` start the page there. Filter terms: `type:`, `dir:`, `proto:`, `handle:`, `cid:`, `psm:`, `index:`, `opcode:`, `evt:`, `subevt:`, `is:err\|mark\|cont\|lat`, `len>N`, `lat>MS`, `t>=S t<S`, `n<=N`, `addr:BDADDR`, `!term`, `a\|b`, `a b \|\| c` (either group); other words search the summaries |
+| `GET /api/capture/files/{name}/packets?filter=&start=0&count=200` | its packets, filtered and paged: `{total, start, complete, next, packets_in_file, packets: [{n, t, ts_ms, dir, type, proto, handle, cid, psm, len, lat_ms, summary}]}`. `at_t=SECONDS` or `at_n=FRAME` start the page there. `wait=MS` makes it a tail request on the file being written: an empty page is held until a new match is appended (then 150 ms more, so a burst is one page), the file goes, or MS pass (at most 30 s); `newer: "<name>"` in the answer says the live end moved to that file (a rotation). At most 4 tail requests wait at once (503). Filter terms: `type:`, `dir:`, `proto:`, `handle:`, `cid:`, `psm:`, `index:`, `opcode:`, `evt:`, `subevt:`, `is:err\|mark\|cont\|lat`, `len>N`, `lat>MS`, `t>=S t<S`, `n<=N`, `addr:BDADDR`, `!term`, `a\|b`, `a b \|\| c` (either group); other words search the summaries |
 | `GET /api/capture/files/{name}/packets/{n}` | one packet decoded: the same object plus `fields` (a tree of `{name, value, off, len, children}`) and `hex` |
 | `GET /api/capture/files/{name}/graph?filter=&bucket_ms=&points=&conn=INDEX:HANDLE` | per time bucket, the filtered packets and bytes, and one link's TX/RX bit/s and TX latency p50/p95/max; the list of links |
 | `GET /api/capture/files/{name}/stats?filter=` | what the filter matches, counted: `{total: {pkts, bytes, tx, rx, err}, marks, cont, span_s, protos: [{proto, ...}], types: [{type, ...}], links: [{index, handle, type, peer, ...}], latency: {n, avg_ms, p50_ms, p95_ms, max_ms}, complete}` |
@@ -868,13 +866,14 @@ Served by the HCI monitor module; the full description is in `docs/monitor.md` a
 
 The packet routes work against a time budget (400 ms a request on the board): an answer with
 `"complete": false` is partial (a big file still being indexed, or a text filter still searching),
-and repeating the same request continues where it stopped. The filter syntax, the shapes in full
-and the timings are in `docs/monitor.md` ("Packet view"). The live packet stream classifies
-nothing while no stream is open, and is described in `docs/monitor.md` ("Live packets").
+and repeating the same request continues where it stopped. The filter syntax, the shapes in full,
+the tail request and the timings are in `docs/monitor.md` ("Packet view"). Old and new packets are
+one list: the live packets are the end of the file btmon is writing, read only when asked for.
 
-They answer 503 with the reason when the monitor socket cannot be opened (no `CAP_NET_RAW`).
-`btbenchd --hci-replay FILE.btsnoop` feeds the monitor from a capture instead (`make run
-HCI=replay:FILE`).
+The `/api/hci` routes answer 503 with the reason when the monitor socket cannot be opened (no
+`CAP_NET_RAW`); the capture routes keep working. `btbenchd --hci-replay FILE.btsnoop` feeds the
+monitor from a capture instead (`make run HCI=replay:FILE`) and records what it replays into the
+capture directory as a ring file, so the packet list follows the replay too.
 
 ### PipeWire's graph
 

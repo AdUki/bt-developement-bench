@@ -15,7 +15,6 @@ add_hci_test(hci_pcap)
 add_hci_test(hci_capture)
 add_hci_test(hci_replay)
 add_hci_test(hci_packets)
-add_hci_test(hci_live)
 add_hci_test(hci_dissect)
 
 # Not a test: runs a real capture through the decoder and prints a summary (docs/monitor.md).

@@ -4,6 +4,7 @@
 // download, delete, start/stop the service, and run `btmon -a` over a file.
 
 #include <cstddef>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -40,8 +41,17 @@ class Capture {
   static bool valid_name(const std::string& name);
   std::string path(const std::string& name) const { return dir_ + "/" + name; }
   bool exists(const std::string& name) const;
-  // The file btmon is writing right now: the newest one, while the service runs.
+  // The file being written right now: the newest one while the service runs, or the one the
+  // monitor itself writes (a replay). Asks systemctl, so not for every request.
   bool is_active(const std::string& name) const;
+  // The newest file in the directory (the one btmon writes, while it runs), or "" without any.
+  // A directory listing only: cheap enough for a request's answer.
+  std::string newest() const;
+
+  // The monitor records what it replays into the directory as a ring file of its own, so the
+  // packet view has a live end to follow; this names that file ("" once the replay ended).
+  void set_writing(const std::string& name);
+  std::string writing() const;
 
   CommandResult analyze(const std::string& name) const;
 
@@ -61,6 +71,8 @@ class Capture {
   std::string unit_;
   std::string systemctl_;
   std::string btmon_;
+  mutable std::mutex mu_;
+  std::string writing_;
 };
 
 }  // namespace btb::hci

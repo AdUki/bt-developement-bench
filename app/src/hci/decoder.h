@@ -20,7 +20,6 @@
 
 #include "codec.h"
 #include "histogram.h"
-#include "link_seed.h"
 
 namespace btb::hci {
 
@@ -81,9 +80,6 @@ class Decoder {
   uint64_t last_seq() const { return next_seq_ - 1; }
   uint64_t windows_closed() const { return windows_closed_; }
   uint64_t packets() const { return packets_; }
-  // The connected links and their open dynamic channels, to start the live packet view's
-  // channel tracking mid-stream.
-  std::vector<LinkSeed> links() const;
   // The controllers that are up and have been sent something (a command, data) and have sent
   // nothing back at all for `for_us` up to now_us: a controller whose host interface has hung.
   std::vector<uint16_t> silent(int64_t now_us, int64_t for_us) const;

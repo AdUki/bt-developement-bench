@@ -14,6 +14,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <ctime>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -97,8 +98,7 @@ Monitor::Impl::Impl(const Options& o, Publish p)
       publish(std::move(p)),
       feed(std::make_shared<PcapFeed>()),
       capture(std::make_shared<Capture>(o.capture_dir, o.capture_unit, o.systemctl, o.btmon)),
-      packets(std::make_shared<PacketStore>(o.capture_dir)),
-      live(std::make_shared<LiveView>()) {}
+      packets(std::make_shared<PacketStore>(o.capture_dir)) {}
 
 Monitor::Impl::~Impl() { stop(); }
 
@@ -115,7 +115,11 @@ void Monitor::Impl::stop() {
   }
   if (thread.joinable()) thread.join();
   feed->close_all();
-  live->close_all();
+  if (!rec_name.empty()) {
+    rec.close();
+    rec_name.clear();
+    capture->set_writing("");
+  }
   for (int* fd : {&mon_fd, &wake_fd[0], &wake_fd[1], &ino_fd}) {
     if (*fd >= 0) close(*fd);
     *fd = -1;
@@ -135,6 +139,24 @@ bool Monitor::Impl::start_source() {
     }
     spdlog::info("HCI monitor: replaying {} (datalink {}){}", opts.replay_file,
                  reader.datalink(), opts.replay_fast ? ", fast" : "");
+    // Recorded under a ring file's name, into the capture directory when there is one (the
+    // daemon never creates it: on the board that is the ring's job, on a PC `make run` does it).
+    struct stat st {};
+    if (opts.replay_record && !opts.capture_dir.empty() &&
+        stat(opts.capture_dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+      const time_t now = time(nullptr);
+      struct tm tmv {};
+      localtime_r(&now, &tmv);
+      char name[64];
+      std::strftime(name, sizeof name, "hci-%Y%m%d-%H%M%S.btsnoop", &tmv);
+      if (rec.open(opts.capture_dir + "/" + name)) {
+        rec_name = name;
+        capture->set_writing(rec_name);
+        spdlog::info("HCI monitor: recording the replay to {}/{}", opts.capture_dir, rec_name);
+      } else {
+        spdlog::warn("HCI monitor: cannot record the replay to {}/{}", opts.capture_dir, name);
+      }
+    }
     thread = std::thread([this] { run_replay(); });
     return true;
   }
@@ -378,7 +400,6 @@ void Monitor::Impl::run_live() {
         const uint16_t index = le16(buf.data() + 2);
         const size_t len = std::min<size_t>(le16(buf.data() + 4), n - kMonHdrSize);
         const uint8_t* data = buf.data() + kMonHdrSize;
-        feed_live(ts, index, opcode, data, len);
         dec.packet(ts, index, opcode, data, len);
         if (ino_fd >= 0) journal.packet(ts, index, opcode, data, len);
         if (feed->active()) feed->push(ts, index, opcode, data, len);
@@ -451,11 +472,13 @@ void Monitor::Impl::run_replay() {
       return;
     }
 
+    // Each record reaches the file at once, as btmon's do: a tail request on it wakes per write.
+    if (!rec_name.empty() && rec.write(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len)) rec.flush();
+
     int closed;
     {
       std::lock_guard<std::mutex> lk(mu);
       const uint64_t before = dec.windows_closed();
-      feed_live(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len);
       dec.packet(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len);
       closed = static_cast<int>(dec.windows_closed() - before);
       if (feed->active()) feed->push(pkt.ts_us, pkt.index, pkt.opcode, pkt.data, pkt.len);
@@ -468,6 +491,12 @@ void Monitor::Impl::run_replay() {
     std::lock_guard<std::mutex> lk(mu);
     dec.flush(last_ts + 1);
     replay_done = true;
+  }
+  // The recording stays in the directory, no longer marked as being written.
+  if (!rec_name.empty()) {
+    rec.close();
+    rec_name.clear();
+    capture->set_writing("");
   }
   publish_pending(true);
   done_cv.notify_all();
