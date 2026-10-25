@@ -145,10 +145,43 @@ struct Dissection {
   nlohmann::json fields;
 };
 
+// What ATT discovery said about one link's attributes, so a value can be decoded by the
+// characteristic it belongs to (an ASE state, PAC records, a Broadcast Receive State) the way btmon's
+// att.c does: the Characteristic declarations of Read By Type responses and the Find Information
+// responses name the handles, and the last Read and Read By Type request each way say what a
+// response answers. A link has two attribute servers, one per side: a server's PDUs (responses,
+// notifications, the odd opcodes) and the client's requests to it are kept apart by direction.
+// Built for the one packet the detail pane shows, from the ATT packets of its link before it.
+struct GattDb {
+  // One ATT PDU of the link (after the L2CAP header), in the order they were sent.
+  void learn(const uint8_t* pdu, size_t n, bool tx);
+  // The same from an ACL start fragment as the monitor carries it.
+  void learn_acl(const uint8_t* d, size_t len, bool tx);
+  // A new connection on the handle: its attributes are another device's.
+  void clear();
+
+  // The 16-bit UUID of an attribute (0: not seen, or a 128-bit one) of the server on the local
+  // (true) or remote side.
+  uint16_t uuid(bool local_server, uint16_t handle) const;
+  // The characteristic a descriptor at handle belongs to: the nearest value handle below it.
+  uint16_t owner(bool local_server, uint16_t handle) const;
+
+  struct Side {
+    std::vector<std::pair<uint16_t, uint16_t>> attrs;  // handle, UUID; sorted by handle
+    std::vector<uint16_t> values;                      // characteristic value handles, sorted
+    uint16_t read_handle = 0;  // the last Read (Blob) Request's handle
+    uint16_t type_req = 0;     // the last Read By Type Request's type (16-bit)
+  };
+  Side side[2];  // [1]: the local server
+};
+
 // d/len: the HCI packet as the monitor channel carries it (no H4 type byte). The entry supplies
 // what one packet cannot say about itself: direction, and the channel's protocol for L2CAP.
-// With detail=false only the summary is built (the text filter calls this per packet).
-void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out);
+// With detail=false only the summary is built (the text filter calls this per packet). gatt, when
+// given, decodes ATT values by their characteristic in the field tree (the summary stays the
+// list's).
+void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out,
+             const GattDb* gatt = nullptr);
 
 // For the indexer: where the handle sits in a command (first parameter) — and whether the
 // payload of an L2CAP channel is a failure (error response, reject, refused connection).
@@ -162,7 +195,8 @@ nlohmann::json packet_json(const IndexEntry& e, uint64_t n, double t, const std:
 // The same plus "fields" and "hex": the detail pane. The Frame node comes first; `frame_extra`
 // nodes are put into it after the time (what this view numbers or measures from).
 nlohmann::json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d,
-                                  size_t len, const std::vector<nlohmann::json>& frame_extra);
+                                  size_t len, const std::vector<nlohmann::json>& frame_extra,
+                                  const GattDb* gatt = nullptr);
 
 // ---- Context: the packets that explain later ones ----
 
@@ -306,6 +340,10 @@ class PacketIndex {
   uint64_t buf_off_ = 0;
   size_t buf_len_ = 0;
 };
+
+// What ATT discovery on the link of entry i said before it (dissect()'s gatt): the file's context,
+// then the link's ATT packets from the file's start; a connection event on the handle starts over.
+void gatt_before(PacketIndex& idx, size_t i, GattDb* g);
 
 // ---- The cache of indexed files, shared by the HTTP workers ----
 

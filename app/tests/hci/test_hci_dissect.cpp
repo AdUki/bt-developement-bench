@@ -51,6 +51,18 @@ std::string field(const json& nodes, const std::string& name) {
   return "(none)";
 }
 
+// The same, among the children of the first node called parent.
+std::string field_under(const json& nodes, const std::string& parent, const std::string& name) {
+  for (const json& n : nodes) {
+    if (n.value("name", std::string()) == parent && n.contains("children")) return field(n["children"], name);
+    if (n.contains("children")) {
+      const std::string v = field_under(n["children"], parent, name);
+      if (v != "(none)") return v;
+    }
+  }
+  return "(none)";
+}
+
 bool has(const std::string& s, const std::string& needle) {
   if (s.find(needle) != std::string::npos) return true;
   std::printf("  '%s' not in '%s'\n", needle.c_str(), s.c_str());
@@ -231,7 +243,8 @@ void test_sdp_rfcomm_obex() {
 
 // One monitor packet of any kind (a command, an event, a management frame, an ACL packet), with
 // the summary-only path checked against the detail one as run() does.
-Dissection run_mon(uint16_t mon, const std::string& hex, uint8_t proto = 0, uint16_t cid = 0) {
+Dissection run_mon(uint16_t mon, const std::string& hex, uint8_t proto = 0, uint16_t cid = 0,
+                   const btb::hci::GattDb* gatt = nullptr) {
   const Bytes pkt = from_hex(hex);
   IndexEntry e{};
   e.mon = static_cast<uint8_t>(mon);
@@ -239,7 +252,7 @@ Dissection run_mon(uint16_t mon, const std::string& hex, uint8_t proto = 0, uint
   e.cid = cid;
   e.flags = mon == btb::hci::kMonAclTx ? btb::hci::kFlagTx : btb::hci::kFlagRx;
   Dissection ds;
-  btb::hci::dissect(e, pkt.data(), pkt.size(), true, &ds);
+  btb::hci::dissect(e, pkt.data(), pkt.size(), true, &ds, gatt);
   Dissection brief;
   btb::hci::dissect(e, pkt.data(), pkt.size(), false, &brief);
   CHECK_EQ(brief.summary, ds.summary);
@@ -433,6 +446,75 @@ void test_mgmt() {
                                   "object transfer, audio, telephony)"));
 }
 
+void test_gatt_le_audio() {
+  // A Realtek earbud's ASCS as the VIM3L discovered it, then reads and notifications on its
+  // handles: the values decode by the characteristic the discovery named.
+  btb::hci::GattDb g;
+  auto learn = [&g](bool tx, const std::string& hex) {
+    const Bytes b = from_hex(hex);
+    g.learn_acl(b.data(), b.size(), tx);
+  };
+  learn(true, "00280b00070004000890009f000328");
+  learn(false, "000829002500040009079100129200c42b9400129500c42b9700129800c52b9a00129b00c52b9d001c9e00c62b");
+  learn(true, "00280b0007000400087d008f000328");
+  learn(false, "000830002c00040009077e00127f00c92b8100128200ca2b8400128500cb2b8700128800cc2b8a00128b00cd2b8d00128e00ce2b");
+  learn(false, "00080a0006000400050193000229");
+  learn(true, "00280b00070004000874007c000328");
+  learn(false, "00081b001700040009077500127600c82b7800127900c82b7b000c7c00c72b");
+  CHECK_EQ(g.uuid(false, 0x0092), static_cast<uint16_t>(0x2bc4));
+  CHECK_EQ(g.uuid(false, 0x009e), static_cast<uint16_t>(0x2bc6));
+  CHECK_EQ(g.owner(false, 0x0093), static_cast<uint16_t>(0x0092));
+  constexpr uint8_t kAtt = btb::hci::kProtoAtt;
+
+  auto d = run_mon(btb::hci::kMonAclRx, "000829002500040009079100129200c42b9400129500c42b9700129800c52b9a00129b00c52b9d001c9e00c62b",
+                   kAtt, 4, &g);
+  CHECK_EQ(field(d.fields, "Handle 0x0091"), std::string("Characteristic 0x2bc4 (Sink ASE)"));
+  CHECK_EQ(field(d.fields, "Properties"), std::string("0x12 (read, notify)"));
+  learn(true, "00280700030004000a9200");
+  d = run_mon(btb::hci::kMonAclRx, "00080700030004000b0100", kAtt, 4, &g);
+  CHECK_EQ(d.summary, std::string("Read Response 0100"));
+  CHECK_EQ(field(d.fields, "Sink ASE"), std::string("ASE 1 Idle"));
+  CHECK_EQ(field_under(d.fields, "ATT", "Handle"), std::string("0x0092 (Sink ASE) (from the request)"));
+  learn(true, "00280700030004000a7f00");
+  d = run_mon(btb::hci::kMonAclRx,
+              "00083a00360004000b020600000000130301f500020203020303050414009001020502000600000000130301f50002020302030305041400"
+              "900102050200",
+              kAtt, 4, &g);
+  CHECK_EQ(field(d.fields, "Sink PAC"), std::string("2 records: LC3 8, 16, 24, 32, 44.1, 48 kHz, 20-400 octets"));
+  CHECK_EQ(field(d.fields, "Supported frame durations"), std::string("0x03 (7.5 ms, 10 ms)"));
+  CHECK_EQ(field(d.fields, "Supported audio channel counts"), std::string("1, 2"));
+  learn(true, "00280700030004000a7600");
+  d = run_mon(btb::hci::kMonAclRx, "00080500010004000b", kAtt, 4, &g);
+  CHECK_EQ(field(d.fields, "Broadcast Receive State"), std::string("no source"));
+  // A CCC write names the characteristic it configures.
+  d = run_mon(btb::hci::kMonAclTx, "00280900050004001293000100", kAtt, 4, &g);
+  CHECK_EQ(field_under(d.fields, "ATT", "Handle"), std::string("0x0093 (Client Characteristic Configuration of Sink ASE)"));
+  CHECK_EQ(field(d.fields, "Configuration"), std::string("0x0001 (notification)"));
+
+  // The VIM3L's own ASCS, which the earbud never discovered in this capture (it cached the
+  // handles): the control point and the ASE states decode by their layout.
+  d = run_mon(btb::hci::kMonAclRx,
+              "00085d0059000400525f00010302020206000000001302010602020005030100000003043c0002050103020206000000001302010602020005"
+              "030200000003043c0002050101020206000000001302010602020005030300000003043c00020501",
+              kAtt, 4);
+  CHECK_EQ(field(d.fields, "ASE Control Point (by its layout)"), std::string("Config Codec ASE 2, 3, 1"));
+  CHECK_EQ(field(d.fields, "Target latency"), std::string("balanced"));
+  CHECK_EQ(field(d.fields, "Sampling frequency"), std::string("0x06 (32 kHz)"));
+  d = run_mon(btb::hci::kMonAclTx, "002812000e0004001b5f000103020000030000010000", kAtt, 4);
+  CHECK_EQ(field(d.fields, "ASE Control Point (by its layout)"), std::string("Config Codec success"));
+  d = run_mon(btb::hci::kMonAclTx,
+              "002833002f0004001b650002010002020800204e00409c00204e00409c0006000000001302010602020005030100000003043c00020501",
+              kAtt, 4);
+  CHECK_EQ(field(d.fields, "ASE (by its layout)"), std::string("ASE 2 Codec Configured, LC3 32 kHz, 7.5 ms, FL, 60 octets"));
+  CHECK_EQ(field(d.fields, "Presentation delay max"), std::string("40000 us"));
+  d = run_mon(btb::hci::kMonAclTx, "00281800140004001b6200010200004c1d0000027800020800409c00", kAtt, 4);
+  CHECK_EQ(field(d.fields, "ASE (by its layout)"), std::string("ASE 1 QoS Configured, CIG 0 CIS 0"));
+  CHECK_EQ(field(d.fields, "Max SDU"), std::string("120"));
+  // Two bytes stay bytes: a CCC or an Idle ASE look the same.
+  d = run_mon(btb::hci::kMonAclTx, "00280900050004001b62000100", kAtt, 4);
+  CHECK_EQ(field(d.fields, "Value"), std::string("0100"));
+}
+
 }  // namespace
 
 int main() {
@@ -444,5 +526,6 @@ int main() {
   test_hci_iso();
   test_hci_controller();
   test_mgmt();
+  test_gatt_le_audio();
   return report("test_hci_dissect");
 }

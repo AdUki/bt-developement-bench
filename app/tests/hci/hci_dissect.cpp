@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
 #include <string>
 
 #include "packet_view.h"
@@ -65,6 +66,16 @@ int main(int argc, char** argv) {
       std::printf("\n");
     }
     if (!detail) continue;
+    // ATT values decode by their characteristic, from the discovery before them (as the console).
+    btb::hci::GattDb gatt;
+    if (e.proto == btb::hci::kProtoAtt) {
+      const std::vector<uint8_t> bytes(d, d + len);
+      btb::hci::gatt_before(idx, i, &gatt);
+      btb::hci::Dissection ds;
+      btb::hci::dissect(e, bytes.data(), bytes.size(), true, &ds, &gatt);
+      print_tree(ds.fields, 0);
+      continue;
+    }
     btb::hci::Dissection ds;
     btb::hci::dissect(e, d, len, true, &ds);
     print_tree(ds.fields, 0);

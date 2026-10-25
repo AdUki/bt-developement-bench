@@ -1383,9 +1383,9 @@ json packet_json(const IndexEntry& e, uint64_t n, double t, const std::string& s
 }
 
 json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d, size_t len,
-                        const std::vector<json>& frame_extra) {
+                        const std::vector<json>& frame_extra, const GattDb* gatt) {
   Dissection ds;
-  dissect(e, d, len, true, &ds);
+  dissect(e, d, len, true, &ds, gatt);
 
   json frame{{"name", "Frame"}, {"value", std::to_string(n)}, {"children", json::array()}};
   auto& fc = frame["children"];
@@ -1614,6 +1614,38 @@ bool PacketStore::list(const std::string& name, const ListParams& p, json* out, 
   return true;
 }
 
+// The scan of the index is cheap (32 bytes an entry, in memory). Only the link's ATT entries are
+// read from the file, a few hundred on a typical link, and only for the one ATT packet opened.
+void gatt_before(PacketIndex& idx, size_t i, GattDb* g) {
+  const IndexEntry at = idx.at(i);
+  const std::string& ctx = idx.context_records();
+  const auto* c = reinterpret_cast<const uint8_t*>(ctx.data());
+  for (size_t off = 0; off + kRecHdr <= ctx.size();) {
+    const uint32_t incl = be32(c + off + 4);
+    if (off + kRecHdr + incl > ctx.size()) break;
+    const uint32_t flags = be32(c + off + 8);
+    const uint16_t mon = static_cast<uint16_t>(flags & 0xffff);
+    const uint8_t* d = c + off + kRecHdr;
+    if ((mon == kMonAclTx || mon == kMonAclRx) && (flags >> 16) == at.index && incl >= 9 &&
+        (le16(d) & 0x0fff) == at.handle && le16(d + 6) == at.cid) {
+      g->learn_acl(d, incl, mon == kMonAclTx);
+    }
+    off += kRecHdr + incl;
+  }
+  for (size_t j = 0; j < i; ++j) {
+    const IndexEntry& e = idx.at(j);
+    if (e.index != at.index || e.handle != at.handle) continue;
+    if (e.mon == kMonEvent && context_kind(e) == kCtxLink) {
+      g->clear();
+    } else if (e.proto == kProtoAtt && !(e.flags & kFlagCont) && e.cid == at.cid) {
+      const bool tx = e.flags & kFlagTx;
+      size_t len = 0;
+      const uint8_t* d = idx.read(j, &len);
+      if (d) g->learn_acl(d, len, tx);
+    }
+  }
+}
+
 bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* status,
                          std::string* err) {
   std::shared_ptr<PacketIndex> idx = get(name, status, err);
@@ -1638,8 +1670,11 @@ bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* st
   const IndexEntry e = idx->at(i);
   const std::vector<uint8_t> bytes(d, d + len);
   const double t = static_cast<double>(e.ts_us - idx->t0_us()) / 1e6;
+  GattDb gatt;
+  if (e.proto == kProtoAtt) gatt_before(*idx, i, &gatt);
   *out = packet_detail_json(e, n, t, bytes.data(), bytes.size(),
-                            {json{{"name", "Since first packet"}, {"value", std::to_string(t) + " s"}}});
+                            {json{{"name", "Since first packet"}, {"value", std::to_string(t) + " s"}}},
+                            e.proto == kProtoAtt ? &gatt : nullptr);
   (*out)["packets_in_file"] = idx->size();
   // The link's peer, when its connection (or the file's context) said.
   for (const ConnInfo& c : idx->conns()) {

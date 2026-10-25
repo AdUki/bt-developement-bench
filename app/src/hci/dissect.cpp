@@ -4885,7 +4885,540 @@ std::string l2cap_sig(Out& o, const uint8_t* d, size_t len, bool le) {
 // ---------------------------------------------------------------------------------------------
 // ATT
 
-std::string att(Out& o, const uint8_t* d, size_t n) {
+// ---------------------------------------------------------------------------------------------
+// GATT characteristic values: what btmon's att.c decodes once discovery named the handle. LE Audio
+// first (ASCS, PACS, BASS, VCS, CSIS, MCS), then the GAP/GATT and Battery basics.
+
+const char* ase_state_name(uint8_t s) {
+  static const char* const names[] = {"Idle", "Codec Configured", "QoS Configured", "Enabling", "Streaming",
+                                      "Disabling", "Releasing"};
+  return s < 7 ? names[s] : "?";
+}
+
+const char* ase_op_name(uint8_t op) {
+  static const char* const names[] = {"?", "Config Codec", "Config QoS", "Enable", "Receiver Start Ready",
+                                      "Disable", "Receiver Stop Ready", "Update Metadata", "Release"};
+  return op < 9 ? names[op] : "?";
+}
+
+// ASE Control Point response codes and reasons (ASCS 5.1, Tables 5.1 and 5.2).
+const char* ase_rsp_name(uint8_t c) {
+  static const char* const names[] = {"success", "unsupported opcode", "invalid length", "invalid ASE ID",
+                                      "invalid ASE state machine transition", "invalid ASE direction",
+                                      "unsupported audio capabilities", "unsupported configuration parameter value",
+                                      "rejected configuration parameter value", "invalid configuration parameter value",
+                                      "unsupported metadata", "rejected metadata", "invalid metadata",
+                                      "insufficient resources", "unspecified error"};
+  return c < 15 ? names[c] : "?";
+}
+const char* ase_reason_name(uint8_t r) {
+  static const char* const names[] = {"none", "codec ID", "codec specific configuration", "SDU interval", "framing",
+                                      "PHY", "max SDU", "RTN", "max transport latency", "presentation delay",
+                                      "invalid ASE CIS mapping"};
+  return r < 11 ? names[r] : "?";
+}
+
+// An ASE characteristic (ASCS 4.1): its ID, state and that state's parameters. Returns the
+// words for the node's value: "ASE 1 Streaming, CIG 0 CIS 0".
+std::string ase_value(Rd& r) {
+  const uint8_t id = r.u8("ASE ID");
+  const uint8_t st = static_cast<uint8_t>(r.named("State", 1, [](uint32_t v) { return ase_state_name(static_cast<uint8_t>(v)); }));
+  std::string s = sf("ASE %u %s", id, ase_state_name(st));
+  switch (st) {
+    case 1: {  // Codec Configured
+      r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "unframed ISOAL PDUs not supported" : "unframed ISOAL PDUs supported"); });
+      r.phys("Preferred PHY");
+      r.u8("Preferred retransmission number");
+      r.u16("Max transport latency", "%u ms");
+      r.u24("Presentation delay min", "%u us");
+      r.u24("Presentation delay max", "%u us");
+      r.u24("Preferred presentation delay min", "%u us");
+      r.u24("Preferred presentation delay max", "%u us");
+      const std::string c = codec_ltvs(r, Ltv::kCodecConfig, "Codec configuration length", "Codec configuration");
+      if (!c.empty()) s += ", " + c;
+      break;
+    }
+    case 2: {  // QoS Configured
+      const uint8_t cig = r.u8("CIG ID");
+      const uint8_t cis = r.u8("CIS ID");
+      r.u24("SDU interval", "%u us");
+      r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "framed" : "unframed"); });
+      r.phys("PHY");
+      r.u16("Max SDU");
+      r.u8("Retransmission number");
+      r.u16("Max transport latency", "%u ms");
+      r.u24("Presentation delay", "%u us");
+      s += sf(", CIG %u CIS %u", cig, cis);
+      break;
+    }
+    case 3:
+    case 4:
+    case 5: {  // Enabling, Streaming, Disabling
+      const uint8_t cig = r.u8("CIG ID");
+      const uint8_t cis = r.u8("CIS ID");
+      std::string meta;
+      metadata(r, "Metadata length", &meta);
+      s += sf(", CIG %u CIS %u", cig, cis) + (meta.empty() ? "" : ", " + meta);
+      break;
+    }
+    default:
+      break;
+  }
+  return s;
+}
+
+// The ASE Control Point (ASCS 5): an operation written by the client, or the server's answer in a
+// notification. Returns "Config QoS ASE 1, 2".
+std::string ase_cp(Rd& r, bool notify) {
+  Out& o = r.o;
+  const uint8_t op = static_cast<uint8_t>(r.named("Opcode", 1, [](uint32_t v) { return ase_op_name(static_cast<uint8_t>(v)); }));
+  std::string s = ase_op_name(op);
+  const uint8_t k = r.with("Number of ASEs", 1, [](uint32_t v) { return v == 0xff ? std::string("0xff (invalid length or opcode)") : std::to_string(v); });
+  if (notify) {
+    std::string bad;
+    for (unsigned i = 0; i < k && k != 0xff && r.has(3); ++i) {
+      const uint8_t* e = r.cur();
+      OPEN(sf("ASE %u", e[0]), ase_rsp_name(e[1]), e, 3);
+      r.u8("ASE ID");
+      r.named("Response code", 1, [](uint32_t v) { return ase_rsp_name(static_cast<uint8_t>(v)); });
+      r.named("Reason", 1, [](uint32_t v) { return ase_reason_name(static_cast<uint8_t>(v)); });
+      CLOSE();
+      if (e[1]) bad += sf("%s ASE %u %s", bad.empty() ? "" : ",", e[0], ase_rsp_name(e[1])) + (e[2] ? sf(" (%s)", ase_reason_name(e[2])) : "");
+    }
+    return s + (bad.empty() ? " success" : ": " + bad);
+  }
+  std::string ids;
+  for (unsigned i = 0; i < k && r.has(1); ++i) {
+    const uint8_t* e = r.cur();
+    ids += sf("%s%u", ids.empty() ? "" : ", ", e[0]);
+    switch (op) {
+      case 1: {  // Config Codec
+        OPEN(sf("ASE %u", e[0]), "", e, r.left());
+        r.u8("ASE ID");
+        r.with("Target latency", 1, [](uint32_t v) {
+          static const char* const t[] = {"?", "low latency", "balanced", "high reliability"};
+          return std::string(v < 4 ? t[v] : "?");
+        });
+        r.phy("Target PHY");
+        codec_ltvs(r, Ltv::kCodecConfig, "Codec configuration length", "Codec configuration");
+        CLOSE();
+        break;
+      }
+      case 2:  // Config QoS
+        OPEN(sf("ASE %u", e[0]), "", e, std::min<size_t>(16, r.left()));
+        r.u8("ASE ID");
+        r.u8("CIG ID");
+        r.u8("CIS ID");
+        r.u24("SDU interval", "%u us");
+        r.with("Framing", 1, [](uint32_t v) { return std::string(v ? "framed" : "unframed"); });
+        r.phys("PHY");
+        r.u16("Max SDU");
+        r.u8("Retransmission number");
+        r.u16("Max transport latency", "%u ms");
+        r.u24("Presentation delay", "%u us");
+        CLOSE();
+        break;
+      case 3:  // Enable
+      case 7:  // Update Metadata
+        OPEN(sf("ASE %u", e[0]), "", e, r.left());
+        r.u8("ASE ID");
+        metadata(r);
+        CLOSE();
+        break;
+      default:  // the rest name ASEs only
+        r.u8("ASE ID");
+        break;
+    }
+  }
+  return s + (ids.empty() ? "" : " ASE " + ids);
+}
+
+// Published Audio Capabilities records (PACS 3.1): codec, capabilities and metadata each.
+std::string pac_records(Rd& r) {
+  Out& o = r.o;
+  const uint8_t k = r.u8("Records");
+  std::string s = sf("%u record%s", k, k == 1 ? "" : "s");
+  for (unsigned i = 0; i < k && r.has(7); ++i) {
+    OPEN(sf("Record %u", i), "", r.cur(), r.left());
+    const std::string c = codec_ltvs(r, Ltv::kCodecCaps, "Capabilities length", "Capabilities");
+    metadata(r);
+    CLOSE();
+    if (i == 0 && !c.empty()) s += ": " + c;
+  }
+  return s;
+}
+
+const char* pa_sync_state_name(uint8_t s) {
+  static const char* const names[] = {"not synchronized", "SyncInfo request", "synchronized", "failed to synchronize",
+                                      "no PAST"};
+  return s < 5 ? names[s] : "?";
+}
+const char* big_encryption_name(uint8_t e) {
+  static const char* const names[] = {"not encrypted", "broadcast code required", "decrypting", "bad code"};
+  return e < 4 ? names[e] : "?";
+}
+
+// One subgroup list of BASS (Add/Modify Source, Broadcast Receive State): BIS sync bits, metadata.
+void bass_subgroups(Rd& r, bool state) {
+  Out& o = r.o;
+  const uint8_t k = r.u8("Subgroups");
+  for (unsigned i = 0; i < k && r.has(5); ++i) {
+    OPEN(sf("Subgroup %u", i), "", r.cur(), r.left());
+    r.with(state ? "BIS sync state" : "BIS sync", 4, [state](uint32_t v) {
+      if (v == 0xffffffff) return std::string(state ? "failed to sync to the BIG" : "no preference");
+      std::string b;
+      for (unsigned i = 0; i < 31; ++i)
+        if (v >> i & 1) b += sf("%s%u", b.empty() ? "" : ", ", i + 1);
+      return sf("0x%08x", v) + (b.empty() ? "" : " (BIS " + b + ")");
+    });
+    metadata(r);
+    CLOSE();
+  }
+}
+
+// A Broadcast Receive State (BASS 3.2): the source a scan delegator is synchronized to (or none).
+std::string bass_state(Rd& r) {
+  if (!r.has(1)) return "no source";
+  const uint8_t id = r.u8("Source ID");
+  r.atype("Source address type");
+  const std::string a = r.addr("Source address");
+  r.u8("Source advertising SID");
+  const uint32_t bid = r.u24("Broadcast ID", "0x%06x");
+  const uint8_t pa = static_cast<uint8_t>(r.named("PA sync state", 1, [](uint32_t v) { return pa_sync_state_name(static_cast<uint8_t>(v)); }));
+  const uint8_t enc = static_cast<uint8_t>(r.named("BIG encryption", 1, [](uint32_t v) { return big_encryption_name(static_cast<uint8_t>(v)); }));
+  if (enc == 3) r.hex("Bad code", 16);
+  bass_subgroups(r, true);
+  return sf("source %u %s broadcast ID 0x%06x, PA %s, %s", id, a.c_str(), bid, pa_sync_state_name(pa), big_encryption_name(enc));
+}
+
+// The Broadcast Audio Scan Control Point (BASS 3.1): what a broadcast assistant asks.
+std::string bass_cp(Rd& r) {
+  static const char* const ops[] = {"Remote Scan Stopped", "Remote Scan Started", "Add Source", "Modify Source",
+                                    "Set Broadcast Code", "Remove Source"};
+  const uint8_t op = static_cast<uint8_t>(r.named("Opcode", 1, [](uint32_t v) { return v < 6 ? ops[v] : "?"; }));
+  std::string s = op < 6 ? ops[op] : sf("opcode 0x%02x", op);
+  auto pa_sync = [](uint32_t v) {
+    static const char* const p[] = {"do not synchronize", "synchronize, PAST available", "synchronize, no PAST"};
+    return sf("0x%02x (%s)", v, v < 3 ? p[v] : "?");
+  };
+  auto pa_interval = [](uint32_t v) { return v == 0xffff ? std::string("unknown") : sf("%.2f ms", v * 1.25); };
+  switch (op) {
+    case 2: {  // Add Source
+      r.atype("Advertiser address type");
+      const std::string a = r.addr("Advertiser address");
+      r.u8("Advertising SID");
+      const uint32_t bid = r.u24("Broadcast ID", "0x%06x");
+      r.with("PA sync", 1, pa_sync);
+      r.with("PA interval", 2, pa_interval);
+      bass_subgroups(r, false);
+      if (!a.empty()) s += sf(" %s broadcast ID 0x%06x", a.c_str(), bid);
+      break;
+    }
+    case 3:  // Modify Source
+      s += sf(" %u", r.u8("Source ID"));
+      r.with("PA sync", 1, pa_sync);
+      r.with("PA interval", 2, pa_interval);
+      bass_subgroups(r, false);
+      break;
+    case 4:  // Set Broadcast Code
+      s += sf(" %u", r.u8("Source ID"));
+      r.hex("Broadcast code", 16);
+      break;
+    case 5:  // Remove Source
+      s += sf(" %u", r.u8("Source ID"));
+      break;
+    default:
+      break;
+  }
+  return s;
+}
+
+const char* media_state_name(uint8_t s) {
+  static const char* const names[] = {"inactive", "playing", "paused", "seeking"};
+  return s < 4 ? names[s] : "?";
+}
+const char* mcp_op_name(uint8_t op) {
+  switch (op) {
+    case 0x01: return "Play";
+    case 0x02: return "Pause";
+    case 0x03: return "Fast Rewind";
+    case 0x04: return "Fast Forward";
+    case 0x05: return "Stop";
+    case 0x10: return "Move Relative";
+    case 0x20: return "Previous Segment";
+    case 0x21: return "Next Segment";
+    case 0x22: return "First Segment";
+    case 0x23: return "Last Segment";
+    case 0x24: return "Goto Segment";
+    case 0x30: return "Previous Track";
+    case 0x31: return "Next Track";
+    case 0x32: return "First Track";
+    case 0x33: return "Last Track";
+    case 0x34: return "Goto Track";
+    case 0x40: return "Previous Group";
+    case 0x41: return "Next Group";
+    case 0x42: return "First Group";
+    case 0x43: return "Last Group";
+    case 0x44: return "Goto Group";
+    default: return "?";
+  }
+}
+
+// A characteristic value by its UUID: the fields in the tree, and a few words for the node.
+// Returns false when this UUID has no decoder here (the value stays bytes).
+bool gatt_value(Out& o, uint16_t uuid, uint8_t op, const uint8_t* v, size_t n, std::string* words) {
+  Rd r(o, v, n);
+  const bool notify = op == 0x1b || op == 0x1d || op == 0x23;
+  auto text = [&](const char* name) {
+    *words = quoted(v, n, 60);
+    F(name, quoted(v, n, 400), v, n);
+  };
+  switch (uuid) {
+    case 0x2bc4:  // Sink ASE
+    case 0x2bc5:  // Source ASE
+      *words = ase_value(r);
+      return true;
+    case 0x2bc6:  // ASE Control Point
+      *words = ase_cp(r, notify);
+      return true;
+    case 0x2bc9:  // Sink PAC
+    case 0x2bcb:  // Source PAC
+      *words = pac_records(r);
+      return true;
+    case 0x2bca:  // Sink Audio Locations
+    case 0x2bcc:  // Source Audio Locations
+    case 0x2b81:  // Audio Location (VOCS)
+      if (n >= 4) *words = locations_short(le32(v));
+      r.with("Audio locations", 4, [](uint32_t x) { return locations_str(x); });
+      return true;
+    case 0x2bcd:  // Available Audio Contexts
+    case 0x2bce:  // Supported Audio Contexts
+      if (n >= 4) *words = "sink " + bit_names(le16(v), kAudioContexts, 12) + "; source " + bit_names(le16(v + 2), kAudioContexts, 12);
+      r.with("Sink contexts", 2, [](uint32_t x) { return contexts_str(static_cast<uint16_t>(x)); });
+      r.with("Source contexts", 2, [](uint32_t x) { return contexts_str(static_cast<uint16_t>(x)); });
+      return true;
+    case 0x2bc7:  // Broadcast Audio Scan Control Point
+      *words = bass_cp(r);
+      return true;
+    case 0x2bc8:  // Broadcast Receive State
+      *words = bass_state(r);
+      return true;
+    case 0x2b7d:  // Volume State
+      if (n >= 3) *words = sf("volume %u (%u%%)%s", v[0], (v[0] * 100 + 127) / 255, v[1] ? ", muted" : "");
+      r.with("Volume setting", 1, [](uint32_t x) { return sf("%u (%u%%)", x, (x * 100 + 127) / 255); });
+      r.yes_no("Mute", "muted", "not muted");
+      r.u8("Change counter");
+      return true;
+    case 0x2b7e: {  // Volume Control Point
+      static const char* const ops[] = {"Relative Volume Down", "Relative Volume Up", "Unmute/Relative Volume Down",
+                                        "Unmute/Relative Volume Up", "Set Absolute Volume", "Unmute", "Mute"};
+      const uint8_t vop = static_cast<uint8_t>(r.named("Opcode", 1, [](uint32_t x) { return x < 7 ? ops[x] : "?"; }));
+      r.u8("Change counter");
+      *words = vop < 7 ? ops[vop] : "?";
+      if (vop == 4 && r.has(1)) *words += sf(" %u", r.cur()[0]);
+      if (vop == 4) r.with("Volume setting", 1, [](uint32_t x) { return sf("%u (%u%%)", x, (x * 100 + 127) / 255); });
+      return true;
+    }
+    case 0x2b7f:  // Volume Flags
+      r.with("Volume flags", 1, [](uint32_t x) { return sf("0x%02x (volume setting %s)", x, x & 1 ? "persisted" : "reset"); });
+      return true;
+    case 0x2bc3:  // Mute (MICS)
+      if (n >= 1) *words = v[0] == 0 ? "not muted" : v[0] == 1 ? "muted" : "disabled";
+      r.with("Mute", 1, [](uint32_t x) { return std::string(x == 0 ? "not muted" : x == 1 ? "muted" : x == 2 ? "disabled" : "?"); });
+      return true;
+    case 0x2b84:  // Set Identity Resolving Key
+      r.with("Type", 1, [](uint32_t x) { return std::string(x == 0 ? "encrypted" : x == 1 ? "plain text" : "?"); });
+      r.hex("SIRK", 16);
+      return true;
+    case 0x2b85:  // Coordinated Set Size
+      if (n >= 1) *words = sf("%u members", v[0]);
+      r.u8("Set size");
+      return true;
+    case 0x2b86:  // Set Member Lock
+      if (n >= 1) *words = v[0] == 2 ? "locked" : v[0] == 1 ? "unlocked" : "?";
+      r.with("Lock", 1, [](uint32_t x) { return std::string(x == 2 ? "locked" : x == 1 ? "unlocked" : "?"); });
+      return true;
+    case 0x2b87:  // Set Member Rank
+      r.u8("Rank");
+      return true;
+    case 0x2b51:  // TMAP Role
+      if (n >= 2) *words = bit_names(le16(v), kTmapRoles, 6);
+      r.flags("TMAP role", 2, kTmapRoles, 6);
+      return true;
+    case 0x2b93:  // Media Player Name
+    case 0x2b97:  // Track Title
+    case 0x2bb3:  // Bearer Provider Name
+    case 0x2bb4:  // Bearer UCI
+    case 0x2bc2:  // Call Friendly Name
+    case 0x2a00:  // Device Name
+    case 0x2a24: case 0x2a25: case 0x2a26: case 0x2a27: case 0x2a28: case 0x2a29:  // Device Information strings
+      text("Text");
+      return true;
+    case 0x2b98:  // Track Duration
+    case 0x2b99:  // Track Position
+      if (n >= 4) {
+        const int32_t t = static_cast<int32_t>(le32(v));
+        *words = t == -1 ? std::string("unknown") : sf("%d:%02d.%02d", t / 6000, t / 100 % 60, t % 100);
+      }
+      r.with(uuid == 0x2b98 ? "Duration" : "Position", 4, [](uint32_t x) {
+        const int32_t t = static_cast<int32_t>(x);
+        return t == -1 ? std::string("unknown") : sf("%d (x 10 ms: %d:%02d.%02d)", t, t / 6000, t / 100 % 60, t % 100);
+      });
+      return true;
+    case 0x2ba3:  // Media State
+      if (n >= 1) *words = media_state_name(v[0]);
+      r.named("Media state", 1, [](uint32_t x) { return media_state_name(static_cast<uint8_t>(x)); });
+      return true;
+    case 0x2ba4: {  // Media Control Point
+      const uint8_t mop = static_cast<uint8_t>(r.named("Opcode", 1, [](uint32_t x) { return mcp_op_name(static_cast<uint8_t>(x)); }));
+      *words = mcp_op_name(mop);
+      if (notify) {
+        static const char* const res[] = {"?", "success", "opcode not supported", "media player inactive",
+                                          "command cannot be completed"};
+        if (r.has(1)) *words += std::string(" ") + (r.cur()[0] < 5 ? res[r.cur()[0]] : "?");
+        r.named("Result", 1, [](uint32_t x) { return x < 5 ? res[x] : "?"; });
+      } else if (r.has(4)) {
+        r.with("Parameter", 4, [](uint32_t x) { return std::to_string(static_cast<int32_t>(x)); });
+      }
+      return true;
+    }
+    case 0x2bba:  // Content Control ID
+      r.u8("CCID");
+      return true;
+    case 0x2902: {  // Client Characteristic Configuration
+      static const char* const bits[] = {"notification", "indication"};
+      if (n >= 2) *words = bit_names(le16(v), bits, 2);
+      r.flags("Configuration", 2, bits, 2);
+      return true;
+    }
+    case 0x2a01:  // Appearance
+      if (n >= 2) *words = appearance_name(le16(v));
+      r.with("Appearance", 2, [](uint32_t x) { return sf("0x%04x (%s)", x, appearance_name(static_cast<uint16_t>(x))); });
+      return true;
+    case 0x2a04:  // Peripheral Preferred Connection Parameters
+      r.time("Min interval", 2, 1.25);
+      r.time("Max interval", 2, 1.25);
+      r.u16("Latency");
+      r.time("Supervision timeout", 2, 10);
+      return true;
+    case 0x2a05:  // Service Changed
+      if (n >= 4) *words = sf("0x%04x-0x%04x", le16(v), le16(v + 2));
+      r.u16("Start handle", "0x%04x");
+      r.u16("End handle", "0x%04x");
+      return true;
+    case 0x2a19:  // Battery Level
+      if (n >= 1) *words = sf("%u%%", v[0]);
+      r.u8("Battery level", "%u%%");
+      return true;
+    case 0x2a50:  // PnP ID
+      r.with("Vendor ID source", 1, [](uint32_t x) { return std::string(x == 1 ? "Bluetooth SIG" : x == 2 ? "USB" : "?"); });
+      r.with("Vendor", 2, [](uint32_t x) { const char* c = company_name(static_cast<uint16_t>(x)); return sf("0x%04x", x) + (c ? std::string(" (") + c + ")" : ""); });
+      r.u16("Product", "0x%04x");
+      r.u16("Version", "0x%04x");
+      return true;
+    case 0x2aa6:  // Central Address Resolution
+    case 0x2ac9:  // Resolvable Private Address Only
+      r.yes_no(uuid == 0x2aa6 ? "Address resolution" : "RPA only", "supported", "not supported");
+      return true;
+    case 0x2b29: {  // Client Supported Features
+      static const char* const bits[] = {"robust caching", "EATT", "multiple handle value notifications"};
+      if (n >= 1) *words = bit_names(v[0], bits, 3);
+      r.flags("Features", 1, bits, 3);
+      return true;
+    }
+    case 0x2b2a:  // Database Hash
+      r.hex("Hash", 16);
+      return true;
+    case 0x2b3a: {  // Server Supported Features
+      static const char* const bits[] = {"EATT"};
+      if (n >= 1) *words = bit_names(v[0], bits, 1);
+      r.flags("Features", 1, bits, 1);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+// PAC records (PACS 3.1): count, then codec ID, capabilities and metadata each, the capabilities a
+// list of LTVs that ends where its length says. True if v is exactly that.
+bool looks_like_pac(const uint8_t* v, size_t n) {
+  if (n < 8 || v[0] < 1 || v[0] > 8) return false;
+  size_t at = 1;
+  for (unsigned i = 0; i < v[0]; ++i) {
+    if (at + 6 > n) return false;
+    const size_t end = at + 6 + v[at + 5];
+    for (size_t e = at + 6; e < end; e += 1 + v[e]) {
+      if (e >= n || v[e] == 0 || e + 1 + v[e] > end) return false;
+    }
+    if (end >= n) return false;
+    at = end + 1 + v[end];
+  }
+  return at == n;
+}
+
+// ASE states and ASE Control Point operations and responses (ASCS 4.1, 5): 0x2bc4 (an ASE, sink or
+// source), 0x2bc6 (the control point) or 0 when the bytes do not add up to one exactly.
+uint16_t looks_like_ascs(uint8_t op, const uint8_t* v, size_t n) {
+  const bool notify = op == 0x1b || op == 0x1d;
+  const bool write = op == 0x12 || op == 0x52;
+  if (n < 3 || (!notify && !write) || v[0] < 1 || v[0] > 8) return 0;
+  if (notify) {
+    // A control point response: opcode, count, { ASE ID, response code, reason } each.
+    if (v[1] >= 1 && v[1] != 0xff && n == 2 + 3u * v[1]) {
+      bool ok = true;
+      for (size_t i = 2; i < n; i += 3) ok = ok && v[i + 1] <= 0x0e && v[i + 2] <= 0x0a;
+      if (ok) return 0x2bc6;
+    }
+    // An ASE: ID, state, the state's parameters.
+    switch (v[1]) {
+      case 1: return n >= 25 && n == 25u + v[24] ? 0x2bc4 : 0;
+      case 2: return n == 17 ? 0x2bc4 : 0;
+      case 3:
+      case 4:
+      case 5: return n >= 5 && n == 5u + v[4] ? 0x2bc4 : 0;
+      default: return 0;
+    }
+  }
+  // An operation: opcode, count, then per ASE a layout of the opcode's.
+  if (v[1] < 1) return 0;
+  size_t at = 2;
+  for (unsigned i = 0; i < v[1]; ++i) {
+    switch (v[0]) {
+      case 1:  // ASE ID, target latency, target PHY, codec ID, configuration
+        if (at + 9 > n || v[at + 1] < 1 || v[at + 1] > 3) return 0;
+        at += 9 + v[at + 8];
+        break;
+      case 2: at += 16; break;
+      case 3:
+      case 7:
+        if (at + 2 > n) return 0;
+        at += 2 + v[at + 1];
+        break;
+      default: at += 1; break;
+    }
+    if (at > n) return 0;
+  }
+  return at == n ? 0x2bc6 : 0;
+}
+
+// LE Audio's control traffic when no discovery is in the capture (a client that cached the
+// handles never runs it, so a board's own ASCS and PACS are usually unnamed): ASE states, ASE
+// Control Point operations and PAC records have layouts whose lengths add up exactly, which other
+// values rarely do. Returns the characteristic they look like, 0 when the bytes do not add up. The
+// two-byte Idle and Releasing states are left alone: a CCC or a volume looks the same.
+uint16_t guess_le_audio(uint8_t op, const uint8_t* v, size_t n) {
+  if (const uint16_t u = looks_like_ascs(op, v, n)) return u;
+  return (op == 0x0b || op == 0x1b || op == 0x1d) && looks_like_pac(v, n) ? 0x2bc9 : 0;
+}
+
+std::string char_props_str(uint8_t p) {
+  static const char* const names[] = {"broadcast", "read", "write without response", "write", "notify",
+                                      "indicate", "authenticated signed writes", "extended properties"};
+  return sf("0x%02x (%s)", p, bit_names(p, names, 8).c_str());
+}
+
+std::string att(Out& o, const uint8_t* d, size_t n, const GattDb* g, bool tx) {
   if (n < 1) return "ATT (empty)";
   const uint8_t op = d[0];
   const char* nm = att_op_name(op);
@@ -4894,8 +5427,44 @@ std::string att(Out& o, const uint8_t* d, size_t n) {
   F("Opcode", sf("0x%02x (%s)", op, nm ? nm : "unknown"), d, 1);
   const uint8_t* p = d + 1;
   const size_t m = n - 1;
-  auto value = [&](const uint8_t* v, size_t vn) {
-    F("Value", hexbytes(v, vn, 64) + (mostly_text(v, vn) ? "  \"" + printable(v, vn) + "\"" : ""), v, vn);
+  // The attribute server this PDU is about: the sender of a response or notification (the odd
+  // opcodes), the receiver of a request.
+  const bool local = ((op & 1) != 0) == tx;
+  const GattDb::Side* side = g ? &g->side[local ? 1 : 0] : nullptr;
+  // "0x0098 (ASE Control Point)" when discovery named the handle.
+  auto handle_str = [&](uint16_t h) {
+    const uint16_t u = g ? g->uuid(local, h) : 0;
+    const char* un = u ? uuid16_name(u) : nullptr;
+    if (u == 0x2902) {
+      const uint16_t c = g->uuid(local, g->owner(local, h));
+      const char* cn = c ? uuid16_name(c) : nullptr;
+      if (cn) return sf("0x%04x (Client Characteristic Configuration of %s)", h, cn);
+    }
+    return un ? sf("0x%04x (%s)", h, un) : u ? sf("0x%04x (0x%04x)", h, u) : sf("0x%04x", h);
+  };
+  // A value: decoded by its characteristic when discovery named the handle (h; 0 when unknown),
+  // as bytes (and text) otherwise. Returns the summary's words, which never depend on discovery.
+  auto value = [&](uint16_t h, const uint8_t* v, size_t vn) {
+    uint16_t u = o.detail && g && h ? g->uuid(local, h) : 0;
+    const bool guessed = o.detail && !u && (u = guess_le_audio(op, v, vn)) != 0;
+    std::string words;
+    // The node's value is the decoder's summary words, known only once it ran: a first pass
+    // without the tree gets them (detail mode only, one packet).
+    bool decoded = false;
+    if (u) {
+      Out probe(v, false);
+      decoded = gatt_value(probe, u, op, v, vn, &words);
+    }
+    if (decoded) {
+      const char* un = guessed ? (u == 0x2bc4 ? "ASE" : u == 0x2bc6 ? "ASE Control Point" : "PAC") : uuid16_name(u);
+      OPEN(guessed ? std::string(un) + " (by its layout)" : un ? un : sf("0x%04x", u), words, v, vn);
+      o.mark(v);
+      gatt_value(o, u, op, v, vn, &words);
+      rest(o, v, vn, "Value");
+      CLOSE();
+    } else {
+      F("Value", hexbytes(v, vn, 64) + (mostly_text(v, vn) ? "  \"" + printable(v, vn) + "\"" : ""), v, vn);
+    }
     return " " + hexbytes(v, vn, 16) + (vn && mostly_text(v, vn) ? " \"" + printable(v, vn, 24) + "\"" : "");
   };
   switch (op) {
@@ -4903,7 +5472,7 @@ std::string att(Out& o, const uint8_t* d, size_t n) {
       if (m >= 4) {
         const char* req = att_op_name(p[0]);
         F("Request", sf("0x%02x (%s)", p[0], req ? req : "?"), p, 1);
-        F("Handle", sf("0x%04x", le16(p + 1)), p + 1, 2);
+        F("Handle", handle_str(le16(p + 1)), p + 1, 2);
         F("Error", sf("0x%02x (%s)", p[3], att_error_name(p[3])), p + 3, 1);
         s += sf(": %s handle 0x%04x %s", req ? req : "?", le16(p + 1), att_error_name(p[3]));
       }
@@ -4945,43 +5514,88 @@ std::string att(Out& o, const uint8_t* d, size_t n) {
         if (cnt > 1) s += sf(" (+%zu more)", cnt - 1);
       }
       break;
+    case 0x07: {  // Find By Type Value Response: handle ranges
+      size_t cnt = 0;
+      for (size_t i = 0; i + 4 <= m; i += 4, ++cnt) {
+        F(sf("Handles %zu", cnt), sf("0x%04x-0x%04x", le16(p + i), le16(p + i + 2)), p + i, 4);
+        if (cnt == 0) s += sf(" 0x%04x-0x%04x", le16(p + i), le16(p + i + 2));
+      }
+      if (cnt > 1) s += sf(" (+%zu more)", cnt - 1);
+      break;
+    }
     case 0x09:  // Read By Type Response
     case 0x11: {  // Read By Group Type Response
       if (m < 1 || p[0] < 2) break;
       const size_t el = p[0];
       F("Length", std::to_string(el), p, 1);
+      // What the request asked for: a Characteristic or Include declaration, else a value. Without
+      // the request (a capture that starts later), the lengths of the declarations tell.
+      const uint16_t type = side ? side->type_req : 0;
+      const bool decl = type == 0x2803 || (!type && (el == 7 || el == 21));
+      const bool incl = type == 0x2802 || (!type && (el == 8 || el == 6) && op == 0x09);
       size_t cnt = 0;
       for (size_t i = 1; i + el <= m; i += el, ++cnt) {
         const uint8_t* e = p + i;
         if (op == 0x11 && el >= 6) {
           F(sf("0x%04x-0x%04x", le16(e), le16(e + 2)), uuid_str(e + 4, el - 4), e, el);
           if (cnt == 0) s += sf(" 0x%04x-0x%04x %s", le16(e), le16(e + 2), uuid_str(e + 4, el - 4).c_str());
+          continue;
+        }
+        if (o.detail && decl && (el == 7 || el == 21)) {
+          OPEN(sf("Handle 0x%04x", le16(e)), "Characteristic " + uuid_str(e + 5, el - 5), e, el);
+          F("Properties", char_props_str(e[2]), e + 2, 1);
+          F("Value handle", sf("0x%04x", le16(e + 3)), e + 3, 2);
+          F("UUID", uuid_str(e + 5, el - 5), e + 5, el - 5);
+          CLOSE();
+        } else if (o.detail && incl && (el == 8 || el == 6)) {
+          OPEN(sf("Handle 0x%04x", le16(e)), el == 8 ? "Include " + uuid_str(e + 6, 2) : std::string("Include"), e, el);
+          F("Included service", sf("0x%04x-0x%04x", le16(e + 2), le16(e + 4)), e + 2, 4);
+          if (el == 8) F("UUID", uuid_str(e + 6, 2), e + 6, 2);
+          CLOSE();
+        } else if (o.detail && type && !decl && !incl) {
+          // A value read by its type (Read By Type for a characteristic UUID).
+          std::string words;
+          Out probe(e + 2, false);
+          if (gatt_value(probe, type, op, e + 2, el - 2, &words)) {
+            OPEN(sf("Handle 0x%04x", le16(e)), words, e, el);
+            o.mark(e + 2);
+            gatt_value(o, type, op, e + 2, el - 2, &words);
+            rest(o, e + 2, el - 2, "Value");
+            CLOSE();
+          } else {
+            F(sf("Handle 0x%04x", le16(e)), hexbytes(e + 2, el - 2, 64), e, el);
+          }
         } else {
           F(sf("Handle 0x%04x", le16(e)), hexbytes(e + 2, el - 2, 64), e, el);
-          if (cnt == 0) s += sf(" 0x%04x:", le16(e)) + " " + hexbytes(e + 2, el - 2, 12);
         }
+        if (cnt == 0) s += sf(" 0x%04x:", le16(e)) + " " + hexbytes(e + 2, el - 2, 12);
       }
       if (cnt > 1) s += sf(" (+%zu more)", cnt - 1);
       break;
     }
     case 0x0a:  // Read Request
       if (m >= 2) {
-        F("Handle", sf("0x%04x", le16(p)), p, 2);
+        F("Handle", handle_str(le16(p)), p, 2);
         s += sf(" handle 0x%04x", le16(p));
       }
       break;
     case 0x0c:  // Read Blob Request
       if (m >= 4) {
-        F("Handle", sf("0x%04x", le16(p)), p, 2);
+        F("Handle", handle_str(le16(p)), p, 2);
         F("Offset", std::to_string(le16(p + 2)), p + 2, 2);
         s += sf(" handle 0x%04x offset %u", le16(p), le16(p + 2));
       }
       break;
-    case 0x0b:
-    case 0x0d:
+    case 0x0b: {  // Read Response: the handle is the request's
+      const uint16_t h = side ? side->read_handle : 0;
+      if (h) F("Handle", handle_str(h) + " (from the request)", nullptr, 0);
+      s += value(h, p, m);
+      break;
+    }
+    case 0x0d:  // Read Blob Response: a part of a value, bytes only
     case 0x0f:
     case 0x21:
-      s += value(p, m);
+      s += value(0, p, m);
       break;
     case 0x0e:
     case 0x20: {
@@ -4997,20 +5611,20 @@ std::string att(Out& o, const uint8_t* d, size_t n) {
     case 0x1d:  // Indication
     case 0xd2:
       if (m >= 2) {
-        F("Handle", sf("0x%04x", le16(p)), p, 2);
+        F("Handle", handle_str(le16(p)), p, 2);
         s += sf(" handle 0x%04x", le16(p));
         const size_t vn = op == 0xd2 && m >= 14 ? m - 14 : m - 2;
-        s += value(p + 2, vn);
+        s += value(le16(p), p + 2, vn);
         if (op == 0xd2 && m >= 14) F("Signature", hexbytes(p + 2 + vn, 12), p + 2 + vn, 12);
       }
       break;
     case 0x16:  // Prepare Write
     case 0x17:
       if (m >= 4) {
-        F("Handle", sf("0x%04x", le16(p)), p, 2);
+        F("Handle", handle_str(le16(p)), p, 2);
         F("Offset", std::to_string(le16(p + 2)), p + 2, 2);
         s += sf(" handle 0x%04x offset %u", le16(p), le16(p + 2));
-        s += value(p + 4, m - 4);
+        s += value(0, p + 4, m - 4);
       }
       break;
     case 0x18:
@@ -5023,7 +5637,10 @@ std::string att(Out& o, const uint8_t* d, size_t n) {
       for (size_t i = 0; i + 4 <= m;) {
         const size_t vl = le16(p + i + 2);
         if (i + 4 + vl > m) break;
-        F(sf("Handle 0x%04x", le16(p + i)), hexbytes(p + i + 4, vl, 64), p + i, 4 + vl);
+        OPEN(sf("Handle 0x%04x", le16(p + i)), handle_str(le16(p + i)), p + i, 4 + vl);
+        F("Length", std::to_string(vl), p + i + 2, 2);
+        value(le16(p + i), p + i + 4, vl);
+        CLOSE();
         if (i == 0) s += sf(" handle 0x%04x", le16(p + i));
         i += 4 + vl;
       }
@@ -6950,7 +7567,7 @@ std::string l2cap_other(Out& o, const uint8_t* frame, const uint8_t* q, size_t m
   return sf("CID 0x%04x, %zu bytes", cid, m);
 }
 
-void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
+void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len, const GattDb* gatt) {
   if (len < 4) {
     o.summary = "ACL (truncated)";
     return;
@@ -7003,7 +7620,7 @@ void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len) {
         s = l2cap_other(o, p, q, m, l2len, cid);
       }
       break;
-    case kProtoAtt: s = att(o, q, m); break;
+    case kProtoAtt: s = att(o, q, m, gatt, e.flags & kFlagTx); break;
     case kProtoSmp: s = smp(o, q, m); break;
     case kProtoSdp: s = sdp(o, q, m); break;
     case kProtoRfcomm: s = rfcomm(o, q, m); break;
@@ -7229,13 +7846,97 @@ bool l2cap_payload_is_error(uint8_t proto, uint16_t cid, const uint8_t* d, size_
   }
 }
 
-void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out) {
+namespace {
+
+void put_attr(std::vector<std::pair<uint16_t, uint16_t>>* v, uint16_t h, uint16_t uuid) {
+  auto it = std::lower_bound(v->begin(), v->end(), std::make_pair(h, uint16_t{0}),
+                             [](const std::pair<uint16_t, uint16_t>& a, const std::pair<uint16_t, uint16_t>& b) {
+                               return a.first < b.first;
+                             });
+  if (it != v->end() && it->first == h) {
+    // A Find Information of a 128-bit UUID says 0: keep what the declaration said.
+    if (uuid) it->second = uuid;
+  } else {
+    v->insert(it, {h, uuid});
+  }
+}
+
+}  // namespace
+
+void GattDb::clear() {
+  side[0] = Side();
+  side[1] = Side();
+}
+
+void GattDb::learn(const uint8_t* p, size_t n, bool tx) {
+  if (n < 1) return;
+  const uint8_t op = p[0];
+  Side& s = side[((op & 1) != 0) == tx ? 1 : 0];
+  switch (op) {
+    case 0x08:  // Read By Type Request: start, end, type (a 128-bit one is not followed)
+      if (n >= 7) s.type_req = n == 7 ? le16(p + 5) : 0;
+      break;
+    case 0x0a:  // Read Request, Read Blob Request
+    case 0x0c:
+      if (n >= 3) s.read_handle = le16(p + 1);
+      break;
+    case 0x09: {  // Read By Type Response
+      if (n < 2) break;
+      const size_t el = p[1];
+      if (el < 3) break;
+      const bool decl = s.type_req == 0x2803 || (!s.type_req && (el == 7 || el == 21));
+      for (size_t i = 2; i + el <= n; i += el) {
+        const uint8_t* e = p + i;
+        if (decl && (el == 7 || el == 21)) {
+          const uint16_t vh = le16(e + 3);
+          put_attr(&s.attrs, le16(e), 0x2803);
+          put_attr(&s.attrs, vh, el == 7 ? le16(e + 5) : 0);
+          auto it = std::lower_bound(s.values.begin(), s.values.end(), vh);
+          if (it == s.values.end() || *it != vh) s.values.insert(it, vh);
+        } else if (s.type_req && s.type_req != 0x2802) {
+          put_attr(&s.attrs, le16(e), s.type_req);
+        }
+      }
+      break;
+    }
+    case 0x05: {  // Find Information Response
+      if (n < 2) break;
+      const size_t ul = p[1] == 1 ? 2 : 16;
+      for (size_t i = 2; i + 2 + ul <= n; i += 2 + ul) put_attr(&s.attrs, le16(p + i), ul == 2 ? le16(p + i + 2) : 0);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void GattDb::learn_acl(const uint8_t* d, size_t len, bool tx) {
+  if (len < 9 || ((le16(d) >> 12) & 3) == 1) return;  // a continuation has no ATT header
+  learn(d + 8, std::min<size_t>(len - 8, le16(d + 4)), tx);
+}
+
+uint16_t GattDb::uuid(bool local_server, uint16_t handle) const {
+  const auto& v = side[local_server ? 1 : 0].attrs;
+  auto it = std::lower_bound(v.begin(), v.end(), std::make_pair(handle, uint16_t{0}),
+                             [](const std::pair<uint16_t, uint16_t>& a, const std::pair<uint16_t, uint16_t>& b) {
+                               return a.first < b.first;
+                             });
+  return it != v.end() && it->first == handle ? it->second : 0;
+}
+
+uint16_t GattDb::owner(bool local_server, uint16_t handle) const {
+  const auto& v = side[local_server ? 1 : 0].values;
+  auto it = std::lower_bound(v.begin(), v.end(), handle);
+  return it == v.begin() ? 0 : *(it - 1);
+}
+
+void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out, const GattDb* gatt) {
   Out o(d, detail);
   switch (e.mon) {
     case kMonCommand: hci_command(o, d, len); break;
     case kMonEvent: hci_event(o, d, len); break;
     case kMonAclTx:
-    case kMonAclRx: acl(o, e, d, len); break;
+    case kMonAclRx: acl(o, e, d, len, gatt); break;
     case kMonScoTx:
     case kMonScoRx: sco_iso(o, d, len, false); break;
     case kMonIsoTx:
