@@ -1072,8 +1072,8 @@ bool mgmt_has_addr(bool cmd, uint16_t code) {
   if (cmd) {
     switch (code) {
       case 0x0014: case 0x0016: case 0x0017: case 0x0019: case 0x001a: case 0x001b: case 0x001c:
-      case 0x001d: case 0x001e: case 0x001f: case 0x0021: case 0x0026: case 0x0027: case 0x0031:
-      case 0x0032: case 0x0033: case 0x0034: case 0x0044: case 0x0050: case 0x0055: case 0x0056:
+      case 0x001d: case 0x001e: case 0x001f: case 0x0021: case 0x0022: case 0x0025: case 0x0026:
+      case 0x0027: case 0x0031: case 0x0032: case 0x0033: case 0x0034: case 0x004f: case 0x0050:
         return true;
       default: return false;
     }
@@ -1081,10 +1081,549 @@ bool mgmt_has_addr(bool cmd, uint16_t code) {
   switch (code) {
     case 0x000b: case 0x000c: case 0x000d: case 0x000e: case 0x000f: case 0x0010: case 0x0011:
     case 0x0012: case 0x0014: case 0x0015: case 0x0016: case 0x0017: case 0x001a: case 0x001b:
-    case 0x001c: case 0x002f: case 0x0030:
+    case 0x001c: case 0x002a: case 0x0033: case 0x0034:
       return true;
     default: return false;
   }
+}
+
+std::string ad_data(Out& o, const uint8_t* p, size_t n);
+std::string cod_str(uint32_t c);
+const char* io_cap_name(uint8_t c);
+const char* link_key_type_name(uint8_t t);
+const char* bt_version_name(uint8_t v);
+std::string company_str(uint16_t c);
+
+// BlueZ's experimental features (src/adapter.c), which bluetoothd reads and sets at start.
+const char* mgmt_exp_feature_name(const std::string& uuid) {
+  if (uuid == "d4992530-b9ec-469f-ab01-6c481c47da1c") return "debug";
+  if (uuid == "671b10b5-42c0-4696-9227-eb28d1b049d6") return "simultaneous central and peripheral";
+  if (uuid == "330859bc-7506-492d-9370-9a6f0614037f") return "quality report";
+  if (uuid == "15c0a148-c273-11ea-b3de-0242ac130004") return "LL privacy";
+  if (uuid == "a6695ace-ee7f-4fb9-881a-5fac66c629af") return "codec offload";
+  if (uuid == "6fbaf188-05e0-496a-9885-d6ddfdb4e03e") return "ISO socket";
+  if (uuid == "2ce463d7-7a03-4d8d-bf05-5f24e8f36e76") return "mesh";
+  if (uuid == "69518c4c-b69f-4679-8bc1-c021b47b5733") return "poll errqueue";
+  return nullptr;
+}
+
+std::string mgmt_uuid_str(const uint8_t* p) {
+  const std::string u = uuid_str(p, 16);
+  // A 16-bit UUID in the Base UUID's form reads better as its name (Add UUID's service classes).
+  static const uint8_t base[12] = {0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00};
+  if (std::memcmp(p, base, 12) == 0 && le16(p + 14) == 0) return uuid_str(p + 12, 2);
+  const char* n = mgmt_exp_feature_name(u);
+  return n ? u + " (" + n + ")" : u;
+}
+
+const char* const kMgmtExpFlags[] = {"active", "settings change"};
+const char* const kMgmtDeviceFlags[] = {"remote wakeup", "device privacy mode", "address resolution", "past"};
+const char* const kMgmtConnFlags[] = {"confirm name", "legacy pairing", "not connectable", "initiated pairing request",
+                                      "name request failed", "scan response"};
+
+// A management string field is NUL-padded to a fixed size: quoted up to the NUL.
+std::string mgmt_text(const uint8_t* p, size_t n, size_t max) {
+  const void* z = std::memchr(p, 0, n);
+  return quoted(p, z ? static_cast<size_t>(static_cast<const uint8_t*>(z) - p) : n, max);
+}
+
+void mgmt_name(Rd& r, const char* name, size_t size) {
+  if (!r.has(1)) return;
+  const size_t k = std::min(size, r.left());
+  if (r.o.detail) r.o.add(name, mgmt_text(r.cur(), k, 248), r.cur(), k);
+  r.skip(k);
+}
+
+void mgmt_eir(Rd& r, size_t len) {
+  Out& o = r.o;
+  len = std::min(len, r.left());
+  if (!len) return;
+  OPEN("EIR", sf("%zu bytes", len), r.cur(), len);
+  ad_data(o, r.cur(), len);
+  CLOSE();
+  r.skip(len);
+}
+
+// The parameters after the opcode (commands) or the event code (events), and the return
+// parameters of a Command Complete (rsp): each command's layout from BlueZ's doc/mgmt-api.txt.
+// Returns words for the summary.
+std::string mgmt_params(Out& o, bool cmd, bool rsp, uint16_t code, const uint8_t* p, size_t n) {
+  Rd r(o, p, n);
+  std::string s;
+  auto addr_info = [&]() {
+    if (!r.has(7)) return;
+    s += sf(" %s (%s)", bdaddr_str(r.cur()).c_str(), mgmt_addr_type(r.cur()[6]));
+    r.addr();
+    r.with("Address type", 1, [](uint32_t v) { return std::string(mgmt_addr_type(static_cast<uint8_t>(v))); });
+  };
+  auto settings = [&](const char* name) { r.with(name, 4, [](uint32_t v) { return mgmt_settings(v); }); };
+  auto count_of = [&](const char* name, size_t each, const char* item) {
+    const uint16_t k = r.u16(name);
+    for (unsigned i = 0; i < k && r.has(each); ++i) r.hex(item, each);
+  };
+  if (rsp) {
+    switch (code) {
+      case 0x0001:  // Read Version
+        if (n >= 3) {
+          F("Version", sf("%u.%u", p[0], le16(p + 1)), p, 3);
+          s = sf(" %u.%u", p[0], le16(p + 1));
+        }
+        return s;
+      case 0x0002: {  // Read Commands
+        const uint16_t nc = r.u16("Commands");
+        const uint16_t ne = r.u16("Events");
+        std::string cs, es;
+        for (unsigned i = 0; i < nc && r.has(2); ++i, r.skip(2)) {
+          const char* nm = mgmt_op_name(le16(r.cur()));
+          if (o.detail) cs += (cs.empty() ? "" : ", ") + (nm ? std::string(nm) : sf("0x%04x", le16(r.cur())));
+        }
+        for (unsigned i = 0; i < ne && r.has(2); ++i, r.skip(2)) {
+          const char* nm = mgmt_event_name(le16(r.cur()));
+          if (o.detail) es += (es.empty() ? "" : ", ") + (nm ? std::string(nm) : sf("0x%04x", le16(r.cur())));
+        }
+        if (n >= 4) {
+          F("Supported commands", cs, p + 4, std::min<size_t>(n - 4, nc * 2u));
+          F("Supported events", es, p + 4 + nc * 2u, std::min<size_t>(n > 4 + nc * 2u ? n - 4 - nc * 2u : 0, ne * 2u));
+          s = sf(" %u commands, %u events", nc, ne);
+        }
+        return s;
+      }
+      case 0x0003: {  // Read Index List
+        const uint16_t k = r.u16("Controllers");
+        for (unsigned i = 0; i < k && r.has(2); ++i) s += sf(" hci%u", r.u16("Index"));
+        return s;
+      }
+      case 0x0004:  // Read Controller Info
+        if (r.has(6)) s = " " + bdaddr_str(r.cur());
+        r.addr();
+        r.with("Version", 1, [](uint32_t v) { return sf("%u (Bluetooth %s)", v, bt_version_name(static_cast<uint8_t>(v))); });
+        r.with("Manufacturer", 2, [](uint32_t v) { return company_str(static_cast<uint16_t>(v)); });
+        settings("Supported settings");
+        settings("Current settings");
+        r.with("Class", 3, [](uint32_t v) { return cod_str(v); });
+        if (r.has(1)) s += " " + mgmt_text(r.cur(), std::min<size_t>(249, r.left()), 40);
+        mgmt_name(r, "Name", 249);
+        mgmt_name(r, "Short name", 11);
+        return s;
+      case 0x000e:  // Set Dev Class
+      case 0x0010:  // Add UUID
+      case 0x0011:  // Remove UUID
+        r.with("Class", 3, [](uint32_t v) { return cod_str(v); });
+        return s;
+      case 0x000f:  // Set Local Name
+        mgmt_name(r, "Name", 249);
+        mgmt_name(r, "Short name", 11);
+        return s;
+      case 0x0023:  // Start Discovery
+      case 0x0024:  // Stop Discovery
+      case 0x003a:  // Start Service Discovery
+      case 0x0041:  // Start Limited Discovery
+        r.u8("Address types", "0x%02x");
+        return s;
+      case 0x003d: {  // Read Advertising Features
+        r.u32("Supported flags", "0x%08x");
+        r.u8("Max advertising data length");
+        r.u8("Max scan response length");
+        r.u8("Max instances");
+        const uint8_t k = r.u8("Instances");
+        for (unsigned i = 0; i < k && r.has(1); ++i) r.u8("Instance");
+        return s;
+      }
+      case 0x003e:  // Add Advertising
+      case 0x003f:  // Remove Advertising
+      case 0x0054:  // Add Extended Advertising Parameters
+      case 0x0055:  // Add Extended Advertising Data
+        s = sf(" instance %u", r.u8("Instance"));
+        if (code == 0x0054) {
+          r.dbm("TX power");
+          r.u8("Max advertising data length");
+          r.u8("Max scan response length");
+        }
+        return s;
+      case 0x0048: {  // Read Controller Capabilities Information
+        const uint16_t l = r.u16("Capabilities length");
+        Rd c(o, r.cur(), std::min<size_t>(l, r.left()));
+        while (c.has(2)) {
+          const uint8_t el = c.cur()[0], t = c.cur()[1];
+          if (!el || !c.has(1 + el)) break;
+          const uint8_t* v = c.cur() + 2;
+          std::string name = sf("Capability 0x%02x", t), val = hexbytes(v, el - 1);
+          if (t == 0x01 && el >= 2) {
+            static const char* const fl[] = {"remote public key validation", "encryption key size enforcement"};
+            name = "Security flags";
+            val = sf("0x%02x (%s)", v[0], bit_names(v[0], fl, 2).c_str());
+          } else if ((t == 0x02 || t == 0x03) && el >= 2) {
+            name = t == 0x02 ? "Max encryption key size (BR/EDR)" : "Max encryption key size (LE)";
+            val = std::to_string(v[0]);
+          } else if (t == 0x04 && el >= 3) {
+            name = "LE TX power";
+            val = sf("%d to %d dBm", static_cast<int8_t>(v[0]), static_cast<int8_t>(v[1]));
+          }
+          F(name, val, c.cur(), 1 + el);
+          c.skip(1 + el);
+        }
+        r.skip(l);
+        return s;
+      }
+      case 0x0049: {  // Read Experimental Features Information
+        const uint16_t k = r.u16("Features");
+        for (unsigned i = 0; i < k && r.has(20); ++i) {
+          const uint8_t* e = r.cur();
+          const uint32_t fl = le32(e + 16);
+          if (o.detail) {
+            const std::string u = uuid_str(e, 16);
+            const char* nm = mgmt_exp_feature_name(u);
+            o.add(nm ? nm : "Feature", u + sf(", flags 0x%08x (", fl) + bit_names(fl, kMgmtExpFlags, 2) + ")", e, 20);
+          }
+          if (fl & 1) {
+            const char* nm = mgmt_exp_feature_name(uuid_str(e, 16));
+            s += std::string(s.empty() ? " active: " : ", ") + (nm ? nm : "?");
+          }
+          r.skip(20);
+        }
+        return s;
+      }
+      case 0x004a:  // Set Experimental Feature
+        r.with("UUID", 16, [&](uint32_t) { return mgmt_uuid_str(r.cur()); });
+        r.flags("Flags", 4, kMgmtExpFlags, 2);
+        return s;
+      case 0x0051: {  // Read Advertisement Monitor Features
+        r.u32("Supported features", "0x%08x");
+        r.u32("Enabled features", "0x%08x");
+        r.u16("Max handles");
+        r.u8("Max patterns");
+        const uint16_t k = r.u16("Handles");
+        for (unsigned i = 0; i < k && r.has(2); ++i) r.u16("Handle");
+        return s;
+      }
+      case 0x0052:  // Add Advertisement Patterns Monitor
+      case 0x0053:  // Remove Advertisement Monitor
+      case 0x0056:
+        s = sf(" monitor %u", r.u16("Monitor handle"));
+        return s;
+      default:
+        break;
+    }
+    // The commands about one device answer with its address.
+    if (mgmt_has_addr(true, code)) {
+      addr_info();
+      if (code == 0x0031) {  // Get Connection Information
+        if (r.has(1)) s += sf(" RSSI %d", static_cast<int8_t>(r.cur()[0]));
+        r.with("RSSI", 1, [](uint32_t v) { return static_cast<int8_t>(v) == 127 ? std::string("unknown") : sf("%d dBm", static_cast<int8_t>(v)); });
+        r.with("TX power", 1, [](uint32_t v) { return static_cast<int8_t>(v) == 127 ? std::string("unknown") : sf("%d dBm", static_cast<int8_t>(v)); });
+        r.with("Max TX power", 1, [](uint32_t v) { return static_cast<int8_t>(v) == 127 ? std::string("unknown") : sf("%d dBm", static_cast<int8_t>(v)); });
+      } else if (code == 0x0032) {  // Get Clock Information
+        r.u32("Local clock", "0x%08x");
+        r.u32("Piconet clock", "0x%08x");
+        r.u16("Accuracy");
+      } else if (code == 0x004f) {  // Get Device Flags
+        r.flags("Supported flags", 4, kMgmtDeviceFlags, 4);
+        r.flags("Current flags", 4, kMgmtDeviceFlags, 4);
+      }
+    }
+    return s;
+  }
+
+  if (cmd) {
+    switch (code) {
+      case 0x000e:  // Set Dev Class
+        r.u8("Major class", "0x%02x");
+        r.u8("Minor class", "0x%02x");
+        return s;
+      case 0x000f:  // Set Local Name
+        if (r.has(1)) s = " " + mgmt_text(r.cur(), std::min<size_t>(249, r.left()), 40);
+        mgmt_name(r, "Name", 249);
+        mgmt_name(r, "Short name", 11);
+        return s;
+      case 0x0010:  // Add UUID
+      case 0x0011:  // Remove UUID
+        if (r.has(16)) s = " " + mgmt_uuid_str(r.cur());
+        r.with("UUID", 16, [&](uint32_t) { return mgmt_uuid_str(r.cur()); });
+        if (code == 0x0010) r.with("Service class hint", 1, [](uint32_t v) { return cod_str(v << 16); });
+        if (code == 0x0011 && n >= 16 && std::all_of(p, p + 16, [](uint8_t b) { return b == 0; })) s = " all";
+        return s;
+      case 0x0012:  // Load Link Keys
+        r.yes_no("Debug keys", "allowed", "not allowed");
+        s = sf(" %u keys", r.raw(2));
+        count_of("Keys", 25, "Link key");
+        return s;
+      case 0x0013:  // Load Long Term Keys
+        s = sf(" %u keys", r.raw(2));
+        count_of("Keys", 36, "Long term key");
+        return s;
+      case 0x0030:  // Load Identity Resolving Keys
+        s = sf(" %u keys", r.raw(2));
+        count_of("Keys", 23, "Identity resolving key");
+        return s;
+      case 0x0035:  // Load Connection Parameters
+        s = sf(" %u devices", r.raw(2));
+        count_of("Parameters", 15, "Connection parameters");
+        return s;
+      case 0x0046:  // Set Blocked Keys
+        s = sf(" %u keys", r.raw(2));
+        count_of("Keys", 17, "Blocked key");
+        return s;
+      case 0x0018:  // Set IO Capability
+        if (n >= 1) s = std::string(" ") + io_cap_name(p[0]);
+        r.with("IO capability", 1, [](uint32_t v) { return std::string(io_cap_name(static_cast<uint8_t>(v))); });
+        return s;
+      case 0x0023:  // Start Discovery
+      case 0x0024:  // Stop Discovery
+      case 0x003a:  // Start Service Discovery
+      case 0x0041:  // Start Limited Discovery
+        r.with("Address types", 1, [](uint32_t v) {
+          static const char* const t[] = {"BR/EDR", "LE public", "LE random"};
+          return sf("0x%02x (%s)", v, bit_names(v, t, 3).c_str());
+        });
+        if (code == 0x003a) {
+          r.with("RSSI threshold", 1, [](uint32_t v) { return sf("%d dBm", static_cast<int8_t>(v)); });
+          const uint16_t k = r.u16("UUIDs");
+          for (unsigned i = 0; i < k && r.has(16); ++i) r.with("UUID", 16, [&](uint32_t) { return mgmt_uuid_str(r.cur()); });
+        }
+        return s;
+      case 0x0028:  // Set Device ID
+        r.with("Source", 2, [](uint32_t v) { return std::string(v == 1 ? "Bluetooth SIG" : v == 2 ? "USB" : v ? "?" : "disabled"); });
+        r.u16("Vendor", "0x%04x");
+        r.u16("Product", "0x%04x");
+        r.u16("Version", "0x%04x");
+        return s;
+      case 0x002f:  // Set Privacy
+        if (n >= 1) s = p[0] ? (p[0] == 2 ? " limited" : " on") : " off";
+        r.with("Privacy", 1, [](uint32_t v) { return std::string(v == 0 ? "off" : v == 1 ? "on" : v == 2 ? "limited" : "?"); });
+        r.hex("Identity resolving key", 16);
+        return s;
+      case 0x003e: {  // Add Advertising
+        s = sf(" instance %u", r.u8("Instance"));
+        r.u32("Flags", "0x%08x");
+        r.u16("Duration", "%u s");
+        r.u16("Timeout", "%u s");
+        const uint8_t al = r.u8("Advertising data length");
+        const uint8_t sl = r.u8("Scan response length");
+        if (al && r.has(1)) {
+          OPEN("Advertising data", "", r.cur(), std::min<size_t>(al, r.left()));
+          ad_data(o, r.cur(), std::min<size_t>(al, r.left()));
+          CLOSE();
+          r.skip(al);
+        }
+        if (sl && r.has(1)) {
+          OPEN("Scan response", "", r.cur(), std::min<size_t>(sl, r.left()));
+          ad_data(o, r.cur(), std::min<size_t>(sl, r.left()));
+          CLOSE();
+          r.skip(sl);
+        }
+        return s;
+      }
+      case 0x003f:  // Remove Advertising
+        s = sf(" instance %u", r.u8("Instance"));
+        return s;
+      case 0x0047:  // Set Wideband Speech
+        if (n >= 1) s = p[0] ? " on" : " off";
+        r.yes_no("Mode", "on", "off");
+        return s;
+      case 0x004a:  // Set Experimental Feature
+        if (r.has(16)) s = " " + mgmt_uuid_str(r.cur());
+        r.with("UUID", 16, [&](uint32_t) { return mgmt_uuid_str(r.cur()); });
+        if (r.has(1)) s += r.cur()[0] ? " on" : " off";
+        r.yes_no("Action", "on", "off");
+        return s;
+      case 0x0053:  // Remove Advertisement Monitor
+        s = sf(" monitor %u", r.u16("Monitor handle", "%u (0: all)"));
+        return s;
+      default:
+        break;
+    }
+    if (!mgmt_has_addr(true, code)) return s;
+    addr_info();
+    switch (code) {
+      case 0x0019:  // Pair Device
+        r.with("IO capability", 1, [](uint32_t v) { return std::string(io_cap_name(static_cast<uint8_t>(v))); });
+        break;
+      case 0x001b:  // Unpair Device
+        r.yes_no("Disconnect", "yes", "no");
+        break;
+      case 0x0016:  // PIN Code Reply
+        r.u8("PIN length");
+        r.hex("PIN", 16);
+        break;
+      case 0x001e:  // User Passkey Reply
+        r.u32("Passkey", "%06u");
+        break;
+      case 0x0033: {  // Add Device
+        static const char* const act[] = {"background scan", "allow incoming connection", "auto-connect"};
+        if (r.has(1)) s += sf(", %s", r.cur()[0] < 3 ? act[r.cur()[0]] : "?");
+        r.with("Action", 1, [](uint32_t v) { return sf("0x%02x (%s)", v, v < 3 ? act[v] : "?"); });
+        break;
+      }
+      case 0x0050:  // Set Device Flags
+        r.flags("Current flags", 4, kMgmtDeviceFlags, 4);
+        break;
+      default:
+        break;
+    }
+    return s;
+  }
+
+  // Events.
+  switch (code) {
+    case 0x0007:  // Class of Device Changed
+      if (n >= 3) s = " " + cod_str(le24(p));
+      r.with("Class", 3, [](uint32_t v) { return cod_str(v); });
+      return s;
+    case 0x0008:  // Local Name Changed
+      if (r.has(1)) s = " " + mgmt_text(r.cur(), std::min<size_t>(249, r.left()), 40);
+      mgmt_name(r, "Name", 249);
+      mgmt_name(r, "Short name", 11);
+      return s;
+    case 0x0009:  // New Link Key
+    case 0x000a:  // New Long Term Key
+    case 0x0018:  // New Identity Resolving Key
+    case 0x0019:  // New Signature Resolving Key
+      r.yes_no("Store hint", "store", "do not store");
+      if (code == 0x0018) r.addr("Random address");
+      addr_info();
+      if (code == 0x0009) {
+        r.with("Key type", 1, [](uint32_t v) { return sf("0x%02x (%s)", v, link_key_type_name(static_cast<uint8_t>(v))); });
+        r.hex("Key", 16);
+        r.u8("PIN length");
+      } else if (code == 0x000a) {
+        r.u8("Key type", "0x%02x");
+        r.yes_no("Central", "yes", "no");
+        r.u8("Encryption key size");
+        r.u16("EDIV", "0x%04x");
+        r.hex("Rand", 8);
+        r.hex("Key", 16);
+      } else if (code == 0x0018) {
+        r.hex("Key", 16);
+      } else {
+        r.u8("Key type", "0x%02x");
+        r.hex("Key", 16);
+      }
+      return s;
+    case 0x0023:  // Advertising Added
+    case 0x0024:  // Advertising Removed
+      s = sf(" instance %u", r.u8("Instance"));
+      return s;
+    case 0x0027:  // Experimental Feature Changed
+      if (r.has(16)) s = " " + mgmt_uuid_str(r.cur());
+      r.with("UUID", 16, [&](uint32_t) { return mgmt_uuid_str(r.cur()); });
+      if (r.has(4)) s += r.cur()[0] & 1 ? " active" : " inactive";
+      r.flags("Flags", 4, kMgmtExpFlags, 2);
+      return s;
+    case 0x0028:  // Default System Configuration Changed
+    case 0x0029:  // Default Runtime Configuration Changed
+      return s;
+    case 0x002b:  // Advertisement Monitor Added
+    case 0x002c:  // Advertisement Monitor Removed
+      s = sf(" monitor %u", r.u16("Monitor handle"));
+      return s;
+    case 0x002f:  // Advertisement Monitor Device Found
+    case 0x0030:  // Advertisement Monitor Device Lost
+      s = sf(" monitor %u", r.u16("Monitor handle"));
+      addr_info();
+      if (code == 0x002f) {
+        r.with("RSSI", 1, [](uint32_t v) { return sf("%d dBm", static_cast<int8_t>(v)); });
+        r.flags("Flags", 4, kMgmtConnFlags, 6);
+        mgmt_eir(r, r.u16("EIR length"));
+      }
+      return s;
+    case 0x002d:  // Controller Suspend
+      r.with("Suspend state", 1, [](uint32_t v) {
+        static const char* const st[] = {"running", "disconnected, not scanning", "page scan / passive scan"};
+        return std::string(v < 3 ? st[v] : "?");
+      });
+      return s;
+    default:
+      break;
+  }
+  const bool addr_first = mgmt_has_addr(false, code) || code == 0x002a || code == 0x0033 || code == 0x0034;
+  if (!addr_first) return s;
+  addr_info();
+  switch (code) {
+    case 0x000b:  // Device Connected
+      r.flags("Flags", 4, kMgmtConnFlags, 6);
+      mgmt_eir(r, r.u16("EIR length"));
+      break;
+    case 0x000c:  // Device Disconnected
+      if (r.has(1)) {
+        static const char* const kWhy[] = {"unknown", "timeout", "local host", "remote", "auth failure", "local host suspend"};
+        const char* why = r.cur()[0] < 6 ? kWhy[r.cur()[0]] : "?";
+        s += sf(", reason %s", why);
+        r.with("Reason", 1, [&](uint32_t v) { return sf("0x%02x (%s)", v, why); });
+      }
+      break;
+    case 0x000d:  // Connect Failed
+    case 0x0011:  // Authentication Failed
+      if (r.has(1)) {
+        const char* st = mgmt_status_name(r.cur()[0]);
+        s += sf(", %s", st ? st : "failed");
+        r.with("Status", 1, [&](uint32_t v) { return sf("0x%02x (%s)", v, st ? st : "unknown"); });
+      }
+      break;
+    case 0x000f:  // User Confirm Request
+      r.yes_no("Confirm hint", "just works", "compare");
+      r.u32("Value", "%06u");
+      break;
+    case 0x0012: {  // Device Found
+      if (r.has(1)) s += sf(" %d dBm", static_cast<int8_t>(r.cur()[0]));
+      r.with("RSSI", 1, [](uint32_t v) { return sf("%d dBm", static_cast<int8_t>(v)); });
+      r.flags("Flags", 4, kMgmtConnFlags, 6);
+      mgmt_eir(r, r.u16("EIR length"));
+      break;
+    }
+    case 0x0017:  // Passkey Notify
+      r.u32("Passkey", "%06u");
+      r.u8("Entered");
+      break;
+    case 0x001a: {  // Device Added
+      static const char* const act[] = {"background scan", "allow incoming connection", "auto-connect"};
+      r.with("Action", 1, [](uint32_t v) { return sf("0x%02x (%s)", v, v < 3 ? act[v] : "?"); });
+      break;
+    }
+    case 0x001c:  // New Connection Parameter
+      r.yes_no("Store hint", "store", "do not store");
+      r.time("Min interval", 2, 1.25);
+      r.time("Max interval", 2, 1.25);
+      r.u16("Latency");
+      r.time("Supervision timeout", 2, 10);
+      break;
+    case 0x002a:  // Device Flags Changed
+      r.flags("Supported flags", 4, kMgmtDeviceFlags, 4);
+      r.flags("Current flags", 4, kMgmtDeviceFlags, 4);
+      break;
+    case 0x0033:  // Connection Subrate
+      r.status();
+      r.time("Interval", 2, 1.25);
+      r.u16("Subrate factor");
+      r.u16("Latency");
+      r.u16("Continuation number");
+      r.time("Supervision timeout", 2, 10);
+      break;
+    case 0x0034: {  // Security Level Changed: TLVs of { type (2), length (1), value }
+      const uint8_t l = r.u8("TLV length");
+      Rd t(o, r.cur(), std::min<size_t>(l, r.left()));
+      while (t.has(3)) {
+        const uint16_t type = le16(t.cur());
+        const uint8_t vl = t.cur()[2];
+        if (!t.has(3 + vl)) break;
+        const uint8_t* v = t.cur() + 3;
+        if (type == 0x0000 && vl >= 1) {
+          F("Security level", std::to_string(v[0]), t.cur(), 3 + vl);
+          s += sf(", level %u", v[0]);
+        } else if (type == 0x0001 && vl >= 1) {
+          static const char* const enc[] = {"none", "E0", "AES-CCM"};
+          F("Encryption", v[0] < 3 ? enc[v[0]] : "?", t.cur(), 3 + vl);
+        } else {
+          F(sf("TLV 0x%04x", type), hexbytes(v, vl), t.cur(), 3 + vl);
+        }
+        t.skip(3 + vl);
+      }
+      r.skip(l);
+      break;
+    }
+    default:
+      break;
+  }
+  return s;
 }
 
 void dissect_mgmt(Out& o, bool cmd, const uint8_t* d, size_t len) {
@@ -1103,40 +1642,23 @@ void dissect_mgmt(Out& o, bool cmd, const uint8_t* d, size_t len) {
                    p[2] ? sf(" — %s", st ? st : sf("status 0x%02x", p[2]).c_str()).c_str() : "");
     p += 3;
     n -= 3;
+    o.mark(p);
     // The Set commands that change a setting answer with the settings in force after it.
     if (code == 0x0001 && !p[-1] && n == 4 && ((op >= 0x0005 && op <= 0x000d) || op == 0x0029 || op == 0x002a ||
-                                               op == 0x002d || op == 0x002e || op == 0x002f)) {
+                                               op == 0x002d || op == 0x002e || op == 0x002f || op == 0x0047)) {
       F("Current settings", mgmt_settings(le32(p)), p, 4);
       o.summary += " → " + mgmt_settings(le32(p));
       return;
     }
-    if (n) F("Return parameters", hexbytes(p, n, 64), p, n);
+    if (code == 0x0001 && n) o.summary += mgmt_params(o, false, true, op, p, n);
+    rest(o, p, n, "Return parameters");
     return;
   }
   const std::string name = mgmt_label(cmd ? mgmt_op_name(code) : mgmt_event_name(code), code);
   F(cmd ? "Opcode" : "Event", sf("%s (0x%04x)", name.c_str(), code), d + 4, 2);
   o.summary = std::string(cmd ? "MGMT " : "MGMT Event: ") + name;
-  if (mgmt_has_addr(cmd, code) && n >= 7) {
-    F("Address", bdaddr_str(p), p, 6);
-    F("Address type", mgmt_addr_type(p[6]), p + 6, 1);
-    o.summary += sf(" %s (%s)", bdaddr_str(p).c_str(), mgmt_addr_type(p[6]));
-    p += 7;
-    n -= 7;
-    if (!cmd && code == 0x000c && n >= 1) {
-      static const char* const kWhy[] = {"unknown", "timeout", "local host", "remote", "auth failure", "local host suspend"};
-      const char* why = p[0] < 6 ? kWhy[p[0]] : "?";
-      F("Reason", sf("0x%02x (%s)", p[0], why), p, 1);
-      o.summary += sf(", reason %s", why);
-      p++;
-      n--;
-    } else if (!cmd && (code == 0x000d || code == 0x0011) && n >= 1) {
-      const char* st = mgmt_status_name(p[0]);
-      F("Status", sf("0x%02x (%s)", p[0], st ? st : "unknown"), p, 1);
-      o.summary += sf(", %s", st ? st : "failed");
-      p++;
-      n--;
-    }
-  } else if (cmd && ((code >= 0x0005 && code <= 0x000d) || code == 0x0029 || code == 0x002a || code == 0x002d) && n >= 1) {
+  o.mark(p);
+  if (cmd && ((code >= 0x0005 && code <= 0x000d) || code == 0x0029 || code == 0x002a || code == 0x002d) && n >= 1) {
     // Set Powered … Set LE, Set Advertising, Set BR/EDR, Set Secure Connections: a mode byte.
     const char* mode = p[0] == 0 ? "off" : p[0] == 1 ? "on" : p[0] == 2 ? (code == 0x0006 ? "limited" : "only") : "?";
     F("Mode", sf("0x%02x (%s)", p[0], mode), p, 1);
@@ -1156,7 +1678,8 @@ void dissect_mgmt(Out& o, bool cmd, const uint8_t* d, size_t len) {
     o.summary += p[1] ? " started" : " stopped";
     return;
   }
-  if (n) F("Data", hexbytes(p, n, 64), p, n);
+  o.summary += mgmt_params(o, cmd, false, code, p, n);
+  rest(o, p, n, "Data");
 }
 
 const char* sig_name(uint8_t code) {

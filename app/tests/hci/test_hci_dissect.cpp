@@ -411,6 +411,28 @@ void test_hci_controller() {
                                                           "security manager)"));
 }
 
+void test_mgmt() {
+  // bluetoothd's start (the VIM3L): the controller's info and the experimental features.
+  auto d = run_mon(btb::hci::kMonCtrlEvent,
+                   "0200000001000400002e5e36bba3440d0200fffeff01d10afe0100007c627462656e63682d76696d336c" + std::string(494, '0'));
+  CHECK_EQ(d.summary, std::string("MGMT Command Complete: Read Controller Info 44:A3:BB:36:5E:2E \"btbench-vim3l\""));
+  CHECK_EQ(field(d.fields, "Manufacturer"), std::string("2 (Intel)"));
+  CHECK_EQ(field(d.fields, "Name"), std::string("\"btbench-vim3l\""));
+  CHECK(has(field(d.fields, "Current settings"), "cis-central cis-peripheral iso-broadcaster"));
+  CHECK(no_blob(d.fields));
+  d = run_mon(btb::hci::kMonCtrlEvent,
+              "0200000001004900000500d649b0d128eb27929646c042b5101b67000000007f0314066f9a70932d490675bc59083300000000af29c666"
+              "ac5f1a88b94f7feece5a69a6000000003ee0b4fdddd685986a49e00588f1ba6f01000000766ef3e8245f05bf8d4d037ad763e42c00000000");
+  CHECK_EQ(d.summary, std::string("MGMT Command Complete: Read Experimental Features Information active: ISO socket"));
+  CHECK_EQ(field(d.fields, "ISO socket"), std::string("6fbaf188-05e0-496a-9885-d6ddfdb4e03e, flags 0x00000001 (active)"));
+  // Add UUID: the service class, and the class of device it leads to.
+  d = run_mon(btb::hci::kMonCtrlCommand, "010000001000fb349b5f80000080001000000c11000000");
+  CHECK_EQ(d.summary, std::string("MGMT Add UUID 0x110c (A/V Remote Control Target)"));
+  d = run_mon(btb::hci::kMonCtrlEvent, "01000000070000007c");
+  CHECK_EQ(d.summary, std::string("MGMT Event: Class of Device Changed 0x7c0000 miscellaneous (rendering, capturing, "
+                                  "object transfer, audio, telephony)"));
+}
+
 }  // namespace
 
 int main() {
@@ -421,5 +443,6 @@ int main() {
   test_hci_advertising();
   test_hci_iso();
   test_hci_controller();
+  test_mgmt();
   return report("test_hci_dissect");
 }
