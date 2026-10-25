@@ -249,6 +249,39 @@ json stream_sinks(const json& s) {
   return json::array();
 }
 
+// What remotes are told of a device the board relays (the route's input): its player's track when
+// it has one with a title (a phone), else the devices by name, a broadcast as Auracast.
+json relay_track(const json& objs, const json& devices, const json& player) {
+  if (!player.is_null() && player.contains("track")) {
+    const json& t = player["track"];
+    if (!t.value("title", std::string{}).empty()) {
+      json md{{"Title", t.value("title", std::string{})},
+              {"Artist", t.value("artist", std::string{})},
+              {"Album", t.value("album", std::string{})},
+              {"Genre", t.value("genre", std::string{})}};
+      if (t["track_number"].is_number()) md["Number"] = t["track_number"].get<uint32_t>();
+      if (t["number_of_tracks"].is_number()) md["NumberOfTracks"] = t["number_of_tracks"].get<uint32_t>();
+      if (t.value("duration_ms", 0) > 0) md["Duration"] = t["duration_ms"].get<uint32_t>();
+      return md;
+    }
+  }
+  std::string names;
+  bool broadcast = false;
+  for (const json& dv : devices) {
+    const std::string addr = dv.value("address", std::string{});
+    broadcast = broadcast || dv.value("kind", std::string{}) == "broadcast";
+    std::string name = addr;
+    for (auto it = objs.begin(); it != objs.end(); ++it) {
+      const auto d = it->find("org.bluez.Device1");
+      if (d == it->end() || upper(str_of(*d, "Address")) != upper(addr)) continue;
+      if (!str_of(*d, "Alias").empty()) name = str_of(*d, "Alias");
+      break;
+    }
+    if (names.find(name) == std::string::npos) names += (names.empty() ? "" : " + ") + name;
+  }
+  return json{{"Title", names}, {"Album", broadcast ? "Auracast" : "Relayed"}, {"Genre", "Relay"}};
+}
+
 }  // namespace
 
 bool stream_to_bluetooth(const json& s, const std::string& default_bt) {
@@ -1193,7 +1226,7 @@ bool BenchPlayer::set_settings(const std::string& repeat, const bool* shuffle, s
   if (mirroring_locked()) {
     // The told stream's own: the engine keeps them; the next poll reads them back.
     if (!mirror_url_) {
-      *err = "a test signal has no playlist to repeat or shuffle";
+      *err = relay_ ? "the board relays a device: it has no playlist here" : "a test signal has no playlist to repeat or shuffle";
       return false;
     }
     json body{{"op", "settings"}};
@@ -1338,12 +1371,13 @@ void BenchPlayer::mirror_poll() {
     if (!enabled_ || (!mirror_ && registered_json_.size() <= 2)) return;  // "[]"
   }
   const json all = audio_.list();
-  std::vector<json> live;
+  std::vector<json> running, live;  // live: those that play to PipeWire
   int newest_default = 0;  // the newest stream with no target, if any
   for (const json& st : all.value("streams", json::array())) {
     const std::string state = st.value("state", std::string{});
     if (state != "running" && state != "starting") continue;
     if (st.value("label", std::string{}).compare(0, 8, "player: ") == 0) continue;  // its own
+    running.push_back(st);
     bool pw = false;
     for (const json& sink : stream_sinks(st)) {
       if (sink.value("type", std::string{}) != "pipewire") continue;
@@ -1352,13 +1386,27 @@ void BenchPlayer::mirror_poll() {
     }
     if (pw) live.push_back(st);
   }
-  // With the route, the remote is told about the board's input, wherever it plays; a device's
-  // audio the board receives is not the board's to pause or skip.
+  // With the route, the remote is told about the board's input, wherever it plays, even nowhere.
+  // A device the board relays is told as its own player tells it (a phone's track), or by its name
+  // (a broadcast), and is playing while the board records it: a remote that presses play on it
+  // then gets what it hears, not the library started in its place.
   audio::AudioRoute* route = route_.load();
-  int route_local = 0;
+  int route_local = 0, route_relay = 0;
+  json relay_player = nullptr, relay_md = nullptr;
   if (route) {
     const json r = route->get();
-    if (r["input"].value("type", std::string{}) == "local" && r["local"].is_number()) route_local = r["local"].get<int>();
+    const std::string type = r["input"].value("type", std::string{});
+    if (type == "local" && r["local"].is_number()) route_local = r["local"].get<int>();
+    if (type == "bluetooth") {
+      route_relay = r["stream"].is_number() && r["stream"].get<int>() > 0 ? r["stream"].get<int>() : kRelayIdle;
+      const auto objs = bt_.objects();
+      const json devices = r["input"].value("devices", json::array());
+      for (const json& dv : devices) {
+        if (objs) relay_player = model_device_player(*objs, dv.value("address", std::string{}));
+        if (!relay_player.is_null()) break;
+      }
+      relay_md = relay_track(objs ? *objs : json::object(), devices, relay_player);
+    }
   }
   // pw-dump is the costly part on a Zero W: asked when a new stream plays to the default sink, then
   // every 30 s while one does (in case the default moves).
@@ -1377,19 +1425,26 @@ void BenchPlayer::mirror_poll() {
     std::lock_guard<std::mutex> lk(m_);
     if (stream_) return;  // its own play started meanwhile
     json pick = nullptr;  // the list is newest first
-    for (const json& st : live)
-      if (route ? st.value("id", 0) == route_local : stream_to_bluetooth(st, mirror_default_bt_)) {
+    const int want = route_local ? route_local : route_relay;
+    for (const json& st : route ? running : live)
+      if (route ? st.value("id", 0) == want : stream_to_bluetooth(st, mirror_default_bt_)) {
         pick = st;
         break;
       }
-    const int id = pick.is_null() ? 0 : pick.value("id", 0);
-    const json md = pick.is_null() ? json(nullptr) : stream_track(pick);
+    const int id = route_relay ? route_relay : pick.is_null() ? 0 : pick.value("id", 0);
+    const json md = route_relay ? relay_md : pick.is_null() ? json(nullptr) : stream_track(pick);
     const bool paused = !pick.is_null() && pick.value("paused", false);
     if (id != mirror_ || md != mirror_md_) {
       track = true;
-      if (id && id != mirror_) LOG_INFO("player: telling remotes about stream {}", id);
+      if (id > 0 && id != mirror_) LOG_INFO("player: telling remotes about stream {}", id);
     }
-    const Status st = !id ? (mirror_ ? Status::stopped : status_) : paused ? Status::paused : Status::playing;
+    Status st = !id ? (mirror_ ? Status::stopped : status_) : paused ? Status::paused : Status::playing;
+    if (route_relay) {
+      // The device's player knows best whether it plays; without one, the recording says.
+      const std::string ps = relay_player.is_null() ? "" : relay_player.value("status", std::string{});
+      st = ps == "playing" ? Status::playing : ps == "paused" ? Status::paused : ps == "stopped" ? Status::stopped
+           : pick.is_null() ? Status::stopped : Status::playing;
+    }
     if (!id && mirror_) {
       // The told stream ended (a stop, here or in Listen): nothing plays, so nothing is said to,
       // not the library's queue from before, which is not what stopped.
@@ -1407,15 +1462,18 @@ void BenchPlayer::mirror_poll() {
     const json list = url && src.contains("playlist") && src["playlist"].is_array() ? src["playlist"] : json::array();
     if (id != mirror_ || list != mirror_list_) playlist = true;
     mirror_list_ = list;
-    mirror_track_ = id ? pick.value("track", 0) : 0;
+    mirror_track_ = pick.is_null() ? 0 : pick.value("track", 0);
     mirror_ = id;
     mirror_md_ = md;
     mirror_paused_ = paused;
     mirror_url_ = url;
     mirror_repeat_ = repeat;
     mirror_shuffle_ = shuffle;
+    relay_ = route_relay != 0;
+    relay_player_ = relay_player.is_null() ? "" : relay_player.value("path", std::string{});
     status_ = st;
-    if (id) at = static_cast<int64_t>(pick.value("track_seconds", 0.0) * 1000);
+    if (!relay_player.is_null()) at = relay_player.value("position_ms", int64_t{0});
+    else if (id && !pick.is_null()) at = static_cast<int64_t>(pick.value("track_seconds", 0.0) * 1000);
   }
   if (track || status || playlist || settings) changed(track, status, playlist, settings);
   if (at >= 0) {
@@ -1432,11 +1490,24 @@ void BenchPlayer::mirror_poll() {
 // playlist, a test signal), stop ends it, and next and previous move through a playlist.
 void BenchPlayer::mirror_cmd(const json& body) {
   int id;
+  bool relay;
+  std::string player;
   {
     std::lock_guard<std::mutex> lk(m_);
     id = mirror_;
+    relay = relay_;
+    player = relay_player_;
   }
   if (!id) return;
+  if (relay) {
+    // A relayed device's buttons are its player's, as in Listen. A broadcast has none: it plays on.
+    std::string method;
+    int key = -1;
+    if (!player.empty() && player_method(body.value("op", std::string{}), &method, &key))
+      bt_.call(player, "org.bluez.MediaPlayer1", method, nullptr, 3000);
+    mirror_poll();
+    return;
+  }
   // A track picked from a list the remote read while another stream played: not this one's.
   if (body.contains("stream") && body.value("stream", 0) != id) return;
   const std::string op = body.value("op", std::string{});
@@ -1650,7 +1721,7 @@ json BenchPlayer::state() const {
               {"position", pos_ < 0 ? json(nullptr) : json{{"index", pos_}, {"count", queue_.size()}}},
               {"queue", queue},
               {"stream", stream_ ? json(stream_) : json(nullptr)},
-              {"mirror", mirror_ ? json(mirror_) : json(nullptr)},
+              {"mirror", mirror_ > 0 ? json(mirror_) : json(nullptr)},
               {"repeat", mirroring_locked() ? mirror_repeat_ : repeat_},
               {"shuffle", mirroring_locked() ? mirror_shuffle_ : shuffle_},
               {"position_ms", position_locked(steady_ms())},

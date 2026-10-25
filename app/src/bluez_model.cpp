@@ -642,6 +642,20 @@ json model_media(const json& objs) {
   return json{{"endpoints", endpoints}, {"transports", transports}, {"players", players}};
 }
 
+json model_device_player(const json& objs, const std::string& address) {
+  for (auto it = objs.begin(); it != objs.end(); ++it) {
+    if (!it->contains(kPlayer)) continue;
+    const json& p = (*it)[kPlayer];
+    const std::string dev = str_of(p, "Device");
+    if (upper(address_from_path(dev.empty() ? it.key() : dev)) != upper(address)) continue;
+    return json{{"path", it.key()},
+                {"status", str_of(p, "Status")},
+                {"position_ms", num_of(p, "Position")},
+                {"track", player_track(p.contains("Track") ? p["Track"] : json::object())}};
+  }
+  return nullptr;
+}
+
 bool player_method(const std::string& action, std::string* method, int* key) {
   static const std::pair<const char*, const char*> kMethods[] = {
       {"play", "Play"},       {"pause", "Pause"},          {"stop", "Stop"},      {"next", "Next"},

@@ -223,6 +223,12 @@ class BenchPlayer : public BusUser {
   // remote browses while the player tells that stream.
   nlohmann::json mirror_list_ = nlohmann::json::array();
   int mirror_track_ = 0;
+  // The route's input is a device the board relays (a phone, a broadcast): told as that device's
+  // track, mirror_ its stream (kRelayIdle while none records it), and the buttons go to the
+  // device's AVRCP player (relay_player_, "" for one without, which they leave alone).
+  static constexpr int kRelayIdle = -1;
+  bool relay_ = false;
+  std::string relay_player_;
   // Where the track is: pos_ms_ measured at pos_at_ms_ (steady clock), moving while it plays.
   // BlueZ keeps its own count for the remote (a new track is 0, a clock runs while Playing):
   // told_* is that count, so a Seeked goes out only when the two drift apart (a stream joined

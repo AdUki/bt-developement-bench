@@ -95,6 +95,10 @@ bool gatt_find(const nlohmann::json& objs, const std::string& dev_path, uint16_t
 // folder_type, playable, metadata:{...as track}}]}]}.
 nlohmann::json model_media(const nlohmann::json& objs);
 
+// The AVRCP player of the device at `address` (a phone's music app), as one of model_media's
+// players but only {path, status, position_ms, track}; null when the device has none.
+nlohmann::json model_device_player(const nlohmann::json& objs, const std::string& address);
+
 // An AVRCP action as the API takes it ("play", "fast-forward", "press:0x44", ...) → the
 // MediaPlayer1 method, and for Press/Hold the key (else -1). False for anything else.
 bool player_method(const std::string& action, std::string* method, int* key);
