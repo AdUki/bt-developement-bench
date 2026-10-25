@@ -392,8 +392,9 @@ has a play state and nothing else.
   picked in Listen) is told with its track: the artist, album and length the media server gave,
   the position, and the stream's repeat and shuffle, which the remote can change. The remote's
   buttons act on that stream the same way. A device the board relays (a phone, a broadcast) is told
-  as that device's own player tells it, title, artist and position, and the remote's buttons go to
-  that player, as Listen's do. One with no player (a broadcast from a device with no AVRCP link to
+  as that device's own player tells it, title, artist, position and cover (the board opens the
+  device's BIP channel, and its cover art responder hands on the image it pulls from there), and
+  the remote's buttons go to that player, as Listen's do. One with no player (a broadcast from a device with no AVRCP link to
   the board) is told by its name, playing while the board records it, and the buttons leave it
   alone: play never starts the library in its place. A
   URL stream's playlist is then the now playing list the remote browses (items

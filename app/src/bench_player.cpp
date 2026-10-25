@@ -250,8 +250,9 @@ json stream_sinks(const json& s) {
 }
 
 // What remotes are told of a device the board relays (the route's input): its player's track when
-// it has one with a title (a phone), else the devices by name, a broadcast as Auracast.
-json relay_track(const json& objs, const json& devices, const json& player) {
+// it has one with a title (a phone), its cover from `art_base` (empty: none), else the devices by
+// name, a broadcast as Auracast.
+json relay_track(const json& objs, const json& devices, const json& player, const std::string& art_base) {
   if (!player.is_null() && player.contains("track")) {
     const json& t = player["track"];
     if (!t.value("title", std::string{}).empty()) {
@@ -262,6 +263,10 @@ json relay_track(const json& objs, const json& devices, const json& player) {
       if (t["track_number"].is_number()) md["Number"] = t["track_number"].get<uint32_t>();
       if (t["number_of_tracks"].is_number()) md["NumberOfTracks"] = t["number_of_tracks"].get<uint32_t>();
       if (t.value("duration_ms", 0) > 0) md["Duration"] = t["duration_ms"].get<uint32_t>();
+      // The handle in the URL: a new image is a new URL, which the responder fetches anew.
+      const std::string img = t.value("img_handle", std::string{});
+      if (!art_base.empty() && !img.empty())
+        md["Art"] = art_base + "?path=" + player.value("path", std::string{}) + "&full=1&h=" + img;
       return md;
     }
   }
@@ -1393,7 +1398,21 @@ void BenchPlayer::mirror_poll() {
         if (objs) relay_player = model_device_player(*objs, dv.value("address", std::string{}));
         if (!relay_player.is_null()) break;
       }
-      relay_md = relay_track(objs ? *objs : json::object(), devices, relay_player);
+      const std::string art_base =
+          relay_port_ ? "http://127.0.0.1:" + std::to_string(relay_port_) + "/api/media/players/cover" : "";
+      relay_md = relay_track(objs ? *objs : json::object(), devices, relay_player, art_base);
+      // Its cover comes once the device has a BIP channel from the board: opened once per relay,
+      // as Listen opens it for a phone it shows.
+      const std::string pp = relay_player.is_null() ? "" : relay_player.value("path", std::string{});
+      if (pp.empty()) {
+        relay_cover_opened_.clear();
+      } else if (pp != relay_cover_opened_ && relay_open_ && relay_player["obex_port"].is_number() &&
+                 relay_player["track"].value("img_handle", std::string{}).empty()) {
+        relay_cover_opened_ = pp;
+        relay_open_(pp, relay_player.value("address", std::string{}), relay_player["obex_port"].get<uint16_t>());
+      }
+    } else {
+      relay_cover_opened_.clear();
     }
   }
   // pw-dump is the costly part on a Zero W: asked when a new stream plays to the default sink, then

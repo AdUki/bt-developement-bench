@@ -649,8 +649,10 @@ json model_device_player(const json& objs, const std::string& address) {
     const std::string dev = str_of(p, "Device");
     if (upper(address_from_path(dev.empty() ? it.key() : dev)) != upper(address)) continue;
     return json{{"path", it.key()},
+                {"address", upper(address)},
                 {"status", str_of(p, "Status")},
                 {"position_ms", num_of(p, "Position")},
+                {"obex_port", p.contains("ObexPort") ? json(num_of(p, "ObexPort")) : json(nullptr)},
                 {"track", player_track(p.contains("Track") ? p["Track"] : json::object())}};
   }
   return nullptr;

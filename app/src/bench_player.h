@@ -120,6 +120,15 @@ class BenchPlayer : public BusUser {
   // track's cover goes out as an image handle while a controller is connected to it. Set before
   // the bus opens; the track is told again whenever that connection comes or goes.
   void set_cover_art(CoverArtServer* cover);
+  // A relayed device's cover (its player's image handle), handed on to the remote: the cover art
+  // responder fetches it from this btbenchd's GET /api/media/players/cover on `port`, which pulls
+  // it over BIP. `open` opens the device's BIP channel, without which a device puts no handle in
+  // its track info (AVRCP 1.6). Set before the bus opens.
+  void set_relay_cover(int port, std::function<void(const std::string& player, const std::string& address,
+                                                    uint16_t psm)> open) {
+    relay_port_ = port;
+    relay_open_ = std::move(open);
+  }
   // The route (audio/route.h), set before the bus opens: what the player plays is the board's
   // input, played on the outputs picked in Listen, and what it tells a remote about is that
   // input. Without one it plays to a Bluetooth sink of its own choosing (pick_sink).
@@ -229,6 +238,10 @@ class BenchPlayer : public BusUser {
   static constexpr int kRelayIdle = -1;
   bool relay_ = false;
   std::string relay_player_;
+  int relay_port_ = 0;
+  std::function<void(const std::string&, const std::string&, uint16_t)> relay_open_;
+  // The player whose BIP channel was opened, once per relay (the worker's alone).
+  std::string relay_cover_opened_;
   // Where the track is: pos_ms_ measured at pos_at_ms_ (steady clock), moving while it plays.
   // BlueZ keeps its own count for the remote (a new track is 0, a clock runs while Playing):
   // told_* is that count, so a Seeked goes out only when the two drift apart (a stream joined

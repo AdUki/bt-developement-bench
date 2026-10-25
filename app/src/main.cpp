@@ -274,6 +274,22 @@ int main(int argc, char** argv) {
     if (cover_art.start(&err)) player.set_cover_art(&cover_art);
     else LOG_WARN("cover art: not offered: {}", err);
   }
+  // A relayed device's cover: its BIP channel from the adapter it is connected on, as
+  // GET /api/media/players/cover opens it.
+  player.set_relay_cover(port, [&bt, &obex](const std::string& path, const std::string& address, uint16_t psm) {
+    const auto objs = bt.objects();
+    std::string source;
+    if (objs) {
+      const auto ad = objs->find("/org/bluez/" + btb::adapter_from_path(path));
+      if (ad != objs->end() && ad->contains("org.bluez.Adapter1"))
+        source = btb::str_of((*ad)["org.bluez.Adapter1"], "Address");
+    }
+    bool opened = false;
+    std::string err;
+    int status = 0;
+    if (!obex.cover_connect(address, source, psm, &opened, &err, &status))
+      LOG_WARN("player: cover art channel to {}: {}", address, err);
+  });
   bt.add_user(&player);
 
   btb::Deps deps{bt, adv, gatt_server, jobs, journal, scripts, sys, hub, audio, pwtop, obex, hid_remote, hid_host, setup,
