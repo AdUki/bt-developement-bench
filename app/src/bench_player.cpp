@@ -1104,14 +1104,10 @@ bool BenchPlayer::action(const std::string& what, std::string* err) {
   }
   if (what == "play") {
     if (queue_.empty()) {
-      // Nothing chosen yet: the test signals, from the first.
-      queue_ = lib_.tracks(lib_.root().front());
-      pos_ = 0;
-      if (shuffle_) shuffle_queue_locked(true);
-      lk.unlock();
-      changed(true, false, true);
-      queue_cmd(Cmd::play);
-      return true;
+      // Nothing chosen: nothing plays. A remote's play (another board picking this one as its
+      // input asks it to) never puts something of the board's choosing in place of its input.
+      *err = "nothing to play: pick something from the library";
+      return false;
     }
     // Its stream plays on where it was (playing, nothing changes), as Listen's play; else the
     // track starts.
@@ -1324,18 +1320,10 @@ void BenchPlayer::start_stream() {
   json sink;
   audio::AudioRoute* route = route_.load();
   if (route) {
-    // The board's input, on the outputs picked in Listen. With none on, the remote that pressed
-    // play still hears it: the Bluetooth sink the player would pick is turned on, shown in Play to
-    // like any other output.
-    json outputs = route->get()["outputs"];
-    if (outputs.empty()) {
-      outputs = json::array({pick_sink()});
-      json r;
-      int st = 0;
-      if (!route->put(json{{"outputs", outputs}}, &r, &err, &st)) LOG_WARN("player: outputs: {}", err);
-      err.clear();
-    }
-    sink = outputs[0];
+    // The board's input, on the outputs picked in Listen, and on none while none is on: no output
+    // is turned on for it.
+    const json outputs = route->get()["outputs"];
+    sink = outputs.empty() ? json::object() : outputs[0];
     ok = route->play(json{{"source", source}, {"label", "player: " + name}}, &out, &err, &status);
   } else {
     sink = pick_sink();

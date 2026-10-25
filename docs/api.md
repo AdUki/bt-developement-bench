@@ -499,7 +499,7 @@ its playlist, and repeat and shuffle are the stream's own (`source.repeat`, `sou
 | route | body | what |
 |---|---|---|
 | `PUT /api/media/local-player` | any of `{"enabled": bool}`, `{"repeat": "off\|track\|all"}`, `{"shuffle": bool}` | offer the player to devices or not (kept in `/data/btbench/player.json`, on by default); repeat and shuffle of the stream it tells about, else of its now playing list (kept in the same file; a test signal has none: 400); answered with the state |
-| `POST /api/media/local-player` | `{"action": "play\|pause\|stop\|next\|previous"}` | the controls a remote has; `play` with nothing chosen plays the test signals |
+| `POST /api/media/local-player` | `{"action": "play\|pause\|stop\|next\|previous"}` | the controls a remote has; `play` with nothing chosen is a 400: nothing plays |
 |  |  | Both answer with the state at once; starting or stopping the stream follows within a second (the next GET shows it) |
 | `POST /api/media/local-player` | `{"play": <id>}` or `{"enqueue": <id>}` | play a library entry (a folder: its tracks; a track: in its folder, so next and previous go through it), or add it to the now playing list |
 

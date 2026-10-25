@@ -379,9 +379,9 @@ has a play state and nothing else.
   *Radio*: the stations of the Listen page (`/data/btbench/radio.json`, read at start).
 - **Playing.** Playing an entry makes it the board's input (the route, "The route" above): it
   takes the place of whatever the board played, and plays on the outputs picked in Listen's Play
-  to. With none on, the Bluetooth sink the player would pick is turned on there (PipeWire's
-  default sink when it is a Bluetooth one, else the first Bluetooth sink, else the default sink),
-  so a car that pressed play hears it. The folder the entry is in (or the folder played) becomes the now playing list; next and
+  to, and on none while none is on: nothing is turned on for it. Play with nothing chosen (the
+  remote's, or another board's that picked this one as its input) plays nothing: the board never
+  puts something of its own choosing in place of its input. The folder the entry is in (or the folder played) becomes the now playing list; next and
   previous go round it, and a track that ends (the sweep, a station that drops) is followed by
   the next (repeat one: by itself; repeat all: round again). Shuffle puts the list itself in a
   random order, the track playing first (off: back as listed), so the now playing list a remote
