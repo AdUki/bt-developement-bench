@@ -47,7 +47,6 @@ const PL_SVG = {
   radio: 'M4 10h16v10H4zM7 10l10-5M8 15h.01M12 15h5',
   bt: 'M7 7l10 10-5 5V2l5 5L7 17',
   speaker: 'M6 3h12v18H6zM12 17.5a3 3 0 100-6 3 3 0 000 6zM12 7h.01',
-  loop: 'M17 2l4 4-4 4M3 11V9a3 3 0 013-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 01-3 3H3',
   off: 'M4 4l16 16M9 9v6h4l5 4V14M13 5L11 7',
   server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
   phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
@@ -747,7 +746,13 @@ function pickInput(input, r) {
     post('/media/players/control', {path: p.path, action: 'play'}).catch(() => {});
   }
   pl.sw = null;
-  return Promise.all(pre).then(() => put('/audio/route', {input})).then(setRoute).catch(fail);
+  // An output the new input rules out (the device itself, a broadcast while one is received) is
+  // taken off with it.
+  const kind = pl.endpoints && pl.endpoints.backend === 'alsa' ? 'alsa' : 'pipewire';
+  const ruled = v => { const e = outEndpoint(v); return e && v.startsWith(kind + ':') && outBlocked(e, input); };
+  const outs = routeOuts(), keep = outs.filter(v => !ruled(v));
+  const body = keep.length === outs.length ? {input} : {input, outputs: outSinks(keep)};
+  return Promise.all(pre).then(() => put('/audio/route', body)).then(setRoute).catch(fail);
 }
 
 function inputClick(e) {
@@ -1266,8 +1271,8 @@ function decorate(s) {
 
 // ---------------------------------------------------------------- outputs
 
-// Where the input plays: the route's outputs, each on or off by itself — the board's sound card
-// (the loopback card), any Bluetooth speaker or pair of earbuds, the board's Auracast broadcasts —
+// Where the input plays: the route's outputs, each on or off by itself — the board's own sound
+// card, any Bluetooth speaker or pair of earbuds, the board's Auracast broadcasts —
 // and this browser, which is this browser's own choice (it listens to the route's stream). They
 // are the route's, in the daemon: every browser sees the same, and they stay when the input
 // changes. Tapped while something plays, an output is added to the route's stream or taken off it
@@ -1296,6 +1301,7 @@ function nextOuts(cur, v) {
 const outEndpoint = (v, o = pl) => o.endpoints && o.endpoints.sinks.find(e => v.endsWith(':' + e.id));
 function outName(v, o = pl) {
   if (v === 'none') return 'No board output';
+  if (v === NEW_BCAST) return 'Auracast';
   if (v === 'browser') return 'This browser';
   if (v === 'default') return 'The board’s default output';
   const e = outEndpoint(v, o);
@@ -1304,7 +1310,7 @@ function outName(v, o = pl) {
   const bt = /bluez_output\.([0-9A-F]{2}(?:_[0-9A-F]{2}){5})/i.exec(v);
   return bt ? devName(bt[1].replace(/_/g, ':')) : v.slice(v.indexOf(':') + 1);
 }
-// An output's name after the start of a sentence ("Playing on the loopback card").
+// An output's name after the start of a sentence ("Playing on the board’s sound card").
 const outInSentence = (v, o = pl) => outName(v, o).replace(/^The /, 'the ');
 // The board's transport that carries a Bluetooth output's audio: its "Audio Source" side (a device
 // can have one each way, see volumeTarget).
@@ -1322,26 +1328,50 @@ function renderOutputs(ep) {
   renderNowPlaying();  // "Playing on …" names the output now that its label is known
 }
 
+// Auracast as an output while the board broadcasts nothing yet: tapped, a broadcast is started.
+const NEW_BCAST = 'auracast:new';
+const isBcast = e => !!e.transport && !e.address;
+
+// Why sink `e` (an endpoint; null for a broadcast not started yet) cannot be on while `input` is
+// the route's, or '': a device the input comes from would be sent its own audio back, and the
+// board does not broadcast while it receives a broadcast.
+function outBlocked(e, input) {
+  const ds = input && input.type === 'bluetooth' ? input.devices : [];
+  if (!e || isBcast(e)) return ds.some(d => d.kind === 'broadcast') ? 'receiving a broadcast' : '';
+  const addrs = e.set_leader ? (e.members || []) : e.address ? [e.address] : [];
+  const from = a => ds.some(d => sameAddr(d.address, a) || (inputSet(d.address) || []).some(m => sameAddr(m, a)));
+  return addrs.some(from) ? 'the input' : '';
+}
+
 // The buttons, in one list: this browser (Listen only), the board's own sound cards, the
 // Bluetooth speakers and earbuds (a coordinated set as one: PipeWire's node of the set, its
-// members' own nodes left out), then the board's Auracast broadcasts.
+// members' own nodes left out), then the board's Auracast broadcasts (in Listen, one to start when
+// there is none). The loopback card is left out: nobody hears it. In Listen an output the input
+// rules out is shown off and cannot be tapped (outBlocked).
 function outOptions(browser, o = pl) {
   const ep = o.endpoints;
   const opts = browser ? [{value: 'browser', name: 'This browser', sub: 'listen here', icon: PL_SVG.browser, rank: 0}] : [];
   const kind = ep && ep.backend === 'alsa' ? 'alsa' : 'pipewire';
-  (ep ? ep.sinks : []).forEach(e => {
+  const input = o === pl && pl.route ? pl.route.input : null;
+  const sinks = (ep ? ep.sinks : []).filter(e => e.kind !== 'loopback');
+  sinks.forEach(e => {
     if (e.set && !e.set_leader) return;
     const v = `${kind}:${e.id}`;
     const t = e.address ? outTransport(v, o) : null;
-    const bcast = !!e.transport && !e.address;
+    const bcast = isBcast(e);
     const bt = e.kind === 'bluetooth' && !bcast;
     opts.push({value: v, name: e.set_leader ? ((e.members || []).length === 1 ? devName(e.members[0]) : e.label) : e.address ? devName(e.address) : e.label,
       sub: e.set_leader ? ((e.members || []).length > 1 ? `${e.members.length} devices, one each channel` : 'left + right') : e.address ? (t && t.codec ? t.codec.name : 'Bluetooth')
-        : bcast ? 'Auracast · anyone in range' : e.kind === 'loopback' ? 'loopback card' : 'the board’s sound card',
-      icon: bt || bcast ? PL_SVG.bt : e.kind === 'loopback' ? PL_SVG.loop : PL_SVG.speaker, rank: bt ? 2 : bcast ? 3 : 1});
+        : bcast ? 'Auracast · anyone in range' : 'the board’s sound card',
+      icon: bt || bcast ? PL_SVG.bt : PL_SVG.speaker, rank: bt ? 2 : bcast ? 3 : 1, off: outBlocked(e, input)});
   });
+  if (o === pl && bcastAdapter() && !sinks.some(isBcast)) {
+    opts.push({value: NEW_BCAST, name: 'Auracast', sub: 'start a broadcast', icon: PL_SVG.bt, rank: 3, off: outBlocked(null, input)});
+  }
   return opts.sort((a, b) => a.rank - b.rank);
 }
+// The adapter that can broadcast (its broadcast endpoint registered by PipeWire), or null.
+const bcastAdapter = () => (pl.la ? pl.la.adapters : []).find(a => a.broadcaster && a.pac) || null;
 
 // The buttons for outputs `cur` on, with the switch `sw` under way: each one on or off by itself;
 // one on that is not there any more (a speaker gone) stays, greyed.
@@ -1350,10 +1380,11 @@ function outButtonsHTML(opts, cur, sw, o = pl) {
   return opts.map(x => {
     const busy = sw && sw.phase !== 'failed' && sw.phase !== 'done' && sw.value === x.value;
     const bad = sw && sw.phase === 'failed' && sw.value === x.value;
-    const on = !busy && !bad && (x.value === 'none' ? !cur.length : cur.includes(x.value));
+    const on = !busy && !bad && !x.off && (x.value === 'none' ? !cur.length : cur.includes(x.value));
     const cls = 'np-o' + (on ? ' on' : '') + (busy ? ' busy' : '') + (bad ? ' bad' : '') + (x.gone ? ' gone' : '');
-    return `<button class="${cls}" data-out="${esc(x.value)}" aria-pressed="${on}">` +
-      (busy ? '<span class="dots"></span>' : svg(x.icon)) + `<b>${esc(x.name)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</button>`;
+    const sub = x.off || x.sub;
+    return `<button class="${cls}" data-out="${esc(x.value)}" aria-pressed="${on}"${x.off ? ' disabled' : ''}>` +
+      (busy ? '<span class="dots"></span>' : svg(x.icon)) + `<b>${esc(x.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
   }).join('');
 }
 
@@ -1410,7 +1441,7 @@ function outLine(b, sw, o = pl) {
   const name = v => `<b>${esc(outInSentence(v, o))}</b>`;
   if (sw && sw.phase === 'failed') return {cls: 'bad', html: `Could not play on ${name(sw.value)}: ${esc(outReason(sw.error))}.`};
   if (sw && sw.phase !== 'done') {
-    return {cls: 'busy', html: {asking: sw.add ? `Asking the board to play on ${name(sw.value)}…` : `Taking ${name(sw.value)} off…`,
+    return {cls: 'busy', html: {broadcast: 'Starting an Auracast broadcast…', asking: sw.add ? `Asking the board to play on ${name(sw.value)}…` : `Taking ${name(sw.value)} off…`,
       removing: `Taking ${name(sw.value)} off…`, starting: `Opening ${name(sw.value)}…`,
       linking: `<b>${esc(outName(sw.value, o))}</b> takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase]};
   }
@@ -1451,7 +1482,8 @@ const outReason = e => /target not found/.test(e || '') ? 'it is not connected (
 // answers our request (seq) the pump has opened the output added (or failed to) or let the one
 // taken off go; a Bluetooth one is done when its link streams (in o.media).
 function swAdvance(sw, b, o = pl) {
-  if (!sw || sw.phase === 'done' || sw.phase === 'failed') return;
+  // A broadcast being started is followed by startBroadcastOut, not by the stream.
+  if (!sw || sw.phase === 'done' || sw.phase === 'failed' || sw.phase === 'broadcast') return;
   const late = Date.now() - sw.at;
   if (!b) {
     if (sw.phase === 'asking' && late < 15000) return;
@@ -1484,6 +1516,7 @@ function swAdvance(sw, b, o = pl) {
 function pickOut(v) {
   if (v === 'browser') return pickListen(!pl.listen);
   if (!pl.route) return;
+  if (v === NEW_BCAST) return startBroadcastOut();
   const next = nextOuts(routeOuts(), v);
   if (next.length > MAX_OUTS) { toast(`The board plays to at most ${MAX_OUTS} outputs at once.`); return; }
   const b = outStream(), add = next.includes(v);
@@ -1514,6 +1547,29 @@ function pickOut(v) {
   if (sw) [400, 1200, 2500, 5000, 9000].forEach(t => setTimeout(() => { if (pl.sw === sw && sw.phase !== 'done') refreshPlayerStreams(); }, t));
 }
 
+// Auracast tapped while the board broadcasts nothing: a stereo broadcast of BAP's 48_2_1 (Audio →
+// LE Audio's default) is started, and once PipeWire has its sink that sink is turned on like any
+// other output. Its settings, or a second broadcast, are Audio → LE Audio's.
+function startBroadcastOut() {
+  const a = bcastAdapter();
+  if (!a || (pl.sw && pl.sw.phase !== 'done' && pl.sw.phase !== 'failed')) return;
+  const sw = pl.sw = {value: NEW_BCAST, add: true, phase: 'broadcast', at: Date.now(), seq: null};
+  renderOuts();
+  post('/le-audio/broadcasts', {adapter: a.adapter, preset: '48_2_1', channels: 2})
+    .then(r => api('/le-audio').then(s => {
+      pl.la = s;
+      const b = s.broadcasts.find(x => x.big === r.big && x.adapter === a.adapter);
+      if (!b || !b.node) throw new Error('PipeWire made no sink for it');
+      return api('/audio/endpoints?fresh=1').then(ep => {
+        pl.endpoints = ep;
+        if (pl.sw !== sw) return renderNowPlaying();
+        pl.sw = null;
+        pickOut(`pipewire:${b.node}`);
+      });
+    }))
+    .catch(e => { if (pl.sw === sw) { sw.phase = 'failed'; sw.error = e.message; } renderOuts(); });
+}
+
 // "This browser" on or off: whatever the route plays is heard here, or not, and the choice is this
 // browser's (it stays for the next input).
 function pickListen(on) {
@@ -1539,6 +1595,8 @@ function setRoute(r) {
   renderNowPlaying();
 }
 const refreshRoute = () => api('/audio/route').then(setRoute).catch(() => {});
+// Which adapter can broadcast, for Auracast in Play to.
+const refreshLa = () => api('/le-audio').then(s => { pl.la = s; renderOuts(); }).catch(() => {});
 
 // The outputs come and go with Bluetooth: asked again whenever the board's audio links change,
 // and once more a moment later (PipeWire makes a speaker's sink a little after BlueZ's transport).
@@ -1548,6 +1606,7 @@ function outLinksChanged(m) {
   pl.linksKey = key;
   const ask = () => api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
   ask();
+  refreshLa();
   setTimeout(ask, 2000);
 }
 
@@ -1683,6 +1742,7 @@ registerTab('player', {
       .catch(() => { pl.mediaFailed = true; renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(pl.lib); });
     api('/bluetooth').then(b => { btState = b; renderNowPlaying(); }).catch(() => {});
     api('/audio/endpoints').then(renderOutputs).catch(() => { pl.endpointsFailed = true; renderOuts(); });
+    refreshLa();
     refreshPlayerStreams();
     refreshRoute();
     clearInterval(pl.tick);

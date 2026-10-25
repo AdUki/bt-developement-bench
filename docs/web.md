@@ -94,9 +94,12 @@ until one is picked), so Now playing has no view button there. On a narrow one a
 of Inputs, Library and Up next keeps the track playing, play/pause and next in reach.
 
 *Play to* is one list of buttons, each on or off by itself: *This browser* (this browser listens to
-the input: its own choice, remembered by the browser), the board's sound card (the loopback card),
-each Bluetooth speaker or pair of earbuds (a set is one button), and the board's Auracast
-broadcasts. Up to four of the board's at once; they are the board's, stay when the input changes,
+the input: its own choice, remembered by the browser), the board's own sound card if it has one
+(not the loopback card, which nobody hears), each Bluetooth speaker or pair of earbuds (a set is
+one button), and the board's Auracast broadcasts — *Auracast* starts a stereo broadcast (48_2_1)
+when the board has none and its adapter can broadcast. The device the input comes from is shown
+but cannot be turned on (it would get its own audio back), nor can Auracast while the input is a
+broadcast, and picking such an input takes those outputs off. Up to four of the board's at once; they are the board's, stay when the input changes,
 and change what plays at once: an output tapped joins (or leaves) the ones playing, which carry on
 untouched. The line under the buttons says what the board is doing — opening the output, waiting
 for the Bluetooth link to stream, *Playing on … · codec and … · codec* — or why it could not (a

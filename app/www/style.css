@@ -768,6 +768,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-o.busy { border-color: var(--accent); border-style: dashed; }
 .np-o.bad { border-color: var(--bad); color: var(--bad); }
 .np-o.gone { opacity: 0.6; }
+.np-o:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--line); }
 .np-o .dots { margin-right: 0; }
 .np-out-status { display: flex; align-items: flex-start; gap: 0.45rem; margin-top: 0.5rem; min-height: 1.3em; color: var(--muted); }
 .np-out-status.quiet .dot { display: none; }
