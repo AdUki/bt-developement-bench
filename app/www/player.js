@@ -1610,15 +1610,10 @@ function setRoute(r) {
   renderNowPlaying();
 }
 const refreshRoute = () => api('/audio/route').then(setRoute).catch(() => {});
-// Which adapter can broadcast and receive, for Auracast in Play to and Inputs. While it scans, it
-// is asked every 3 s: the broadcasters found come with it.
+// Which adapter can broadcast and receive, for Auracast in Play to and Inputs; asked again on
+// "bt" (a scan starting or ending, a broadcaster found), at most once a second.
 function refreshLa() {
-  return api('/le-audio').then(s => {
-    pl.la = s;
-    renderNowPlaying();
-    clearTimeout(pl.laT);
-    if (currentTab === 'player' && s.adapters.some(a => a.discovering)) pl.laT = setTimeout(refreshLa, 3000);
-  }).catch(() => {});
+  return api('/le-audio').then(s => { pl.la = s; renderNowPlaying(); }).catch(() => {});
 }
 
 // The outputs come and go with Bluetooth: asked again whenever the board's audio links change,
@@ -1754,7 +1749,7 @@ function setupPlayer() {
 }
 
 registerTab('player', {
-  topics: () => ['media', 'audio.streams', 'audio.route'],
+  topics: () => ['media', 'audio.streams', 'audio.route', 'bt'],
   show() {
     // The library opens once the players are known: a browsable phone's is the first tab.
     // A folder still open from before (Back to this view, or a look at another tab) stays as it was
@@ -1790,6 +1785,9 @@ registerTab('player', {
       outLinksChanged(data);
       if (hadLib !== phones().some(p => p.browsable)) renderLibTabs();
       if (!(document.activeElement && document.activeElement.id === 'np-vol')) renderNowPlaying();
+    } else if (topic === 'bt') {
+      // "bt" carries every RSSI change during a scan.
+      if (!pl.laT) pl.laT = setTimeout(() => { pl.laT = null; refreshLa(); }, 1000);
     } else if (topic === 'audio.route') {
       pl.route = data;
       followRoute();

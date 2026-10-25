@@ -54,6 +54,8 @@ function broadcastRow(b) {
   const st = on ? pill('on air', 'good') : b.state === 'idle' ? pill(routed || !b.node ? 'silent' : 'ending…')
     : pill(b.state, 'warn');
   const out = routed;
+  // Taken off the outputs, the daemon ends it once it is off air.
+  const ending = la.ending[b.big] || (b.node && !routed);
   // Streams started elsewhere into it (Audio → Streams, bench) are named; Listen's is its input.
   const others = la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === b.node) && s.state !== 'ended');
   const playing = [out ? 'what Listen plays' : '', ...others.map(s => esc(s.label.split(' → ')[0]))].filter(Boolean).join(', ') ||
@@ -62,7 +64,7 @@ function broadcastRow(b) {
       <div class="rw-title"><b>BIG ${b.big}${b.bis != null && b.bis !== 255 ? ' · BIS ' + b.bis : ''}</b> ${st}${b.encrypted ? ' ' + pill('encrypted') : ''}
         <span class="rw-sub"><span>${esc(b.codec.summary)}${b.codec.channels ? ' · ' + (b.codec.channels === 2 ? 'stereo' : 'mono') : ''}</span><span>${esc(qosLine(b.qos, b.codec))}</span></span></div>
       <div class="rw-acts">
-        <button data-la-end="${b.big}" class="danger"${la.ending[b.big] ? ' disabled' : ''}>${la.ending[b.big] ? 'going off air…' : 'Stop broadcast'}</button></div></div>
+        <button data-la-end="${b.big}" class="danger"${ending ? ' disabled' : ''}>${ending ? 'going off air…' : 'Stop broadcast'}</button></div></div>
     <div class="rw-note small">Plays: ${playing}</div></div>`;
 }
 
@@ -150,20 +152,11 @@ function endBroadcast(btn, a) {
   btn.disabled = true;
   setText(btn, 'going off air…');
   // The streams started elsewhere into it are stopped; the daemon takes it off Listen's outputs
-  // (202) and ends it once off air, else (off air already) clears it at once. Shown as going until
-  // it is gone; a 409 (still on air from those streams) is asked again.
+  // and ends it once BlueZ says it is off air (202), else clears it at once.
   const node = b && b.node;
   const plays = b ? la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === node) && s.state !== 'ended') : [];
-  const deadline = Date.now() + 30000;
-  const later = f => new Promise(r => setTimeout(r, 1000)).then(f);
-  const gone = () => api('/le-audio').then(s => {
-    if (!s.broadcasts.some(x => x.big === big && (!a || x.adapter === a.adapter))) return null;
-    if (Date.now() > deadline) throw new Error('It is still on air: PipeWire did not let it go. Stop what plays into it (Audio → Streams).');
-    return later(gone);
-  });
-  const end = () => del(`/le-audio/broadcasts/${big}?adapter=${a ? a.adapter : ''}`).then(gone)
-    .catch(e => { if (e.status === 409 && Date.now() < deadline) return later(end); throw e; });
-  Promise.all(plays.map(s => del(`/audio/streams/${s.id}`).catch(() => {}))).then(end)
+  Promise.all(plays.map(s => del(`/audio/streams/${s.id}`).catch(() => {})))
+    .then(() => del(`/le-audio/broadcasts/${big}?adapter=${a ? a.adapter : ''}`))
     .catch(fail).finally(() => { delete la.ending[big]; refreshLeAudio(); });
 }
 
