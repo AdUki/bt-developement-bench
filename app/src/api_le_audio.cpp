@@ -4,6 +4,7 @@
 #include <systemd/sd-bus.h>
 
 #include <algorithm>
+#include <mutex>
 #include <set>
 
 #include "http_util.h"
@@ -29,6 +30,21 @@ json le_audio_state(BtManager& bt, audio::AudioEngine& engine) {
   return model_le_audio(*bt.objects(), controllers, engine.endpoints(false));
 }
 json le_audio_state(Deps& d) { return le_audio_state(d.bt, d.audio); }
+
+// The broadcasts POST is starting ("hciN/big"), until it has added them to the route's outputs:
+// le_audio_end_unused leaves them alone meanwhile.
+std::mutex starting_m;
+std::set<std::string> starting_bigs;
+bool starting(const std::string& adapter, int big) {
+  std::lock_guard<std::mutex> lk(starting_m);
+  return starting_bigs.count(adapter + "/" + std::to_string(big)) > 0;
+}
+void set_starting(const std::string& apath, int big, bool on) {
+  const std::string key = apath.substr(apath.rfind('/') + 1) + "/" + std::to_string(big);
+  std::lock_guard<std::mutex> lk(starting_m);
+  if (on) starting_bigs.insert(key);
+  else starting_bigs.erase(key);
+}
 
 // Every BIS of broadcast `b`'s BIG on `apath` goes (ClearConfiguration), and PipeWire's node with it.
 bool clear_big(BtManager& bt, const json& broadcasts, int big, const std::string& apath, int* n, BtCallResult* r) {
@@ -92,38 +108,31 @@ int append_bis(sd_bus_message* m, const LeBcastConfig& c) {
 
 }  // namespace
 
-void le_audio_end_unused(BtManager& bt, audio::AudioEngine& engine, const json& outputs, std::set<std::string>* seen) {
+void le_audio_end_unused(BtManager& bt, audio::AudioEngine& engine, const json& outputs) {
   // Nothing to look at on a board that broadcasts nothing (the Pi Zero): no transport under a
   // broadcast PAC.
   const auto objs = bt.objects();
   bool any = false;
   for (auto it = objs->begin(); it != objs->end() && !any; ++it)
     any = it.key().find("/pac_bcast") != std::string::npos && it.key().find("/fd") != std::string::npos;
-  if (!any) {
-    seen->clear();
-    return;
-  }
-  std::set<std::string> used, now;
+  if (!any) return;
+  std::set<std::string> used;
   for (const json& k : outputs) used.insert(k.value("target", std::string{}));
   const json st = model_le_audio(*objs, json::object(), engine.endpoints(false));
   for (const json& b : st["broadcasts"]) {
-    // Off air with no node yet is one being started (its node comes before SetConfiguration
-    // answers, and POST then adds it): left alone.
+    // One being started is not an output until POST adds it; one with no node yet is on its way.
     if (!b["node"].is_string() || b["state"] != "idle" || used.count(b["node"].get<std::string>())) continue;
-    const std::string node = b["node"].get<std::string>();
-    now.insert(node);
-    // Unused at two sweeps running: not one that POST is adding to the outputs this moment.
-    if (!seen->count(node)) continue;
+    const std::string adapter = b["adapter"].get<std::string>();
+    const int big = b["big"].get<int>();
+    if (starting(adapter, big)) continue;
     int n = 0;
     BtCallResult r;
-    const int big = b["big"].get<int>();
-    if (clear_big(bt, st["broadcasts"], big, "/org/bluez/" + b["adapter"].get<std::string>(), &n, &r))
+    if (clear_big(bt, st["broadcasts"], big, "/org/bluez/" + adapter, &n, &r))
       LOG_INFO("le-audio: BIG {} ended: not one of the outputs", big);
     else
       LOG_WARN("le-audio: ending BIG {}, not one of the outputs: {}", big, r.error);
     bt.touch();
   }
-  *seen = now;
 }
 
 void install_le_audio_routes(httplib::Server& svr, Deps& d) {
@@ -149,9 +158,13 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
     LeBcastConfig c;
     std::string err;
     if (!le_bcast_config_from_json(j, big, &c, &err)) return send_error(res, 400, err);
+    set_starting(apath, big, true);
     const BtCallResult r = d.bt.call(pac, "org.bluez.MediaEndpoint1", "SetConfiguration",
                                      [c](sd_bus_message* m) { return append_bis(m, c); }, kCallTimeoutMs);
-    if (!r.ok) return call_error(res, r);
+    if (!r.ok) {
+      set_starting(apath, big, false);
+      return call_error(res, r);
+    }
     d.bt.touch();
     // A broadcast is one of the route's outputs from the start: what Listen plays goes on air, and
     // taking it off the outputs ends it (le_audio_end_output).
@@ -166,6 +179,7 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
       int rst = 0;
       if (!d.route.put(json{{"outputs", outputs}}, &routed, &rerr, &rst)) out["output_error"] = rerr;
     }
+    set_starting(apath, big, false);
     send_json(res, out, 201);
   }));
 
@@ -193,7 +207,7 @@ void install_le_audio_routes(httplib::Server& svr, Deps& d) {
       std::string err;
       int status = 0;
       if (!d.route.put(json{{"outputs", outputs}}, &out, &err, &status)) return send_error(res, status, err);
-      // Ended by the route's sweep once off air (le_audio_end_unused).
+      // Ended once off air: the transport going idle pokes the route (le_audio_end_unused).
       return send_json(res, json{{"ok", true}, {"ending", true}}, 202);
     }
     for (const json& b : st["broadcasts"])

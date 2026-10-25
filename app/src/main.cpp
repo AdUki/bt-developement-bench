@@ -10,7 +10,6 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
-#include <set>
 #include <string>
 #include <thread>
 
@@ -260,9 +259,6 @@ int main(int argc, char** argv) {
 
   // The route: the one input the board plays and the outputs it plays on (Listen). Made before
   // the player, which plays through it, so it outlives the player's worker.
-  // The broadcasts the route's last sweep found unused (le_audio_end_unused): kept outside its
-  // hook, which the route calls a copy of, and made first so it outlives the route's thread.
-  std::set<std::string> unused_bcasts;
   btb::audio::AudioRoute route(audio, publish, [&bt] { return btb::model_media(*bt.objects())["transports"]; },
                                data_dir + "/route.json");
 
@@ -285,9 +281,7 @@ int main(int argc, char** argv) {
   btb::WebServer server(deps, wopt);
   // The board's broadcast exists to be an output: one that is not (taken off, or left from
   // before), once off air, ends.
-  route.on_unused_outputs([&bt, &audio, &unused_bcasts](const nlohmann::json& outputs) {
-    btb::le_audio_end_unused(bt, audio, outputs, &unused_bcasts);
-  });
+  route.on_unused_outputs([&bt, &audio](const nlohmann::json& outputs) { btb::le_audio_end_unused(bt, audio, outputs); });
   bt.on_change([&server, &hid_host, &route](bool request) {
     server.publish_bt(request);
     hid_host.poke();

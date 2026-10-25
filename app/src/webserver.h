@@ -3,7 +3,6 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <string>
 #include <thread>
 
@@ -74,10 +73,9 @@ void install_obex_routes(httplib::Server& svr, Deps& d);
 void install_hid_routes(httplib::Server& svr, Deps& d);
 void install_setup_routes(httplib::Server& svr, Deps& d);
 
-// The route's sweep (AudioRoute::on_unused_outputs): every broadcast of the board's that is off air
-// and not one of `outputs` at two sweeps running (`seen` carries the last one's) is cleared.
-void le_audio_end_unused(BtManager& bt, audio::AudioEngine& engine, const nlohmann::json& outputs,
-                         std::set<std::string>* seen);
+// The route's hook (AudioRoute::on_unused_outputs): every broadcast of the board's that is off air
+// and not one of `outputs` (nor being started) is cleared.
+void le_audio_end_unused(BtManager& bt, audio::AudioEngine& engine, const nlohmann::json& outputs);
 
 class WebServer {
  public:

@@ -66,10 +66,9 @@ class AudioRoute {
   AudioRoute& operator=(const AudioRoute&) = delete;
 
   static constexpr int kWaitMs = 15000;
-  static constexpr int kSweepMs = 2000;
-
   // Ends what exists only to be one of the outputs and is not one (the board's own Auracast
-  // broadcast): called every kSweepMs from the route's thread, without its lock, with the outputs.
+  // broadcast): called from the route's thread, without its lock, with the outputs, when Bluetooth
+  // changed (poke: a broadcast going off air) or the outputs did.
   using EndUnused = std::function<void(const nlohmann::json& outputs)>;
   void on_unused_outputs(EndUnused f);
 
@@ -121,7 +120,6 @@ class AudioRoute {
   int capture_ = 0;         // the capture the route made for a Bluetooth input
   int paused_ = 0;          // the board's stream paused for a Bluetooth input, resumed for local
   EndUnused end_unused_;
-  int64_t swept_ = 0;  // steady ms of the last sweep
 };
 
 }  // namespace btb::audio
