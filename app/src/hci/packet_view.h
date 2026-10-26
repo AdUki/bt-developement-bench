@@ -403,6 +403,10 @@ class PacketStore {
   static constexpr int kMaxWaitMs = 30000;
   static constexpr int kTailBatchMs = 150;
   static constexpr int kMaxWaiters = 4;
+  // How often a waiting tail request asks whether its client is still there. The console aborts
+  // its tail on every filter change, and httplib does not hand out the socket to wait on with the
+  // file; without the check each change would keep a place taken for the whole wait.
+  static constexpr int kGoneCheckMs = 500;
   struct ListParams {
     std::string filter;
     size_t start = 0;
@@ -410,6 +414,9 @@ class PacketStore {
     double at_t = -1;     // >= 0: start at the first match at or after this time (s)
     int64_t at_n = -1;    // >= 1: start at the match holding (or following) this frame
     int wait_ms = 0;      // > 0: a tail request, waiting up to this long (capped at kMaxWaitMs)
+    // Whether the client has gone (it aborted the request): a tail request then stops waiting
+    // and frees its place, within kGoneCheckMs.
+    std::function<bool()> client_gone;
   };
   bool list(const std::string& name, const ListParams& p, nlohmann::json* out, int* status,
             std::string* err);

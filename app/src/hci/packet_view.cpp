@@ -1580,8 +1580,21 @@ bool PacketStore::list(const std::string& name, const ListParams& p, json* out, 
   const int64_t give_up = mono_us() + int64_t{wait_ms} * 1000;
   const size_t count = std::min<size_t>(p.count, 1000);
   FileWatch watch;
-  bool watching = false, settled = false;
+  bool watching = false, settled = false, gone = false;
   std::string newer;
+  // The watch's wait in slices, between which the client is asked for: an aborted request ends.
+  auto wait_for = [&](int ms) {
+    for (;;) {
+      const int slice = p.client_gone ? std::min(ms, kGoneCheckMs) : ms;
+      const FileWatch::Event ev = watch.wait(slice, &newer);
+      ms -= slice;
+      if (ev != FileWatch::kTimeout || ms <= 0) return ev;
+      if (p.client_gone()) {
+        gone = true;
+        return FileWatch::kTimeout;
+      }
+    }
+  };
   for (;;) {
     bool empty, full;
     {
@@ -1644,11 +1657,12 @@ bool PacketStore::list(const std::string& name, const ListParams& p, json* out, 
       settled = true;
       continue;
     }
-    const FileWatch::Event ev = watch.wait(static_cast<int>(left_us / 1000), &newer);
+    const FileWatch::Event ev = wait_for(static_cast<int>(left_us / 1000));
     // The file went with nothing to show: the empty page is the answer, and the next request
     // learns it is gone. On a timeout the empty page goes out too, and the client waits again.
     // A new file is reported with the page (the loop runs once more to rebuild it with "newer").
-    if (ev == FileWatch::kGone) break;
+    // A client that went gets the empty page too, which nobody reads.
+    if (ev == FileWatch::kGone || gone) break;
   }
   if (wait_ms > 0) waiters_.fetch_sub(1);
   return true;

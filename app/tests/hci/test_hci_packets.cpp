@@ -896,6 +896,28 @@ void test_tail() {
     CHECK_EQ(store.waiters(), 0);
   }
 
+  // A client that aborts its tail request (the console does on every filter change) frees the
+  // place within kGoneCheckMs, not at the end of the wait: the places are not used up by changes.
+  {
+    std::atomic<bool> aborted{false};
+    PacketStore::ListParams q = p;
+    q.wait_ms = 10000;
+    q.client_gone = [&aborted] { return aborted.load(); };
+    std::thread waiter([&] {
+      json o;
+      int st = 0;
+      std::string e;
+      CHECK(store.list(name, q, &o, &st, &e));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK_EQ(store.waiters(), 1);
+    t0 = clock::now();
+    aborted = true;
+    waiter.join();
+    CHECK(ms_since(t0) < PacketStore::kGoneCheckMs + 300);
+    CHECK_EQ(store.waiters(), 0);
+  }
+
   // The file deleted while a request waits: it answers (empty), and the next request finds no file.
   std::thread remover([&] {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

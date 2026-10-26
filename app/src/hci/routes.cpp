@@ -170,6 +170,7 @@ void register_routes(httplib::Server& svr, Monitor& mon) {
               if (!(p.at_t >= 0)) p.at_t = 0;
             }
             if (int_param(req, "wait", &v) && v > 0) p.wait_ms = v;
+            p.client_gone = [&req] { return req.is_connection_closed(); };
             // A tail request on a file the ring has moved past (the client was away over a
             // rotation) is told where the live end is instead of waiting on a file that will
             // not grow. A directory listing, not systemctl: this runs per request.
