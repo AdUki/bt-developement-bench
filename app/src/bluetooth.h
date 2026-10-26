@@ -173,6 +173,8 @@ class BtManager {
   // Called (on the bus thread, at most every `min_interval`) when the state or the pending request
   // changed: the publisher of the "bt" topic.
   void on_change(std::function<void(bool request_changed)> fn);  // before start()
+  // Called (on the bus thread) with a device's address once RemoveDevice forgot it here.
+  void on_removed(std::function<void(const std::string& address)> fn);  // before start()
 
   bool start();
   void stop();
@@ -335,6 +337,7 @@ class BtManager {
   std::vector<BusUser*> users_;
   NotifyFn notify_;
   std::function<void(bool)> change_fn_;
+  std::function<void(const std::string&)> removed_fn_;
 
   // Bus thread only.
   sd_bus* bus_ = nullptr;

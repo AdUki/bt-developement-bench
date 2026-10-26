@@ -233,7 +233,7 @@ auto_connect without a pattern, values out of range).
 | `GET .../link` | | a connected device's link as the controller measures it, per connected bearer: `{"bredr": {rssi, rssi_relative, tx_power, max_tx_power} \| {error} \| null, "le": ...}`, through `btmgmt conn-info` (mgmt Get Connection Information), asked when called. BR/EDR's `rssi` is relative (`rssi_relative`: dB from the controller's golden receive power range, 0 inside it), LE's in dBm; a null value is one the controller does not know |
 | `POST .../trust`, `.../untrust`, `.../block`, `.../unblock` | | the `Trusted` / `Blocked` property |
 | `PUT /api/bluetooth/devices/{addr}` | any of `alias`, `trusted`, `blocked`, `wake_allowed`, `preferred_bearer` (`last-used`, `bredr`, `le`, `last-seen`; effective once disconnected) | properties; answers with the device |
-| `DELETE /api/bluetooth/devices/{addr}` | | `RemoveDevice()`: forget it, bond and all; `busy` is `removing` until it is gone |
+| `DELETE /api/bluetooth/devices/{addr}` | | `RemoveDevice()`: forget it, bond and all; `busy` is `removing` until it is gone. WirePlumber forgets the profile (codec) picked for it with the codec picker too, so a fresh pairing starts from the global choice |
 
 404 for an address BlueZ does not know (scan first), 503 when Bluetooth is not running.
 

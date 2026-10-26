@@ -506,6 +506,7 @@ void BtManager::restore_adapters(const json& objs, const std::vector<BtAdapterId
 void BtManager::add_user(BusUser* u) { users_.push_back(u); }
 void BtManager::on_notify(NotifyFn fn) { notify_ = std::move(fn); }
 void BtManager::on_change(std::function<void(bool)> fn) { change_fn_ = std::move(fn); }
+void BtManager::on_removed(std::function<void(const std::string&)> fn) { removed_fn_ = std::move(fn); }
 
 bool BtManager::start() {
   std::lock_guard<std::mutex> life(life_m_);
@@ -1140,8 +1141,11 @@ void BtManager::on_reply(const std::string& path, const std::string& method, con
       set_device_state(path, "", "RemoveDevice: " + friendly(e));
     } else {
       LOG_INFO("bluetooth: removed {}", addr);
-      std::lock_guard<std::mutex> lk(m_);
-      dev_state_.erase(path);
+      {
+        std::lock_guard<std::mutex> lk(m_);
+        dev_state_.erase(path);
+      }
+      if (removed_fn_) removed_fn_(addr);
     }
     dirty_ = true;
     return;

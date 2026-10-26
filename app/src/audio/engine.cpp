@@ -130,6 +130,7 @@ Tools Tools::find() {
   Tools t;
   t.pw_cat = find_exec("pw-cat");
   t.pw_dump = find_exec("pw-dump");
+  t.pw_metadata = find_exec("pw-metadata");
   t.wpctl = find_exec("wpctl");
   t.aplay = find_exec("aplay");
   t.arecord = find_exec("arecord");
@@ -2046,6 +2047,17 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
                            ((*out)["active"].is_object() ? (*out)["active"]["name"].get<std::string>() : std::string("no profile")) +
                            ": it did not accept " + want.get<std::string>() + " (yet)";
   return true;
+}
+
+void AudioEngine::forget_device(const std::string& address) {
+  if (tools_.pw_metadata.empty() || address.empty()) return;
+  // WirePlumber's state is a metadata object it saves to disk (state-profile.lua): taken out
+  // there, it is gone from the file too, without restarting WirePlumber.
+  std::string card = "bluez_card." + address;
+  std::replace(card.begin(), card.end(), ':', '_');
+  const ExecResult r = run_cmd({tools_.pw_metadata, "-n", "default-profile", "-d", "0", card}, 5000);
+  if (r.ok()) LOG_INFO("audio: WirePlumber forgets the profile picked for {}", address);
+  else LOG_WARN("audio: WirePlumber's profile for {} stays: pw-metadata: {}", address, r.reason());
 }
 
 // ---- radio stations -----------------------------------------------------------------------------

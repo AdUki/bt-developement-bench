@@ -298,6 +298,10 @@ int main(int argc, char** argv) {
   // The board's broadcast exists to be an output: one that is not (taken off, or left from
   // before), once off air, ends.
   route.on_unused_outputs([&bt, &audio](const nlohmann::json& outputs) { btb::le_audio_end_unused(bt, audio, outputs); });
+  // Off the bus thread: pw-metadata is a process to wait for.
+  bt.on_removed([&audio](const std::string& address) {
+    std::thread([&audio, address] { audio.forget_device(address); }).detach();
+  });
   bt.on_change([&server, &hid_host, &route](bool request) {
     server.publish_bt(request);
     hid_host.poke();

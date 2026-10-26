@@ -84,7 +84,9 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     restart. A discoverable with a timeout is kept as off.
   - `/data/btbench/obex.json` — the OBEX server's push policy, `{"policy": "auto|ask|reject"}`.
   - `/data/btbench/wireplumber/` — WirePlumber's state (the profile picked per device, routes,
-    volumes), bound over `/var/lib/wireplumber` by btbench-data.
+    volumes), bound over `/var/lib/wireplumber` by btbench-data. A device removed in BlueZ
+    (`DELETE /api/bluetooth/devices/{addr}`) loses its entry in `default-profile` (btbenchd, through
+    WirePlumber's `default-profile` metadata).
   - `/data/btbench/factory-reset` — written by `POST /api/system/factory-reset`; at the next boot
     btbench-data empties `/data/btbench` except `ssh/`, `timesync/` and (unless the file says
     `wifi`) `wifi/`, and `/data/bluetooth` when it says `pairings`, then removes it.

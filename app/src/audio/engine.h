@@ -40,7 +40,7 @@ namespace btb::audio {
 
 // The programs the streams run, found once on PATH. Empty when missing.
 struct Tools {
-  std::string pw_cat, pw_dump, wpctl, aplay, arecord, mpg123, ffmpeg, curl;
+  std::string pw_cat, pw_dump, pw_metadata, wpctl, aplay, arecord, mpg123, ffmpeg, curl;
   static Tools find();
   nlohmann::json to_json() const;
 };
@@ -227,6 +227,12 @@ class AudioEngine {
   // after the switch.
   bool set_profile(int device_id, const nlohmann::json& profile, nlohmann::json* out,
                    std::string* err, int* status);
+  // A device removed from BlueZ: WirePlumber forgets the profile (codec) picked for it. It keeps
+  // a profile picked by hand (set_profile) per device name, apart from BlueZ's pairing, and puts
+  // it back whenever the device connects: a codec picked before would come back on a fresh pair
+  // and switch the device's stream right after it started (its nodes are made again, and what
+  // plays to them stops).
+  void forget_device(const std::string& address);
 
   const Tools& tools() const { return tools_; }
   UpnpBrowser& upnp() { return upnp_; }
