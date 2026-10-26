@@ -1,5 +1,5 @@
 'use strict';
-// System: health, versions, the services of the stack, bluetoothd's command line, the journal,
+// System: health, versions, the services of the stack, bluetoothd's command line, the log files,
 // the jobs runner and reboot. Health rides the "system" topic (1 Hz, already subscribed for the
 // header); the rest is read when the tab opens.
 
@@ -92,7 +92,7 @@ function setupSystem() {
     if (!a) return;
     e.preventDefault();
     logsOpen('f:' + a.dataset.lf, false);
-    go('system/logs');
+    go('logs');
   };
   $('job-start').onclick = () => post('/jobs', {cmd: $('job-cmd').value, args: $('job-args').value})
     .then(j => { refreshJobs(); showJob(j.id); }).catch(fail);
@@ -169,22 +169,19 @@ function setupBtDebug() {
   $('kd-off').onclick = () => put('/system/btdebug', {off: ['all']}).then(renderBtDebug).catch(fail);
   $('kd-show').onclick = () => {
     logsOpen('j:kernel', true);
-    go('system/logs');
+    go('logs');
   };
 }
 
 registerTab('system', {
-  topics: () => logsTopics().concat(jobSel ? ['job.' + jobSel] : []),
+  topics: () => jobSel ? ['job.' + jobSel] : [],
   show() {
-    // The log does not wait for the rest: its source list fills in when /system answers.
-    logsShow();
     refreshSystem();
     refreshJobs();
     refreshLogFiles();
   },
   onMessage(topic, d) {
     if (topic === 'system') renderHealth(d);
-    else if (topic === 'journal') logsJournal(d);
     else if (jobSel && topic === 'job.' + jobSel) {
       if ('line' in d) logLine($('job-out'), (d.stream === 'err' ? '! ' : '') + d.line);
       else {

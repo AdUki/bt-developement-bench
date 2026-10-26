@@ -634,7 +634,7 @@
           <label class="switch inline small" title="Keep the newest message in view as they come"><input type="checkbox" id="db-follow" checked><i></i> Follow</label>
           <button class="small-btn" id="db-run">Pause</button>
           <button class="small-btn" id="db-clear">Clear</button>
-          <a class="small-btn btn-link" id="db-file" href="/api/system/logs/bluez-dbus.log?download=1" download title="The whole log the board keeps (bluez-dbus.log, also under System → Logs)">Download log</a>
+          <a class="small-btn btn-link" id="db-file" href="/api/system/logs/bluez-dbus.log?download=1" download title="The whole log the board keeps (bluez-dbus.log, also under Traffic → Logs)">Download log</a>
         </div>
       </div>
       <div class="row wrap lg-bar">
@@ -648,6 +648,34 @@
       </div>
       <div id="db-view" class="lg-view wrap db-view ld" tabindex="0" aria-label="D-Bus messages"></div>
       <p class="hint">Everything to and from BlueZ (<span class="mono">org.bluez</span>) and obexd on the system bus: calls with their arguments, replies with the call they answer and how long it took, errors, signals. Click a message for its arguments in full.</p>
+    </div>
+  </section>
+
+  <!-- ======================================================== Traffic: logs -->
+  <section id="logs" class="panel fit">
+    <div class="card fit-main" id="lg" data-full>
+      <div class="card-head">
+        <h3>Logs</h3>
+        <div class="acts">
+          <select id="lg-src" aria-label="Log"></select>
+          <select id="lg-lines" aria-label="Lines to load" class="small">
+            <option value="200">200 lines</option><option value="1000" selected>1000 lines</option><option value="5000">5000 lines</option><option value="20000">20000 lines</option></select>
+          <label class="switch inline small"><input type="checkbox" id="lg-follow"><i></i> Follow</label>
+          <button class="small-btn" id="lg-reload">Reload</button>
+          <button class="small-btn" id="lg-clear">Clear</button>
+        </div>
+      </div>
+      <div class="row wrap lg-bar">
+        <input id="lg-filter" class="mono grow" spellcheck="false" autocomplete="off" aria-label="Filter"
+               placeholder='words to match · !word to hide · /regex/ · "a phrase"'>
+        <div class="segs" id="lg-prio" role="group" aria-label="Lowest priority shown">
+          <button class="seg on" data-prio="7">all</button><button class="seg" data-prio="6">info</button>
+          <button class="seg" data-prio="4">warnings</button><button class="seg" data-prio="3">errors</button>
+        </div>
+        <label class="check small"><input type="checkbox" id="lg-wrap" checked> wrap</label>
+      </div>
+      <div class="small muted lg-status"><span id="lg-count"></span> <span id="lg-err" class="bad-text"></span></div>
+      <div id="lg-view" class="lg-view wrap ld" tabindex="0" aria-label="Log lines"></div>
     </div>
   </section>
 
@@ -721,33 +749,6 @@
           </div>
           <div class="row"><button id="sys-fdr" class="danger">Reset and reboot</button></div>
         </details>
-      </div>
-    </div>
-
-    <div class="pane fit" data-pane="logs">
-      <div class="card fit-main" id="lg" data-full>
-        <div class="card-head">
-          <h3>Logs</h3>
-          <div class="acts">
-            <select id="lg-src" aria-label="Log"></select>
-            <select id="lg-lines" aria-label="Lines to load" class="small">
-              <option value="200">200 lines</option><option value="1000" selected>1000 lines</option><option value="5000">5000 lines</option><option value="20000">20000 lines</option></select>
-            <label class="switch inline small"><input type="checkbox" id="lg-follow"><i></i> Follow</label>
-            <button class="small-btn" id="lg-reload">Reload</button>
-            <button class="small-btn" id="lg-clear">Clear</button>
-          </div>
-        </div>
-        <div class="row wrap lg-bar">
-          <input id="lg-filter" class="mono grow" spellcheck="false" autocomplete="off" aria-label="Filter"
-                 placeholder='words to match · !word to hide · /regex/ · "a phrase"'>
-          <div class="segs" id="lg-prio" role="group" aria-label="Lowest priority shown">
-            <button class="seg on" data-prio="7">all</button><button class="seg" data-prio="6">info</button>
-            <button class="seg" data-prio="4">warnings</button><button class="seg" data-prio="3">errors</button>
-          </div>
-          <label class="check small"><input type="checkbox" id="lg-wrap" checked> wrap</label>
-        </div>
-        <div class="small muted lg-status"><span id="lg-count"></span> <span id="lg-err" class="bad-text"></span></div>
-        <div id="lg-view" class="lg-view wrap ld" tabindex="0" aria-label="Log lines"></div>
       </div>
     </div>
 

@@ -227,14 +227,14 @@ const NAV = [
     {tab: 'monitor', label: 'Links'},
     {tab: 'packets', label: 'Packets'},
     {tab: 'dbus', label: 'D-Bus'},
+    {tab: 'logs', label: 'Logs'},
     {tab: 'graphs', label: 'Graphs'},
     {tab: 'capture', label: 'Captures'}]},
-  // The board itself: its state and logs first, then what it is set up to be. Setup's settings
+  // The board itself: its state and tools first, then what it is set up to be. Setup's settings
   // were an area of their own; one area keeps the rail short on a phone, and the old links
   // (#setup/profiles) still land, since a view is found by its tab.
   {id: 'system', label: 'System', icon: 'M4 5h16v10H4zM9 19h6M12 15v4', views: [
     {tab: 'system', pane: 'overview', label: 'Overview'},
-    {tab: 'system', pane: 'logs', label: 'Logs'},
     {tab: 'system', pane: 'tools', label: 'Tools'},
     {tab: 'setup', pane: 'profiles', label: 'Profiles'},
     {tab: 'setup', pane: 'bluetooth', label: 'Bluetooth settings'},
@@ -285,10 +285,14 @@ function renderNav() {
   lsSet('btbench.area.' + area.id, here);
 }
 
+// Views that moved to a tab of their own, so their old links (and an area's remembered view) land.
+const MOVED = {'system/logs': 'logs'};
+
 // Shows a view by its key ("audio/streams", "capture"), keeping the hash in step. Each view shown is
 // a history entry, so a phone's Back returns to the view before instead of leaving the console;
 // `replace` (the first view, a hash typed by hand) takes the current entry's place.
 function go(key, replace) {
+  key = MOVED[key] || key;
   const [tab, pane] = key.split('/');
   const same = key === location.hash.slice(1);
   showTab(tab, pane);

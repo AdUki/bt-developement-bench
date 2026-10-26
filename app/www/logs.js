@@ -1,5 +1,5 @@
 'use strict';
-// System → Logs: one viewer for the journal (a unit, or the kernel) and btbench-logd's files in
+// Traffic → Logs: one viewer for the journal (a unit, or the kernel) and btbench-logd's files in
 // /tmp/logs. The board does the reading (GET /api/system/logs/view, logview.cpp): both kinds come
 // as the same entries — time, priority, program, pid, topic, message — read from the end, filtered
 // there so a search covers the whole log, and gzipped. The page colours them: by priority, the
@@ -156,7 +156,7 @@ function logsFollow() {
   if (lg.follow && lgIsFile() && lg.end != null) {
     const gen = lg.gen;
     lg.fileTimer = setInterval(() => {
-      if (currentTab !== 'system' || gen !== lg.gen || lg.end == null) return;
+      if (currentTab !== 'logs' || gen !== lg.gen || lg.end == null) return;
       api(lgUrl(`&after=${lg.end}`)).then(r => {
         if (gen !== lg.gen) return;
         lg.end = r.end;
@@ -171,11 +171,7 @@ function logsFollow() {
 }
 
 function logsTopics() {
-  return lg.follow && !lgIsFile() && currentTab === 'system' ? ['journal'] : [];
-}
-
-function logsShow() {
-  if (!lg.entries.length && !lg.busy) logsLoad();
+  return lg.follow && !lgIsFile() ? ['journal'] : [];
 }
 
 function logsJournal(d) {
@@ -433,3 +429,17 @@ function setupLogs() {
 }
 
 setupLogs();
+
+registerTab('logs', {
+  topics: logsTopics,
+  show() {
+    // The log does not wait for its sources: the list fills in when they answer. The stack's units
+    // come from /system once; the files are listed again, as btbench-logd adds them.
+    if (!lg.entries.length && !lg.busy) logsLoad();
+    if (!lg.units.length) api('/system').then(s => logsUnits(Object.keys(s.services || {}))).catch(() => {});
+    api('/system/logs').then(r => logsFiles(r.files)).catch(() => {});
+  },
+  onMessage(topic, d) {
+    if (topic === 'journal') logsJournal(d);
+  },
+});

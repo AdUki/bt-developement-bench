@@ -255,8 +255,8 @@ folders and messages, fetch one; an image's properties, thumbnail or full image,
 with progress (pause, resume, cancel). *On the board*: the files — `out/` (upload what to send),
 `in/` (download what arrived), `shared/`.
 
-**Traffic** — five views, in the order of looking closer: *Links*, *Packets*, *D-Bus*, *Graphs*,
-*Captures*.
+**Traffic** — six views, in the order of looking closer: *Links*, *Packets*, *D-Bus*, *Logs*,
+*Graphs*, *Captures*.
 
 *Links*: the HCI monitor's connections: throughput, TX latency p50/p95/max (HCI send to
 Number Of Completed Packets), packets in flight against the controller's credits, RTP loss. Click
@@ -303,7 +303,12 @@ the replies with the call they answer and how long it took, errors in red, the s
 board kept and follows the new ones; filter by words (`!word` hides), by kind, and with *show
 polling* btbenchd's re-reading of the object tree every few seconds. Click a message for its
 arguments in full. The board writes everything to `bluez-dbus.log`, downloadable here and open in
-System → Logs, whether or not this view is open.
+*Logs*, whether or not this view is open.
+
+*Logs*: one viewer for the journal of a unit or of the kernel and the files in `/tmp/logs` (each
+program's own, `bluez-dbus.log` among them), live with *follow*; a debug build's source paths are
+shown from the source tree on (`src/adapter.c`). System's log files and *show in the journal* open
+here.
 
 *Graphs*: live, scrolling graphs on one time axis (30 s, 2 min, 5 min or 15 min): per connection the
 throughput (TX solid, RX dashed), TX latency p50 / p95 / max, packets in flight against the
@@ -322,16 +327,14 @@ connection come from the monitor's history when it opens.
 written), *Open* (the file in *Packets*), download, delete, and *Summary* (`btmon -a` on the
 board).
 
-**System** — the board itself, in eight views: its state and logs, then how it is set up.
+**System** — the board itself, in eight views: its state and tools, then how it is set up.
 *Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
 kernel, the stack's services with restart buttons, bluetoothd's command line under a
 disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
 bluetooth), the log files to download (`clog` reads them on the board), reboot, and under a
 disclosure a factory reset (every setting back to the image's, optionally the paired devices and
 the Wi-Fi networks too; it reboots, and clears the console's own preferences in this browser).
-*Logs*: one viewer for the journal of a unit or of the kernel and the files in `/tmp/logs` (each
-program's own, `bluez-dbus.log` among them), live with *follow*; a debug build's source paths are
-shown from the source tree on (`src/adapter.c`). *Tools*: the jobs runner (l2ping, l2test, iperf3,
+*Tools*: the jobs runner (l2ping, l2test, iperf3,
 btmgmt, wpctl and the other allowlisted tools, with live output and kill). *Kernel* also has the
 kernel's Bluetooth debug messages by area (HCI core, management, L2CAP, SMP, ISO, SCO, RFCOMM,
 BNEP, HIDP, the controller drivers; each says how many of its messages print, *keep from boot*,

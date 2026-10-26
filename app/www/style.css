@@ -968,7 +968,7 @@ span.ld:empty::before { display: inline-block; margin: 0 1.15em 0 0; vertical-al
 .pw-load.warn i { background: var(--warn); }
 .pw-load.bad i { background: var(--bad); }
 
-/* System → Logs: one line a row, coloured by priority; the filter's hits marked. */
+/* Traffic → Logs: one line a row, coloured by priority; the filter's hits marked. */
 .lg-bar { margin: 0.5rem 0 0.3rem; gap: 0.4rem 0.6rem; }
 .lg-bar input.bad { border-color: var(--bad); }
 .lg-status { min-height: 1.2em; margin-bottom: 0.25rem; }
