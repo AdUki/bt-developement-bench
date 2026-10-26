@@ -671,8 +671,15 @@ void BenchPlayer::append_item_props(sd_bus_message* m, const LibItem& it) const 
   if (r >= 0) sd_bus_message_close_container(m);
 }
 
-// MediaItem1's Metadata of a track of the told stream's playlist.
+// MediaItem1's Metadata of a track of the told stream's playlist. The one playing is what the
+// player's Metadata says (a radio's song from its ICY title, not the station): a remote lists the
+// now playing folder after a track change and takes the playing item's attributes from that list,
+// over the ones it had just asked for.
 void BenchPlayer::append_stream_metadata(sd_bus_message* m, int track) const {
+  if (track == mirror_track_ && mirror_md_.is_object()) {
+    append_metadata(m, kMirrorTrack, false);
+    return;
+  }
   const json& it = mirror_list_[track];
   const std::string title = it.value("title", std::string{});
   int r = sd_bus_message_open_container(m, 'a', "{sv}");
@@ -737,7 +744,13 @@ void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
       if (r >= 0) r = append_img_handle(m, md.value("Art", std::string{}));
     } else {
       r = dict_str(m, "Title", title);
+      if (r >= 0) r = dict_str(m, "Artist", artist);
       if (r >= 0) r = dict_str(m, "Album", album);
+      if (r >= 0) r = dict_str(m, "Genre", genre);
+      if (r >= 0 && md.contains("Number")) r = dict_entry(m, "Number", 'u', md["Number"].get<uint32_t>());
+      if (r >= 0 && md.contains("NumberOfTracks"))
+        r = dict_entry(m, "NumberOfTracks", 'u', md["NumberOfTracks"].get<uint32_t>());
+      if (r >= 0 && md.contains("Duration")) r = dict_entry(m, "Duration", 'u', md["Duration"].get<uint32_t>());
     }
     if (r >= 0) sd_bus_message_close_container(m);
     return;
@@ -745,8 +758,10 @@ void BenchPlayer::append_metadata(sd_bus_message* m, int id, bool mpris) const {
   const LibItem* it = lib_.find(id);
   if (it && r >= 0) {
     const json md = lib_item_metadata(lib_, *it);
-    // A radio's ICY title is the track; the station is the album.
-    const std::string title = mpris && !icy_title_.empty() ? icy_title_ : it->name;
+    // A radio's ICY title is the track; the station is the album. The same for the item playing in
+    // the now playing list, which a remote reads after a track change (append_stream_metadata).
+    const bool now = mpris || (pos_ >= 0 && pos_ < static_cast<int>(queue_.size()) && queue_[pos_] == id);
+    const std::string title = now && !icy_title_.empty() ? icy_title_ : it->name;
     if (mpris) {
       const std::string trackid = item_path(id);
       r = dict_entry(m, "mpris:trackid", 'o', trackid.c_str());
