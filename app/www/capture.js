@@ -66,7 +66,8 @@
 
   const ROW = 22;     // px; fixed, so only the rows on screen exist in the page
   const PAGE = 200;   // rows per request
-  const KEEP = 3000;  // rows kept in memory around the viewport
+  const KEEP = 3000;  // rows kept in memory around the viewport (and every picked one)
+  const MAX_SEL = 5000;  // packets one shift-click may pick: they are all fetched to be copied
   const WAIT = 25000; // ms a tail request may wait on the board (it allows 30 s)
   const END_N = 2147483647;  // at_n beyond any frame: the page after the last match, the totals known
 
@@ -100,6 +101,13 @@
     // The time column: since the first packet, time of day, or since the row above.
     time: ['rel', 'tod', 'delta'].includes(lsGet('btbench.cv.time')) ? lsGet('btbench.cv.time') : 'rel',
     statsOpen: false, stats: null, statsGen: 0, statsAt: 0,
+    // The packets picked (match ordinals; selIdx is the one in the detail) and the detail's lines
+    // picked, each with the anchor a shift-click extends from.
+    sel: new Set(), anchor: -1, pendingKeep: false, dsel: new Set(), danchor: null,
+    menu: null, menuFrom: null,
+    // What the head shows, and the list's share of the width beside the detail.
+    show: {filter: lsGet('btbench.cv.filter-shown') !== '0', graph: lsGet('btbench.cv.graph-shown') !== '0'},
+    split: Number(lsGet('btbench.cv.split')) || 0.6,
   };
 
   const enc = encodeURIComponent;
@@ -190,6 +198,8 @@
     cv.gen++;
     stopTail();
     cv.rows.clear();
+    cv.sel = new Set();
+    cv.anchor = -1;
     cv.total = 0;
     cv.complete = false;
     cv.error = '';
@@ -235,7 +245,7 @@
     if (cv.pendingSel != null && cv.rows.has(cv.pendingSel)) {
       const i = cv.pendingSel;
       cv.pendingSel = null;
-      select(i, cv.rows.get(i));
+      select(i, cv.rows.get(i), cv.pendingKeep);
     }
     // Not done yet (indexing a big file, or a text filter decoding): ask again, which advances
     // the scan; the rows already shown stay valid, matches are only ever appended.
@@ -299,6 +309,7 @@
       cv.inflight = false;
       took(r);
       cv.selIdx = -1;
+      cv.sel = new Set();
       $('cv-body').scrollTop = cv.total * ROW;
       if (cv.active) setFollow(true);
       renderRows();
@@ -312,7 +323,24 @@
   function trimRows() {
     const first = Math.floor($('cv-body').scrollTop / ROW);
     for (const k of cv.rows.keys()) {
-      if (k < first - KEEP / 2 || k > first + KEEP / 2) cv.rows.delete(k);
+      if ((k < first - KEEP / 2 || k > first + KEEP / 2) && !cv.sel.has(k)) cv.rows.delete(k);
+    }
+  }
+
+  // The picked packets not in memory (a shift-click far down the list), fetched now so that a
+  // copy has them all at hand; a request answers at most 1000.
+  function loadSel() {
+    const name = cv.name, filter = cv.filter;
+    const missing = [...cv.sel].filter(k => !cv.rows.has(k)).sort((a, b) => a - b);
+    let upto = -1;
+    for (const k of missing) {
+      if (k < upto) continue;
+      upto = k + 1000;
+      api(`${base()}/packets?filter=${enc(filter)}&count=1000&start=${k}`).then(r => {
+        if (name !== cv.name || filter !== cv.filter) return;
+        r.packets.forEach((p, j) => cv.rows.set(r.start + j, p));
+        queueRows();
+      }).catch(fail);
     }
   }
 
@@ -359,7 +387,7 @@
         continue;
       }
       const cls = ['cv-row', 't-' + p.type, p.dir ? 'd-' + p.dir : '', p.err ? 'err' : '', p.mark ? 'mark' : '',
-        i === cv.selIdx ? 'sel' : ''].join(' ');
+        cv.sel.has(i) ? 'sel' : '', i === cv.selIdx && cv.sel.size > 1 ? 'cur' : ''].join(' ');
       html += `<div class="${cls}" data-i="${i}" title="${esc(fmtTime(p.ts_ms))}.${String(Math.floor((p.ts_ms % 1000) * 1000)).padStart(6, '0').slice(0, 6)}">` +
         `<span>${p.n}</span><span>${timeCell(i, p)}</span><span class="cv-dir cv-c-d">${p.dir}</span>` +
         `<span class="cv-c-h">${p.handle == null ? '' : p.handle}</span><span>${p.proto || p.type}</span>` +
@@ -555,9 +583,14 @@
 
   // ------------------------------------------------------------ selection and detail
 
-  function select(i, p) {
+  // `keep`: the packets picked stay as they are (a ctrl or shift click), else this one is all.
+  function select(i, p, keep) {
     cv.selIdx = i;
     cv.selN = p.n;
+    if (!keep) {
+      cv.sel = new Set([i]);
+      cv.anchor = i;
+    }
     queueRows();
     const gen = cv.gen, name = cv.name;
     api(`${base()}/packets/${p.n}`).then(d => {
@@ -579,6 +612,8 @@
   function clearDetail() {
     cv.detail = null;
     cv.hexSpans = [];
+    cv.dsel = new Set();
+    cv.danchor = null;
     setHTML($('cv-fields'), '<div class="muted small">Select a packet: click a row, or move with ↑ ↓.</div>');
     setHTML($('cv-hex'), '');
   }
@@ -615,6 +650,8 @@
 
   function renderDetail(d) {
     cv.detail = d;
+    cv.dsel = new Set();
+    cv.danchor = null;
     const terms = termsOf(d).map(t => `<button class="cv-term" data-term="${esc(t)}" title="Add to the filter (shift: without it)">${esc(t)}</button>`).join('');
     const head = `<div class="cv-dhead"><b>#${d.n}</b> ${esc(d.summary)}</div><div class="cv-terms">${terms}</div>`;
     setHTML($('cv-fields'), head + fieldsHTML(d.fields));
@@ -627,26 +664,243 @@
     cv.hexSpans.forEach((s, i) => s.classList.toggle('hl', off != null && i >= off && i < off + len));
   }
 
-  function moveSel(delta) {
+  // `extend` (shift): the picked range grows from the anchor to the row moved to.
+  function moveSel(delta, extend) {
     if (!cv.total) return;
     let i = cv.selIdx < 0 ? 0 : Math.max(0, Math.min(cv.total - 1, cv.selIdx + delta));
     const body = $('cv-body');
     const top = i * ROW;
     if (top < body.scrollTop) body.scrollTop = top;
     else if (top + ROW > body.scrollTop + body.clientHeight) body.scrollTop = top + ROW - body.clientHeight;
+    extend = extend && cv.anchor >= 0;
+    if (extend) pickRange(cv.anchor, i);
     const p = cv.rows.get(i);
-    if (p) select(i, p);
+    if (p) select(i, p, extend);
     else {
       cv.selIdx = i;  // loads with the next render; selected when it arrives
       cv.pendingSel = i;
+      cv.pendingKeep = extend;
       queueRows();
     }
+  }
+
+  // Every match from the anchor to `to` (a shift-click or shift-arrow), at most MAX_SEL of them.
+  function pickRange(from, to) {
+    let lo = Math.min(from, to), hi = Math.max(from, to);
+    if (hi - lo >= MAX_SEL) {
+      toast(`At most ${fmtN(MAX_SEL)} packets are picked at once`);
+      if (to > from) hi = lo + MAX_SEL - 1;
+      else lo = hi - MAX_SEL + 1;
+    }
+    cv.sel = new Set();
+    for (let k = lo; k <= hi; k++) cv.sel.add(k);
+    loadSel();
+  }
+
+  // ------------------------------------------------------------ copying
+
+  // The picked packets as text in list order, one a line: the columns as shown, padded to line
+  // up, or the summaries alone. Null while some are still being fetched.
+  function rowsText(sumOnly) {
+    const idx = [...cv.sel].sort((a, b) => a - b);
+    if (!idx.length) return null;
+    if (idx.some(i => !cv.rows.has(i))) {
+      toast('The picked packets are still loading: copy again in a moment');
+      return null;
+    }
+    const sum = p => p.summary + (p.lat_ms != null ? ` (${p.lat_ms} ms)` : '');
+    if (sumOnly) return idx.map(i => sum(cv.rows.get(i))).join('\n');
+    const cells = idx.map(i => {
+      const p = cv.rows.get(i);
+      return [String(p.n), timeCell(i, p), p.dir || '', p.handle == null ? '' : String(p.handle), p.proto || p.type,
+        String(p.len), sum(p)];
+    });
+    const w = cells[0].map((_, c) => Math.max(...cells.map(r => r[c].length)));
+    return cells.map(r => r.map((v, c) => c === r.length - 1 ? v : v.padEnd(w[c])).join('  ')).join('\n');
+  }
+
+  // A line of the decoded tree, as "name: value" indented two spaces a level.
+  const fieldLine = (depth, name, value) => '  '.repeat(Math.max(0, depth)) + name + (value ? ': ' + value : '');
+  const fieldsText = (list, depth) => (list || []).flatMap(f => [fieldLine(depth, f.name, f.value), ...fieldsText(f.children, depth + 1)]);
+  const LINE = 'summary, .cv-f';
+
+  function lineText(el) {
+    let depth = el.tagName === 'SUMMARY' ? -1 : 0;
+    for (let x = el.closest('details'); x && $('cv-fields').contains(x); x = x.parentElement.closest('details')) depth++;
+    const name = el.querySelector(':scope > b, :scope > .muted'), val = el.querySelector(':scope > .cv-v');
+    return fieldLine(depth, name ? name.textContent : '', val ? val.textContent : '');
+  }
+
+  const dselText = () => [...$('cv-fields').querySelectorAll(LINE)].filter(el => cv.dsel.has(el)).map(lineText).join('\n');
+  // The lines a shift-click spans: those on screen, not the ones inside a closed group.
+  const shownLines = () => [...$('cv-fields').querySelectorAll(LINE)].filter(el => el.getClientRects().length);
+
+  function paintDsel() {
+    $('cv-fields').querySelectorAll('.dsel').forEach(el => el.classList.remove('dsel'));
+    cv.dsel.forEach(el => el.classList.add('dsel'));
+  }
+
+  // Through a copy event: the console is plain HTTP on the board, where the async clipboard API
+  // does not exist, but a copy command run from a click still fills the clipboard.
+  function copyText(text) {
+    if (text == null) return;
+    const on = e => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', text);
+    };
+    window.addEventListener('copy', on, true);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { /* not allowed */ }
+    window.removeEventListener('copy', on, true);
+    if (ok) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(fail);
+    else toast('The browser did not allow the copy: use Ctrl+C');
+  }
+
+  // The menu a right click opens in the list or the detail: items are [label, action] or '-'.
+  // Shift + right click keeps the browser's own.
+  function openMenu(e, items) {
+    if (!items.length) return;
+    e.preventDefault();
+    const m = $('cv-menu');
+    cv.menu = items;
+    cv.menuFrom = document.activeElement;
+    setHTML(m, items.map((it, k) => it === '-' ? '<hr>' : `<button type="button" role="menuitem" data-k="${k}">${esc(it[0])}</button>`).join(''));
+    m.hidden = false;
+    m.style.left = Math.max(4, Math.min(e.clientX, innerWidth - m.offsetWidth - 4)) + 'px';
+    m.style.top = Math.max(4, Math.min(e.clientY, innerHeight - m.offsetHeight - 4)) + 'px';
+    m.querySelector('button').focus({preventScroll: true});
+  }
+
+  function closeMenu(refocus) {
+    const m = $('cv-menu');
+    if (m.hidden) return;
+    m.hidden = true;
+    cv.menu = null;
+    if (refocus && cv.menuFrom) cv.menuFrom.focus({preventScroll: true});
+  }
+
+  function rowsMenu(e) {
+    if (e.shiftKey) return;
+    const r = e.target.closest('.cv-row[data-i]');
+    if (r && !cv.sel.has(Number(r.dataset.i))) {
+      const i = Number(r.dataset.i), p = cv.rows.get(i);
+      if (p) select(i, p);
+    }
+    const n = cv.sel.size;
+    if (!n) return;
+    $('cv-table').focus({preventScroll: true});
+    openMenu(e, [
+      [n > 1 ? `Copy ${fmtN(n)} rows` : 'Copy row', () => copyText(rowsText(false))],
+      [n > 1 ? 'Copy summaries' : 'Copy summary', () => copyText(rowsText(true))],
+    ]);
+  }
+
+  function detailMenu(e) {
+    const d = cv.detail;
+    if (e.shiftKey || !d) return;
+    const s = window.getSelection();
+    const text = s.rangeCount && !s.isCollapsed && $('cv-detail').contains(s.getRangeAt(0).commonAncestorContainer) ? s.toString() : '';
+    const line = e.target.closest(LINE);
+    if (line && $('cv-fields').contains(line) && !cv.dsel.has(line)) {
+      cv.dsel = new Set([line]);
+      cv.danchor = line;
+      paintDsel();
+    }
+    const items = [];
+    if (text) items.push(['Copy selected text', () => copyText(text)]);
+    if (cv.dsel.size) items.push([cv.dsel.size > 1 ? `Copy ${cv.dsel.size} lines` : 'Copy line', () => copyText(dselText())]);
+    if (items.length) items.push('-');
+    items.push(['Copy all fields', () => copyText([`#${d.n} ${d.summary}`, ...fieldsText(d.fields, 0)].join('\n'))]);
+    if (d.hex) {
+      items.push(['Copy hex dump', () => copyText($('cv-hex').textContent.replace(/\n$/, ''))]);
+      items.push(['Copy bytes as hex', () => copyText(d.hex)]);
+    }
+    $('cv-detail').focus({preventScroll: true});
+    openMenu(e, items);
+  }
+
+  // A click picks a line of the detail, ctrl adds or drops one, shift spans from the last picked;
+  // with a key held a group's summary keeps its open state.
+  function pickLine(e, line) {
+    const multi = e.ctrlKey || e.metaKey;
+    if (e.shiftKey || multi) e.preventDefault();
+    if (e.shiftKey && cv.danchor && cv.danchor.isConnected) {
+      const all = shownLines();
+      const a = all.indexOf(cv.danchor), z = all.indexOf(line);
+      if (a >= 0 && z >= 0) cv.dsel = new Set(all.slice(Math.min(a, z), Math.max(a, z) + 1));
+    } else if (multi) {
+      if (cv.dsel.has(line)) cv.dsel.delete(line);
+      else cv.dsel.add(line);
+      cv.danchor = line;
+    } else {
+      cv.dsel = new Set([line]);
+      cv.danchor = line;
+    }
+    paintDsel();
+  }
+
+  // ------------------------------------------------------------ the head's switches and the split
+
+  // "filter" and "graph" in the head: either can be put away for a taller list. Hidden, the graph
+  // is not asked of the board either.
+  function setShown(part, on) {
+    cv.show[part] = on;
+    lsSet(`btbench.cv.${part}-shown`, on ? '1' : '0');
+    $('cv').classList.toggle('hide-' + part, !on);
+    const b = $('cv-show').querySelector(`[data-part="${part}"]`);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    if (part === 'graph' && on) fetchGraph();
+    queueRows();
+  }
+
+  // The separator between the list and the detail: dragged, or ← → when focused; a double click
+  // puts it back.
+  function setupSplit() {
+    const split = $('cv-split'), sep = $('cv-sep');
+    const set = (f, save) => {
+      cv.split = Math.max(0.2, Math.min(0.85, f));
+      split.style.setProperty('--cv-l', `${cv.split}fr`);
+      split.style.setProperty('--cv-r', `${1 - cv.split}fr`);
+      sep.setAttribute('aria-valuenow', String(Math.round(cv.split * 100)));
+      if (save) lsSet('btbench.cv.split', String(cv.split));
+    };
+    set(cv.split);
+    sep.addEventListener('pointerdown', e => {
+      if (e.button) return;
+      e.preventDefault();
+      sep.setPointerCapture(e.pointerId);
+      sep.classList.add('drag');
+      document.body.classList.add('cv-resizing');
+    });
+    sep.addEventListener('pointermove', e => {
+      if (!sep.classList.contains('drag')) return;
+      const r = split.getBoundingClientRect(), w = sep.offsetWidth;
+      set((e.clientX - r.left - w / 2) / Math.max(1, r.width - w));
+    });
+    const end = () => {
+      if (!sep.classList.contains('drag')) return;
+      sep.classList.remove('drag');
+      document.body.classList.remove('cv-resizing');
+      set(cv.split, true);
+    };
+    sep.addEventListener('pointerup', end);
+    sep.addEventListener('pointercancel', end);
+    sep.addEventListener('dblclick', () => set(0.6, true));
+    sep.addEventListener('keydown', e => {
+      const d = {ArrowLeft: -0.02, ArrowRight: 0.02}[e.key];
+      if (!d) return;
+      e.preventDefault();
+      set(cv.split + d, true);
+    });
   }
 
   // ------------------------------------------------------------ the graph strip
 
   function fetchGraph() {
-    if (!cv.name) return;
+    if (!cv.name || !cv.show.graph) return;
     const gen = ++cv.graphGen;
     cv.graphAt = Date.now();
     // About one bucket per 2 px: finer buckets would only draw as noise.
@@ -938,25 +1192,93 @@
         else if (!cv.follow && end) setFollow(true);
       }
     }, {passive: true});
+    // A click picks a packet, ctrl adds or drops one, shift spans from the last one clicked.
     $('cv-rows').onclick = e => {
       const r = e.target.closest('.cv-row[data-i]');
       if (!r) return;
       const i = Number(r.dataset.i);
       const p = cv.rows.get(i);
-      if (p) select(i, p);
+      const span = e.shiftKey && cv.anchor >= 0, multi = e.ctrlKey || e.metaKey;
+      if (span) pickRange(cv.anchor, i);
+      else if (multi) {
+        if (cv.sel.has(i) && cv.sel.size > 1) cv.sel.delete(i);
+        else cv.sel.add(i);
+        cv.anchor = i;
+      }
+      if (p) select(i, p, span || multi);
+      else queueRows();
       $('cv-table').focus({preventScroll: true});
     };
+    body.addEventListener('contextmenu', rowsMenu);
     $('cv-table').addEventListener('keydown', e => {
       const page = Math.max(1, Math.floor(body.clientHeight / ROW) - 1);
       const moves = {ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page, Home: -1e12, End: 1e12};
       if (!(e.key in moves)) return;
       e.preventDefault();
-      moveSel(moves[e.key]);
+      moveSel(moves[e.key], e.shiftKey);
     });
+    // Ctrl+C: the picked packets, as "Copy rows" does; in the detail, text selected with the
+    // mouse is the browser's to copy, else the picked lines.
+    $('cv-table').addEventListener('copy', e => {
+      const t = rowsText(false);
+      if (t == null) return;
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', t);
+    });
+    $('cv-detail').addEventListener('copy', e => {
+      if (!window.getSelection().isCollapsed || !cv.dsel.size) return;
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', dselText());
+    });
+    $('cv-detail').addEventListener('contextmenu', detailMenu);
+    $('cv-menu').onclick = e => {
+      const b = e.target.closest('button[data-k]');
+      if (!b || !cv.menu) return;
+      const it = cv.menu[Number(b.dataset.k)];
+      it[1]();
+      closeMenu(true);
+    };
+    document.addEventListener('pointerdown', e => { if (!$('cv-menu').contains(e.target)) closeMenu(); }, true);
+    window.addEventListener('blur', () => closeMenu());
+    // Esc closes the menu before it would leave full screen; ↑ ↓ move between its items.
+    window.addEventListener('keydown', e => {
+      const m = $('cv-menu');
+      if (m.hidden) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu(true);
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const bs = [...m.querySelectorAll('button')];
+        const k = bs.indexOf(document.activeElement) + (e.key === 'ArrowDown' ? 1 : -1);
+        bs[(k + bs.length) % bs.length].focus();
+      } else if (e.key === 'Tab') closeMenu();
+    }, true);
+    $('cv-show').onclick = e => {
+      const b = e.target.closest('button[data-part]');
+      if (b) setShown(b.dataset.part, !cv.show[b.dataset.part]);
+    };
+    $('cv-hint-btn').onclick = () => {
+      const open = $('cv-hint').hidden;
+      $('cv-hint').hidden = !open;
+      $('cv-hint-btn').setAttribute('aria-expanded', String(open));
+      queueRows();
+    };
+    setupSplit();
     const fields = $('cv-fields');
+    fields.addEventListener('mousedown', e => {
+      // A shift or ctrl click picks lines: no text selection, no focus jump.
+      if ((e.shiftKey || e.ctrlKey || e.metaKey) && e.target.closest(LINE)) e.preventDefault();
+    });
     fields.addEventListener('click', e => {
       const b = e.target.closest('[data-term]');
-      if (b) addTerm(b.dataset.term, e.shiftKey);
+      if (b) return addTerm(b.dataset.term, e.shiftKey);
+      const line = e.target.closest(LINE);
+      if (line) {
+        pickLine(e, line);
+        $('cv-detail').focus({preventScroll: true});
+      }
     });
     fields.addEventListener('mouseover', e => {
       const f = e.target.closest('[data-off]');
@@ -975,6 +1297,7 @@
     renderChips();
     renderFiles();
     setTimeMode(cv.time);
+    for (const part of ['filter', 'graph']) if (!cv.show[part]) setShown(part, false);
   }
 
   registerTab('packets', {
@@ -993,6 +1316,7 @@
     hide() {
       stopTail();
       clearTimeout(cv.progressTimer);
+      closeMenu();
     },
   });
 

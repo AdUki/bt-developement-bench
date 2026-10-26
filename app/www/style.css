@@ -582,7 +582,28 @@ canvas.cv-graph {
   width: 100%; height: 170px; display: block; background: var(--well); border: 1px solid var(--line);
   border-radius: 6px; cursor: crosshair; touch-action: none;
 }
-.cv-split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0.6rem; margin-top: 0.6rem; }
+/* The list and the detail share the width by the separator between them (capture.js setupSplit
+   sets --cv-l and --cv-r); on a narrow screen they stack and the separator goes. */
+.cv-split {
+  display: grid; grid-template-columns: minmax(0, var(--cv-l, 3fr)) 0.6rem minmax(0, var(--cv-r, 2fr));
+  gap: 0.6rem 0; margin-top: 0.6rem;
+}
+.cv-sep { position: relative; cursor: col-resize; touch-action: none; outline: none; }
+.cv-sep::after {
+  content: ""; position: absolute; top: 0.4rem; bottom: 0.4rem; left: 50%; width: 3px; transform: translateX(-50%);
+  border-radius: 2px; background: var(--line-soft);
+}
+.cv-sep:hover::after, .cv-sep.drag::after, .cv-sep:focus-visible::after { background: var(--accent); }
+body.cv-resizing { cursor: col-resize; user-select: none; }
+/* The parts the head's "filter" and "graph" switches hide, for a taller list. */
+#cv.hide-filter .cv-fpart, #cv.hide-graph .cv-graph-wrap { display: none; }
+#cv-hint-btn { color: var(--muted); }
+#cv-hint-btn:hover { color: var(--fg); text-decoration: none; }
+#cv-hint-btn::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 0.45rem; border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0; transform: translateY(-1px) rotate(-45deg); transition: transform 0.12s;
+}
+#cv-hint-btn[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
 .cv-table { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); outline: none; min-width: 0; overflow: hidden; }
 .cv-table:focus-visible { border-color: var(--accent); }
 .cv-head, .cv-row {
@@ -590,7 +611,8 @@ canvas.cv-graph {
   gap: 0 0.4rem; padding: 0 0.4rem; align-items: center;
 }
 .cv-head { height: 24px; font-size: 0.75rem; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); }
-.cv-body { height: 440px; overflow-y: auto; overflow-x: hidden; position: relative; }
+/* No text selection in the list: rows are picked with click, ctrl and shift and copied whole. */
+.cv-body { height: 440px; overflow-y: auto; overflow-x: hidden; position: relative; user-select: none; }
 .cv-rows { position: absolute; top: 0; left: 0; right: 0; }
 .cv-row {
   height: 22px; font: 12px/22px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; white-space: nowrap;
@@ -608,13 +630,16 @@ canvas.cv-graph {
 .cv-row.err { color: var(--bad); }
 .cv-row:hover { background: var(--well); }
 .cv-row.sel, .cv-row.sel .cv-dir, .cv-row.sel i { background: var(--accent); color: var(--on-accent); }
+/* Of several picked, the one in the detail. */
+.cv-row.cur { box-shadow: inset 0 0 0 1px var(--on-accent); }
 .cv-row i { font-style: normal; }
 .cv-wait { color: var(--muted); cursor: default; }
 .cv-empty { padding: 1rem; }
 .cv-detail {
   border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 0.5rem;
-  min-width: 0; max-height: 466px; overflow: auto;
+  min-width: 0; max-height: 466px; overflow: auto; outline: none;
 }
+.cv-detail:focus-visible { border-color: var(--accent); }
 .cv-dhead { margin-bottom: 0.4rem; overflow-wrap: anywhere; }
 .cv-fields { font-size: 0.82rem; }
 .cv-fields details details { margin-left: 0.9rem; }
@@ -622,6 +647,18 @@ canvas.cv-graph {
 .cv-f { padding-left: 1.1rem; overflow-wrap: anywhere; }
 .cv-v { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
 .cv-fields [data-off]:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 3px; }
+.cv-fields .dsel, .cv-fields .dsel:hover { background: color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 3px; }
+/* The copy menu on a right click in the list or the detail. */
+.cv-menu {
+  position: fixed; z-index: 70; min-width: 11rem; padding: 0.25rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 10px 30px rgba(10, 20, 30, 0.2);
+}
+.cv-menu button {
+  display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--fg);
+  padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem;
+}
+.cv-menu button:hover, .cv-menu button:focus { background: var(--well); outline: none; }
+.cv-menu hr { border: 0; border-top: 1px solid var(--line-soft); margin: 0.25rem 0; }
 .cv-hex {
   margin: 0.6rem 0 0; padding: 0.4rem; background: var(--well); border: 1px solid var(--line); border-radius: 6px;
   white-space: pre; overflow-x: auto; font-size: 12px; line-height: 1.5;
@@ -658,6 +695,7 @@ a.small-btn.disabled { opacity: 0.45; cursor: default; }
 .cv-table.cv-tod .cv-head, .cv-table.cv-tod .cv-row { grid-template-columns: 4.4rem 7.8rem 1.7rem 3rem 3.5rem 2.8rem minmax(0, 1fr); }
 @media (max-width: 900px) {
   .cv-split { grid-template-columns: minmax(0, 1fr); }
+  .cv-sep { display: none; }
   .cv-body { height: 360px; }
 }
 @media (max-width: 760px) {
@@ -684,7 +722,6 @@ a.small-btn.disabled { opacity: 0.45; cursor: default; }
 .bar { height: 4px; background: var(--line-soft); border-radius: 2px; overflow: hidden; margin-top: 0.25rem; max-width: 14rem; }
 .bar i { display: block; height: 100%; background: var(--accent); }
 .cv-hex:empty { display: none; }
-details.cv-hint.more-fields { margin: 0.3rem 0; }
 .svc .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 a.btn-link { display: inline-block; border: 1px solid var(--line); border-radius: 6px; color: var(--fg); text-decoration: none; background: var(--panel); }
 a.btn-link:hover { border-color: var(--accent); color: var(--accent); }

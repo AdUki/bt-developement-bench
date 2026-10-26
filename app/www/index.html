@@ -562,27 +562,30 @@
         <div class="acts">
           <span id="cv-status" class="small muted"></span>
           <label class="switch inline small" id="cv-follow-wrap" hidden><input type="checkbox" id="cv-follow"><i></i> Follow</label>
+          <div class="segs" id="cv-show" role="group" aria-label="Shown">
+            <button class="seg on" data-part="filter" aria-pressed="true">filter</button><button class="seg on" data-part="graph" aria-pressed="true">graph</button>
+          </div>
         </div>
       </div>
-      <div class="row cv-filter">
+      <div class="row cv-filter cv-fpart">
         <input id="cv-filter" class="mono" spellcheck="false" autocomplete="off" aria-label="Filter"
                placeholder='proto:att handle:64 dir:tx len>20 t>=12.5 !evt:0x13 "read request"'>
         <button id="cv-apply">Filter</button>
       </div>
-      <div id="cv-chips" class="cv-chips"></div>
+      <div id="cv-chips" class="cv-chips cv-fpart"></div>
       <div class="row wrap small cv-tools">
         <button class="small-btn" id="cv-stats-btn" aria-expanded="false" aria-controls="cv-stats">Statistics</button>
         <label>Time <select id="cv-time" class="small" aria-label="Time column">
           <option value="rel">since the first packet</option><option value="tod">time of day</option><option value="delta">since the row above</option>
         </select></label>
+        <button class="link-btn cv-fpart" id="cv-hint-btn" aria-expanded="false" aria-controls="cv-hint">Filter syntax</button>
         <span class="grow"></span>
         <label class="check" title="Put in the packets btmon needs to decode the matches too (connections, L2CAP and AVDTP signalling, GATT discovery), and the context the file began with">
           <input type="checkbox" id="cv-ctx"> with context</label>
         <a class="small-btn btn-link" id="cv-save" download title="The matching packets as a btsnoop file (btmon -r, Wireshark)">Save matches</a>
       </div>
       <div id="cv-stats" class="cv-stats" hidden></div>
-      <details class="small muted cv-hint more-fields">
-        <summary>Filter syntax</summary>
+      <div id="cv-hint" class="small muted cv-hint cv-fpart" hidden>
         <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value;
           <code>a b || c</code> matches either group; the quick filters combine this way (click several).
           <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
@@ -596,7 +599,7 @@
           is searched in the summaries (case-insensitive) — slower, so on a big file the results arrive over a few seconds.
           Drag across the graph to select a time range; click it to jump there. In a packet's detail, a term under
           its summary adds it to the filter (shift-click: without it).</p>
-      </details>
+      </div>
       <div class="cv-graph-wrap">
         <div class="row wrap small">
           <select id="cv-conn" class="small" aria-label="Connection"></select>
@@ -606,18 +609,21 @@
         </div>
         <canvas id="cv-graph" class="cv-graph"></canvas>
       </div>
-      <div class="cv-split">
+      <div class="cv-split" id="cv-split">
         <div class="cv-table" id="cv-table" tabindex="0">
           <div class="cv-head"><span>No.</span><span id="cv-time-h">time (s)</span><span class="cv-c-d">dir</span><span class="cv-c-h">handle</span><span>proto</span><span class="cv-c-l">len</span><span>summary</span></div>
           <div class="cv-body" id="cv-body"><div id="cv-spacer"></div><div class="cv-rows" id="cv-rows"></div></div>
         </div>
-        <div class="cv-detail">
+        <div class="cv-sep" id="cv-sep" role="separator" aria-orientation="vertical" aria-label="Packet list width"
+             aria-valuemin="20" aria-valuemax="85" tabindex="0"></div>
+        <div class="cv-detail" id="cv-detail" tabindex="0">
           <div id="cv-dfields">
             <div id="cv-fields" class="cv-fields"></div>
             <pre id="cv-hex" class="cv-hex"></pre>
           </div>
         </div>
       </div>
+      <div id="cv-menu" class="cv-menu" role="menu" hidden></div>
     </div>
     <details class="card small">
       <summary>Watch live in Wireshark on your PC</summary>

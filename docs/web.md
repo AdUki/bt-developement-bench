@@ -271,7 +271,8 @@ written is marked). *Follow* is on while the table is at the end: new packets ar
 they are written and the table stays at the bottom; scrolling up switches it off (nothing is
 fetched then), scrolling back to the end or ticking it switches it on. At a rotation the view
 moves to the new file. Everything below is the same for an old file and for the live end:
-- a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax is under the box and in
+- a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax opens under *Filter syntax*
+  beside *Statistics*, and is in
   [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
   ATT, SMP, AVDTP, media, AVRCP, RFCOMM, MGMT (what bluetoothd asks the kernel, by name), errors,
   marks and logs, slow TX. They combine: a click adds one or takes it away, and the ones picked are
@@ -285,10 +286,17 @@ moves to the new file. Everything below is the same for an old file and for the 
   above), direction, handle, protocol, length and summary (TX latency for completed TX packets),
   coloured by kind and direction, errors in red, marks highlighted. Only the rows on screen are
   fetched, so a 300 000-packet file scrolls like a small one. ↑ ↓, Page Up/Down, Home and End
-  move the selection;
+  move the selection. Ctrl-click adds or drops a packet, shift-click (or shift with the arrows)
+  picks a range of up to 5000; a right click copies the picked rows as shown, columns lined up,
+  or only their summaries, and Ctrl+C copies the rows;
 - the selected packet decoded: a tree of fields, and the hex dump with offsets. Hovering a field
   highlights its bytes; the terms under the summary add themselves to the filter on a click
-  (shift: negated);
+  (shift: negated). Lines of the tree are picked the same way (click, ctrl, shift); a right click
+  copies text selected with the mouse, the picked lines (indented as in the tree), all the fields,
+  the hex dump or the bytes as plain hex, and Ctrl+C copies the picked lines;
+- the separator between the table and the detail drags (or ← → when focused, a double click
+  puts it back), and *filter* and *graph* in the head put away the filter (box, quick filters,
+  syntax) and the graph strip for a taller table; this browser remembers both;
 - *Statistics*: what the filter matches, by protocol and by link, with the TX latency percentiles;
   *Save matches* downloads them as a btsnoop file (*with context*: with what btmon needs to decode
   them).
