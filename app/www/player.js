@@ -702,26 +702,39 @@ function devSvg(address) {
 // broadcast can be the other channel of the one picked (a left and a right broadcast are one
 // stereo input). How the input does — waiting for the device's audio, why it failed — is said in
 // its row. A device that stops sending stays the input and plays again when it resumes; one that
-// failed or disconnected is not retried by itself, picking it again is the retry.
+// failed or disconnected is not retried by itself, picking it again is the retry. The row is lit
+// only while its audio plays: picked, and waiting for the device's audio, it shows the dots, and
+// one that failed or stopped sending is not lit. Disconnect takes it off (the route has no input;
+// the device stays connected).
 function renderInputs() {
   const inp = pl.route ? pl.route.input : {type: 'none', devices: [], state: 'idle'};
   const ls = loadedStream();
-  const stateText = on => !on ? '' : inp.state === 'waiting' ? (inp.error ? 'not sending' : 'waiting for its audio…') : inp.state === 'failed' ? 'failed' : 'the input';
-  const row = (attrs, on, icon, title, sub, state, extra) => `<div class="tr lib in-row${on ? ' now' : ''}" ${attrs}>
+  const pick = pl.inPick;
+  const busyOf = on => on && (pick ? pick.what !== 'none' : inp.state === 'waiting' && !inp.error);
+  const stateText = on => !on ? '' : pick && pick.what !== 'none' ? 'connecting…' : inp.state === 'waiting' ? (inp.error ? 'not sending' : 'waiting for its audio…')
+    : inp.state === 'failed' ? 'failed' : 'the input';
+  const off = `<button class="small-btn" data-in-off${pick ? ' disabled' : ''}>${pick && pick.what === 'none' ? '<span class="dots"></span>' : ''}Disconnect</button>`;
+  const row = (attrs, on, icon, title, sub, state, extra) => {
+    const lit = on && !busyOf(on) && inp.state !== 'failed' && !(inp.state === 'waiting' && inp.error);
+    return `<div class="tr lib in-row${lit ? ' now' : ''}${busyOf(on) ? ' busy' : ''}" ${attrs}>
       <span class="tr-n tr-art">${svg(icon)}</span>
       <span class="tr-t">${esc(title)}${sub ? `<span class="muted">${esc(sub)}</span>` : ''}</span>
-      ${state ? `<span class="tr-fmt${on && inp.state === 'failed' ? ' bad-text' : ''}">${esc(state)}</span>` : ''}${extra || ''}</div>`;
-  const err = on => on && inp.state === 'failed' && inp.error ? `<div class="empty-line bad-text in-err">${esc(inp.error)}</div>` : '';
-  const local = inp.type === 'local';
+      ${state ? `<span class="tr-fmt${on && inp.state === 'failed' ? ' bad-text' : ''}">${busyOf(on) ? '<span class="dots"></span>' : ''}${esc(state)}</span>` : ''}${extra || ''}${on ? off : ''}</div>`;
+  };
+  const err = on => on && !pick && inp.state === 'failed' && inp.error ? `<div class="empty-line bad-text in-err">${esc(inp.error)}</div>` : '';
+  // The row picked, until the board answered: shown as the input on the way. Disconnect keeps the
+  // input's row as it is, its button showing the dots.
+  const to = pick && pick.what !== 'none' ? pick.what : null;
+  const local = to ? to === 'local' : inp.type === 'local';
   let html = '<div class="in-head small muted">This board</div>' +
     row('data-in="local"', local, ls ? streamKind(ls).icon : PL_SVG.note, ls ? streamTitle(ls) : 'Nothing loaded',
       ls ? streamKind(ls).what + (ls.paused && !local ? ', paused' : '') : 'pick a station, tracks or a test signal in the library',
-      local ? 'the input' : '');
+      local ? stateText(true) : '');
   const rows = btInputs();
   const pairing = inp.type === 'bluetooth' && inp.devices.length === 1 && inp.devices[0].kind === 'broadcast'
     ? rows.find(r => r.kind === 'broadcast' && sameAddr(r.address, inp.devices[0].address)) : null;
   const rowHTML = (r, i) => {
-    const on = isRouted(r);
+    const on = to ? to === r.kind + '|' + r.address.toUpperCase() : isRouted(r);
     const sub = [KIND_WORDS[r.kind], r.codec, r.title, r.members && r.members.length > 1 ? `${r.members.length} devices` : '',
       r.side ? (r.side < 0 ? 'left channel' : 'right channel') : '',
       r.players.length ? r.players.map(p => p.name || (isMcp(p) ? 'media control' : 'player')).join(', ') : ''].filter(Boolean).join(' · ');
@@ -740,7 +753,9 @@ function renderInputs() {
     // listed, not pickable until they have streams.
     const reading = (pl.la.sources || []).filter(x => !rows.some(r => r.kind === 'broadcast' && sameAddr(r.address, x.address)))
       .map(x => row('', false, PL_SVG.bt, x.name || devName(x.address), 'Auracast', 'reading its streams…')).join('');
-    html += `<div class="in-head small muted in-bc-head">Auracast<button class="small-btn" data-in-scan>${rx.discovering ? 'Stop scan' : 'Scan'}</button></div>` +
+    // The dots while it scans, and while a start or stop is on the way.
+    const dots = rx.discovering || pl.scanBusy ? '<span class="dots"></span>' : '';
+    html += `<div class="in-head small muted in-bc-head">Auracast<button class="small-btn" data-in-scan${pl.scanBusy ? ' disabled' : ''}>${dots}${rx.discovering ? 'Stop scan' : 'Scan'}</button></div>` +
       (some(true) + reading || `<div class="empty-line">${rx.discovering ? 'Scanning for Auracast broadcasts…' : 'No broadcast found yet: scan for the ones in range.'}</div>`);
   }
   setHTML($('np-inputs'), html);
@@ -748,8 +763,14 @@ function renderInputs() {
 }
 
 // An input picked. A broadcast not received yet is received first (its node comes once the board
-// synced to it); a phone that is not playing is asked once to play, never paused later.
+// synced to it); a phone that is not playing is asked once to play, never paused later. Until the
+// board answered, the row picked shows the dots (pl.inPick: "local", "<kind>|<address>" or "none").
 function pickInput(input, r) {
+  const d = (input.devices || [])[0];
+  const what = input.type === 'local' ? 'local' : input.type === 'none' ? 'none' : d ? d.kind + '|' + d.address.toUpperCase() : '';
+  const pick = pl.inPick = what ? {what} : null;
+  const done = () => { if (pl.inPick === pick) { pl.inPick = null; renderInputs(); } };
+  renderInputs();
   const pre = [];
   if (r && r.kind === 'broadcast' && r.state === 'in range') pre.push(receiveBroadcast({transports: r.transports}, true));
   if (r && r.players.length && !r.players.some(p => p.status === 'playing')) {
@@ -763,11 +784,12 @@ function pickInput(input, r) {
   const ruled = v => { const e = outEndpoint(v); return e && v.startsWith(kind + ':') && outBlocked(e, input); };
   const outs = routeOuts(), keep = outs.filter(v => !ruled(v));
   const body = keep.length === outs.length ? {input} : {input, outputs: outSinks(keep)};
-  return Promise.all(pre).then(() => put('/audio/route', body)).then(setRoute).catch(fail);
+  return Promise.all(pre).then(() => put('/audio/route', body)).then(r => { done(); setRoute(r); }).catch(e => { done(); fail(e); });
 }
 
 function inputClick(e) {
   if (e.target.closest('[data-in-scan]')) { broadcastScan(); return true; }
+  if (e.target.closest('[data-in-off]')) { if (!pl.inPick) pickInput({type: 'none'}); return true; }
   const pair = e.target.closest('[data-in-pair]');
   if (pair) {
     const r = pl.inRows[parseInt(pair.dataset.inPair, 10)];
@@ -790,10 +812,13 @@ const rxAdapter = () => (pl.la ? pl.la.adapters : []).find(a => a.receiver) || n
 // Scan for broadcasts (an LE scan of 30 s on that adapter, as Audio → LE Audio does), or stop it.
 function broadcastScan() {
   const a = rxAdapter();
-  if (!a) return;
+  if (!a || pl.scanBusy) return;
   const on = !a.discovering;
+  const over = () => { pl.scanBusy = false; renderInputs(); };
+  pl.scanBusy = true;
+  renderInputs();
   post('/bluetooth/scan', on ? {on: true, adapter: a.adapter, transport: 'le', seconds: 30} : {on: false, adapter: a.adapter})
-    .then(refreshLa).catch(fail);
+    .then(refreshLa).then(over).catch(e => { over(); fail(e); });
 }
 
 // ---------------------------------------------------------------- the library
@@ -1401,14 +1426,58 @@ function outOptions(browser, o = pl) {
 // The adapter that can broadcast (its broadcast endpoint registered by PipeWire), or null.
 const bcastAdapter = () => (pl.la ? pl.la.adapters : []).find(a => a.broadcaster && a.pac) || null;
 
-// The buttons for outputs `cur` on, with the switch `sw` under way: each one on or off by itself;
-// one on that is not there any more (a speaker gone) stays, greyed.
-function outButtonsHTML(opts, cur, sw, o = pl) {
+// When this view first saw an output's Bluetooth link in a state other than streaming while its
+// sink plays (stream id|value → {state, at}). A link idle for LINK_MS failed: nobody acquired it, or
+// BlueZ's Acquire failed (right after a device connected that is common). One pending is being
+// acquired, which BlueZ gives up on after 25 s (seen on the bench): failed only past ACQUIRE_MS.
+const LINK_MS = 8000, ACQUIRE_MS = 30000;
+const linkSeen = {};
+function linkLate(b, v, state) {
+  const k = b.id + '|' + v;
+  if (!state || state === 'active') { delete linkSeen[k]; return false; }
+  if (!linkSeen[k] || linkSeen[k].state !== state) linkSeen[k] = {state, at: Date.now()};
+  return Date.now() - linkSeen[k].at > (state === 'pending' ? ACQUIRE_MS : LINK_MS);
+}
+
+// What one of stream `b`'s outputs does, for its button: 'on' (it plays, and its Bluetooth link
+// streams), 'busy' (opening, or its link starting) or 'bad' (it would not open, takes no audio, or
+// its link did not stream).
+function sinkState(b, v, o = pl) {
+  const ss = outStatusOf(b, v);
+  const seq = b.sink_seq != null ? b.sink_seq : (b.sink_status || {}).seq;
+  if (!ss) return b.sink_req != null && seq < b.sink_req ? 'busy' : 'bad';
+  if (ss.state === 'starting') return 'busy';
+  if (ss.state !== 'playing') return 'bad';
+  // An A2DP or LE Audio output whose link BlueZ has not shown yet is waited for like an idle one
+  // (HFP has no transport of BlueZ's to wait for).
+  const e = outEndpoint(v, o), t = outTransport(v, o);
+  const link = t ? t.state : e && e.address && /^(a2dp|bap)/.test(e.profile || '') ? 'none' : null;
+  return linkLate(b, v, link) ? 'bad' : link && link !== 'active' ? 'busy' : 'on';
+}
+
+// An output's button, from the real state: lit only once it plays — while it opens and its link
+// starts it shows the dots, and one that failed is not lit (tapping it again is the retry). With
+// nothing playing (`b` null) an output on is only chosen, and is lit. The switch `sw` this view
+// asked for shows the dots until the board answered it.
+function outState(v, cur, b, sw, o = pl) {
+  if (sw && sw.value === v && sw.phase === 'failed') return 'bad';
+  if (sw && sw.value === v && sw.phase !== 'done') return 'busy';
+  if (!(v === 'none' ? !cur.length : cur.includes(v))) return '';
+  if (v === 'browser') return pl.hearId && (npAudio.paused || npAudio.readyState < 3) ? 'busy' : 'on';
+  if (!b || v === 'none') return 'on';
+  const vs = v === BCAST ? routeOuts().filter(isBcastOut) : [v];
+  const st = vs.map(x => sinkState(b, x, o));
+  return st.includes('bad') ? 'bad' : st.includes('busy') ? 'busy' : 'on';
+}
+
+// The buttons for outputs `cur` on, of stream `b` (null: nothing plays), with the switch `sw`
+// under way: each one on or off by itself; one on that is not there any more (a speaker gone)
+// stays, greyed.
+function outButtonsHTML(opts, cur, sw, o = pl, b = null) {
   cur.forEach(v => { if (!opts.some(x => x.value === v)) opts.push({value: v, name: outName(v, o), sub: 'not connected', icon: PL_SVG.bt, gone: true}); });
   return opts.map(x => {
-    const busy = sw && sw.phase !== 'failed' && sw.phase !== 'done' && sw.value === x.value;
-    const bad = sw && sw.phase === 'failed' && sw.value === x.value;
-    const on = !busy && !bad && !x.off && (x.value === 'none' ? !cur.length : cur.includes(x.value));
+    const st = x.off ? '' : outState(x.value, cur, b, sw, o);
+    const busy = st === 'busy', bad = st === 'bad', on = st === 'on';
     const cls = 'np-o' + (on ? ' on' : '') + (busy ? ' busy' : '') + (bad ? ' bad' : '') + (x.gone ? ' gone' : '');
     const sub = x.off || x.sub;
     return `<button class="${cls}" data-out="${esc(x.value)}" aria-pressed="${on}"${x.off ? ' disabled' : ''}>` +
@@ -1426,8 +1495,18 @@ const curOuts = () => {
 function renderOuts() {
   const b = outStream();
   swAdvance(pl.sw, b);
+  // A switch that failed is over once its output plays after all (put back by another browser,
+  // or by the board when the device came again).
+  if (pl.sw && pl.sw.phase === 'failed' && b && curOuts().includes(pl.sw.value) && outState(pl.sw.value, curOuts(), b, null) === 'on') pl.sw = null;
+  // One this view turned on that failed is taken off the outputs again: not lit is off, and the
+  // next tap is the retry.
+  const sw = pl.sw;
+  if (sw && sw.phase === 'failed' && sw.add && !sw.dropped && sw.value !== BCAST && routeOuts().includes(sw.value)) {
+    sw.dropped = true;
+    put('/audio/route', {outputs: outSinks(routeOuts().filter(x => x !== sw.value))}).then(setRoute).catch(() => refreshRoute());
+  }
   // Not before the board's outputs and the route are known: the buttons would show nothing lit.
-  if ((pl.endpoints || pl.endpointsFailed) && pl.route) setHTML($('np-outs'), outButtonsHTML(outOptions(true), curOuts(), pl.sw));
+  if ((pl.endpoints || pl.endpointsFailed) && pl.route) setHTML($('np-outs'), outButtonsHTML(outOptions(true), curOuts(), pl.sw, pl, b));
   // A good line (everything plays where it should) is said for a few seconds and then cleared:
   // the lit buttons say it from there. Anything else stays, and a change says it again.
   const st = outStatus(b), key = st.cls + st.html;
@@ -1452,7 +1531,7 @@ const andList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') +
 
 // One of a stream's outputs in words, from its sink status `k`: {cls, html}, and for one that
 // plays `what` (its name and codec), which outLine says of all of them at once.
-function sinkLine(k, o) {
+function sinkLine(k, o, b) {
   const v = sinkOut(k), name = `<b>${esc(outName(v, o))}</b>`, mid = `<b>${esc(outInSentence(v, o))}</b>`;
   if (k.state === 'starting') return {cls: 'busy', html: `Opening ${mid}…`};
   if (k.state === 'failed') return {cls: 'bad', html: `Lost ${mid}: ${esc(outReason(k.error))}.`};
@@ -1460,7 +1539,10 @@ function sinkLine(k, o) {
   if (k.state === 'stalled') {
     return {cls: 'bad', html: `${name} takes no audio` + (t ? ` (its Bluetooth link is ${esc(t.state)})` : '') + '.'};
   }
-  if (t && t.state !== 'active') return {cls: 'warn', html: `${name} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.`};
+  if (t && t.state !== 'active') {
+    return b && linkLate(b, v, t.state) ? {cls: 'bad', html: `${name}’s Bluetooth link did not start streaming (it is ${esc(t.state)}): tap it to try again.`}
+      : {cls: 'warn', html: `${name} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.`};
+  }
   const codec = t && t.codec ? ` · ${esc(t.codec.name)}${t.codec.rate ? ' ' + t.codec.rate / 1000 + ' kHz' : ''}` : '';
   return {cls: 'good', what: mid + codec};
 }
@@ -1478,7 +1560,7 @@ function outLine(b, sw, o = pl) {
       linking: `<b>${esc(outName(sw.value, o))}</b> takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase]};
   }
   if (!b) return null;
-  const lines = (b.sinks_status || []).map(k => sinkLine(k, o));
+  const lines = (b.sinks_status || []).map(k => sinkLine(k, o, b));
   if (!lines.length) return null;
   const good = lines.filter(l => l.cls === 'good'), rest = lines.filter(l => l.cls !== 'good');
   const worst = ['bad', 'busy', 'warn'].find(c => rest.some(l => l.cls === c));
@@ -1536,8 +1618,15 @@ function swAdvance(sw, b, o = pl) {
   }
   if (ss.state === 'playing') {
     const t = outTransport(sw.value, o);
-    // A Bluetooth link takes a moment to start streaming; past 8 s the steady line says how it is.
-    sw.phase = t && t.state !== 'active' && late < 8000 ? 'linking' : 'done';
+    // A Bluetooth link takes a moment to start streaming; one that does not failed (linkLate: idle
+    // for LINK_MS, or still being acquired past ACQUIRE_MS).
+    if (t && linkLate(b, sw.value, t.state)) {
+      sw.phase = 'failed';
+      sw.error = `its Bluetooth link did not start streaming (it is ${t.state})`;
+      return;
+    }
+    sw.phase = t && t.state !== 'active' ? 'linking' : 'done';
+    return;
     return;
   }
   sw.phase = 'done';  // not among its sinks: nothing to follow
@@ -1555,14 +1644,20 @@ function pickOut(v) {
     if (pl.endpoints && pl.endpoints.sinks.some(isBcast)) return;
     return startBroadcastOut();
   }
-  const next = nextOuts(routeOuts(), v);
+  const b = outStream();
+  // One on that failed (not lit) is tried again: taken off and put back, so the board opens it
+  // anew (a sink that stalls or whose link did not stream is still open, and would be kept).
+  const retry = !!b && routeOuts().includes(v) && outState(v, curOuts(), b, pl.sw) === 'bad';
+  const next = retry ? routeOuts() : nextOuts(routeOuts(), v);
   if (next.length > MAX_OUTS) { toast(`The board plays to at most ${MAX_OUTS} outputs at once.`); return; }
-  const b = outStream(), add = next.includes(v);
+  const add = next.includes(v);
   const sw = b ? {value: v, add, phase: 'asking', at: Date.now(), seq: null} : null;
   pl.sw = sw;
   pl.route.outputs = outSinks(next);
+  delete linkSeen[(b || {}).id + '|' + v];
   renderOuts();
-  put('/audio/route', {outputs: outSinks(next)}).then(r => {
+  (retry ? put('/audio/route', {outputs: outSinks(next.filter(x => x !== v))}) : Promise.resolve())
+    .then(() => put('/audio/route', {outputs: outSinks(next)})).then(r => {
     const u = r.updated;
     delete r.updated;
     pl.route = r;

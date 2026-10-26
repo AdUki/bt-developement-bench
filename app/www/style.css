@@ -844,6 +844,11 @@ td.acts > * { margin-right: 0.25rem; }
 .in-row { box-shadow: inset 3px 0 0 transparent; }
 .in-row.now { box-shadow: inset 3px 0 0 var(--accent); background: var(--well); }
 .in-row.now .tr-n svg { fill: none; stroke: currentColor; }
+/* The input picked and not playing yet (its device's audio waited for): the mark faint, the dots
+   in its state. */
+.in-row.busy { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+.in-row .tr-fmt .dots { margin-right: 0.25em; }
+.in-row [data-in-off] { flex: none; }
 .in-err { padding-top: 0; padding-left: 2.7rem; }
 .tr-t .muted { font-size: 0.8rem; }
 .tr-d { color: var(--muted); font-size: 0.8rem; }

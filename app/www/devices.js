@@ -88,6 +88,7 @@ function adapterInfoHTML(a) {
   ].filter(r => r[1]).map(r => `<span>${r[0]}</span><span>${r[1]}</span>`).join('');
 }
 
+let scanBusy = false;  // a scan's start or stop asked for, until the adapter's state after it is here
 function renderAdapter(b) {
   const a = selAdapter(b);
   const as = b.adapters || [];
@@ -120,7 +121,9 @@ function renderAdapter(b) {
     if (idle($('ag-cap'))) $('ag-cap').value = b.agent.capability;
   }
   const d = (a && a.discovery) || {};
-  setText($('sc-toggle'), d.on ? 'Stop' : 'Scan');
+  // The dots while it scans, and while a start or stop is on the way (scanBusy).
+  setHTML($('sc-toggle'), (d.on || scanBusy ? '<span class="dots"></span>' : '') + (d.on ? 'Stop' : 'Scan'));
+  if (scanBusy) $('sc-toggle').disabled = true;
   const how = renderScanOptions(b);
   setText($('sc-state'), d.on
     ? `Scanning${how ? ' (' + how + ')' : ''}${d.until_s != null ? ', ' + d.until_s + ' s left' : ''}${d.ours ? '' : ' (started elsewhere)'}`
@@ -637,7 +640,10 @@ function setupDevices() {
     if (pat) body.pattern = pat;
     if ($('sc-disc').checked && scSupports('Discoverable')) body.discoverable = true;
     if ($('sc-auto').checked && !$('sc-auto').disabled) body.auto_connect = true;
-    post('/bluetooth/scan', body).then(() => setTimeout(refreshBt, 300)).catch(fail);
+    const over = () => { scanBusy = false; if (btState) renderAdapter(btState); };
+    scanBusy = true;
+    if (btState) renderAdapter(btState);
+    post('/bluetooth/scan', body).then(() => setTimeout(() => refreshBt().then(over), 300)).catch(e => { over(); fail(e); });
   };
   $('dev-list').addEventListener('change', e => {
     if (e.target.classList.contains('dev-pref'))

@@ -711,7 +711,8 @@ has not started sending, waited for 15 s; or it stopped sending, `error` "… st
 waited for as long as BlueZ has a transport of it, so its play button brings the audio back),
 `playing`, `failed` (`error` says why: nothing came within 15 s, it disconnected while stopped, a broadcast ended, two
 broadcasts that are not a left and a right one). A failed input is not retried: the same input put
-again is the retry. `stream` is the stream playing the input (a
+again is the retry. The capture stopped by hand (`DELETE /api/audio/streams/{stream}`, Audio → Streams' Stop) ends
+the input: the route has none (`none`, `idle`) and does not record the device again. `stream` is the stream playing the input (a
 capture the route made of the device, or the local stream), `null` without; `local` the board's own
 stream loaded, playing or paused while a device is the input.
 

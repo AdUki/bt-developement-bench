@@ -67,10 +67,13 @@ Tapping a row makes it the input; the one before goes quiet — a phone is left 
 disconnected), the board's playlist pauses with its queue kept, a test signal stops. A broadcast not
 received yet is received first, a phone that is not playing is asked once to play. The input row
 says when the board waits for the device's audio (15 s at most) and why it failed; nothing is
-retried by itself, tapping it again is the retry. A broadcast that carries one channel offers
+retried by itself, tapping it again is the retry. The row is lit only while its audio plays:
+picked and waiting for the device it shows the dots, and failed or not sending it is not lit.
+*Disconnect* on the input's row leaves the board with no input (the device stays connected); a
+capture stopped in Audio → Streams does the same. A broadcast that carries one channel offers
 *+ as left* / *+ as right* on the other channel's broadcasts while it is the input: the two are then
 one stereo input. On a board whose adapter can receive broadcasts, the broadcasts are a section of
-their own, *Auracast*, with *Scan* (an LE scan of 30 s, as in Audio → LE Audio): a broadcaster heard
+their own, *Auracast*, with *Scan* (dots while it scans; an LE scan of 30 s, as in Audio → LE Audio): a broadcaster heard
 whose streams BlueZ has not read yet is listed as *reading its streams…* until it can be picked.
 
 *Library*, a page of its own so long folders get the screen: the phone's own folders and search
@@ -104,7 +107,10 @@ button for its BISes (a left and a right one too): on with none, it starts a ste
 but cannot be turned on (it would get its own audio back), nor can Auracast while the input is a
 broadcast, and picking such an input takes those outputs off. Up to four of the board's at once; they are the board's, stay when the input changes,
 and change what plays at once: an output tapped joins (or leaves) the ones playing, which carry on
-untouched. The line under the buttons says what the board is doing — opening the output, waiting
+untouched. A button is lit only once its output plays: while it opens and its Bluetooth link
+starts (BlueZ's Acquire) it shows the dots, and one that would not open, takes no audio or whose
+link does not stream within 8 s is not lit (a switch tapped here that fails takes it off the
+outputs again; tapping it is the retry). The line under the buttons says what the board is doing — opening the output, waiting
 for the Bluetooth link to stream, *Playing on … · codec and … · codec* — or why it could not (a
 speaker not connected, one that went away, one that takes no audio: the others play on without
 it); a line that says all plays well is cleared after 5 s. Nothing is retried on its own: a

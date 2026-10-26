@@ -609,6 +609,15 @@ void AudioRoute::run() {
                                         " s: start playing on it, then pick it again");
         }
       }
+    } else if (type_ == "bluetooth" && capture_ && engine_.get(capture_).is_null()) {
+      // The capture was removed by hand (Audio → Streams' Stop, DELETE /api/audio/streams/{id}):
+      // that is the input stopped, not the device going quiet, so it is not waited for and bound
+      // again — it would come right back.
+      capture_ = 0;
+      devices_.clear();
+      type_ = "none";
+      LOG_INFO("route: the input's stream was stopped; the route has no input");
+      set_input_state("idle", "");
     } else if (type_ == "bluetooth" && capture_ && !stream_alive(capture_)) {
       // Its audio went away: the device paused or stopped (its node goes with the stream), remade
       // its node for another codec, or disconnected. The input stays that device, waited for while
