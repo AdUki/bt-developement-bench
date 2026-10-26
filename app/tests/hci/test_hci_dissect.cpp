@@ -478,6 +478,34 @@ void test_intel_vendor() {
   d = run_mon(btb::hci::kMonCommand, "8bfc0b0a2601fff901ffbe000000", 0, 0, nullptr, 15);  // Broadcom
   CHECK_EQ(d.summary, std::string("Vendor 0xfc8b"));
 
+  // Intel's vendor events, built per btintel.h and btmon's intel.c (the boards' captures start
+  // after the bootloader and had none): the bootloader's bootup, the operational firmware's after
+  // Intel Reset, a firmware file the controller refused, an exception.
+  d = intel_evt("ff0702000100000000");
+  CHECK_EQ(d.summary, std::string("Intel Bootup bootloader (power on)"));
+  CHECK(no_blob(d.fields));
+  d = intel_evt("ff0702000101020200");
+  CHECK_EQ(d.summary, std::string("Intel Bootup firmware (Intel reset command)"));
+  CHECK_EQ(field(d.fields, "Reset type"), std::string("0x02 (soft software reset)"));
+  d = intel_evt("ff05060309fc00");
+  CHECK_EQ(d.summary, std::string("Intel Secure Send Commands Result signature verification failed opcode 0xfc09"));
+  d = intel_evt("ff050134120507");
+  CHECK_EQ(d.summary, std::string("Intel Fatal Exception LM line 4660 reason 0x07"));
+  d = intel_evt("ff06" "2c68656c6c6f");
+  CHECK_EQ(d.summary, std::string("Intel FW Trace String \"hello\""));
+  // Behind the vendor prefix 0x8780: the Microsoft extension's monitor event, then telemetry.
+  d = intel_evt("ff0c878002012e5e36bba3440101");
+  CHECK_EQ(d.summary, std::string("MSFT LE Monitor Device 44:A3:BB:36:5E:2E monitor 1 start"));
+  CHECK(no_blob(d.fields));
+  d = intel_evt("ff14878003010105" "4a020100" "5e04a0860100" "6102c4ff");
+  CHECK_EQ(d.summary, std::string("Intel Extended Telemetry performance stats ACL handle 1"));
+  CHECK_EQ(field(d.fields, "Link throughput"), std::string("100000 bps"));
+  CHECK_EQ(field(d.fields, "RX RSSI moving average"), std::string("-60"));
+  CHECK(no_blob(d.fields));
+  d = evt("ff0702000100000000");
+  CHECK_EQ(d.summary, std::string("Vendor"));
+  CHECK_EQ(field(d.fields, "Data"), std::string("02000100000000"));
+
   // The index learns a controller's company from its Index Info, and from Read Local Version
   // Information where a capture has none.
   btb::hci::Classifier cls;

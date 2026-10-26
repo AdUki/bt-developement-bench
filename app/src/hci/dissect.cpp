@@ -3010,6 +3010,276 @@ std::string intel_return(Rd& r, uint16_t op, size_t n) {
   return s;
 }
 
+// Intel's vendor events (HCI event 0xff): the first byte names the event, except for the ones
+// behind the vendor prefix 0x87 0x80, which Intel's controllers give both the Microsoft
+// extension's events (0x01, 0x02: the prefix its Read Supported Features reports) and their own
+// telemetry (0x03), as btmon's packet.c and intel.c tell them apart.
+const char* intel_evt_name(uint8_t e) {
+  switch (e) {
+    case 0x00: return "Startup";
+    case 0x01: return "Fatal Exception";
+    case 0x02: return "Bootup";
+    case 0x05: return "Default BD Data";
+    case 0x06: return "Secure Send Commands Result";
+    case 0x08: return "Debug Exception";
+    case 0x0f: return "LE Link Established";
+    case 0x11: return "Scan Status";
+    case 0x16: return "Activate Deactivate Traces Complete";
+    case 0x17: return "LMP PDU Trace";
+    case 0x19: return "Write BD Data Complete";
+    case 0x25: return "SCO Rejected via LMP";
+    case 0x26: return "PTT Switch Notification";
+    case 0x29: return "System Exception";
+    case 0x2c: return "FW Trace String";
+    case 0x2e: return "FW Trace Binary";
+    default: return nullptr;
+  }
+}
+
+const char* intel_module_name(uint32_t m) {
+  static const char* const names[] = {nullptr, "BC", "HCI", "LLC", "OS", "LM", "SC", "SP", "OSAL", "LC", "APP", "TLD"};
+  if (m == 0xf0) return "debug";
+  return m < sizeof names / sizeof *names && names[m] ? names[m] : "?";
+}
+
+// The telemetry TLVs (btmon's intel_ext_subevent_table): the link quality counters of an ACL or
+// SCO/eSCO link that the kernel's quality report asks for.
+const char* intel_telemetry_name(uint8_t id) {
+  switch (id) {
+    case 0x01: return "Event type";
+    case 0x4a: return "ACL handle";
+    case 0x4b: return "RX HEC errors";
+    case 0x4c: return "RX CRC errors";
+    case 0x4d: return "Packets from host";
+    case 0x4e: return "TX packets";
+    case 0x4f: return "TX packets, 0 retries";
+    case 0x50: return "TX packets, 1 retry";
+    case 0x51: return "TX packets, 2 retries";
+    case 0x52: return "TX packets, 3 retries";
+    case 0x53: return "TX packets, 4 or more retries";
+    case 0x54: return "TX DH1 packets";
+    case 0x55: return "TX DH3 packets";
+    case 0x56: return "TX DH5 packets";
+    case 0x57: return "TX 2-DH1 packets";
+    case 0x58: return "TX 2-DH3 packets";
+    case 0x59: return "TX 2-DH5 packets";
+    case 0x5a: return "TX 3-DH1 packets";
+    case 0x5b: return "TX 3-DH3 packets";
+    case 0x5c: return "TX 3-DH5 packets";
+    case 0x5d: return "RX packets";
+    case 0x5e: return "Link throughput";
+    case 0x5f: return "Max packet latency";
+    case 0x60: return "Average packet latency";
+    case 0x61: return "RX RSSI moving average";
+    case 0x62: return "RX SNR bad margin count";
+    case 0x63: return "RX RSSI bad count";
+    case 0x64: return "TX RSSI bad count";
+    case 0x6a: return "SCO handle";
+    case 0x6b: return "RX packets";
+    case 0x6c: return "TX packets";
+    case 0x6d: return "RX payloads lost";
+    case 0x6e: return "TX payloads lost";
+    case 0x6f: return "RX no sync errors";
+    case 0x70: return "RX HEC errors";
+    case 0x71: return "RX CRC errors";
+    case 0x72: return "RX NAKs";
+    case 0x73: return "TX failed by Wi-Fi coex";
+    case 0x74: return "RX failed by Wi-Fi coex";
+    case 0x75: return "Late samples inserted";
+    case 0x76: return "Samples dropped";
+    case 0x77: return "Mute samples at connection";
+    case 0x78: return "PLC injection data";
+    default: return nullptr;
+  }
+}
+
+const char* intel_telemetry_type(uint32_t t) {
+  switch (t) {
+    case 0x00: return "system exception";
+    case 0x01: return "fatal exception";
+    case 0x02: return "debug exception";
+    case 0x03: return "BR/EDR connection";
+    case 0x04: return "disconnection";
+    case 0x05: return "performance stats";
+    default: return "?";
+  }
+}
+
+std::string intel_telemetry_value(uint8_t id, const uint8_t* v, size_t n) {
+  if (id == 0x01 && n == 1) return sf("%s (0x%02x)", intel_telemetry_type(v[0]), v[0]);
+  if ((id == 0x4a || id == 0x6a || id == 0x61) && n == 2) return std::to_string(id == 0x61 ? static_cast<int16_t>(le16(v)) : le16(v));
+  if (id >= 0x62 && id <= 0x64 && n == 12) return sf("1M %u, 2M %u, 3M %u", le32(v), le32(v + 4), le32(v + 8));
+  if (id >= 0x6f && id <= 0x74 && n == 20) {
+    return sf("%u %u %u %u %u", le32(v), le32(v + 4), le32(v + 8), le32(v + 12), le32(v + 16));
+  }
+  if (n == 4) return sf(id == 0x5e ? "%u bps" : id == 0x5f || id == 0x60 ? "%u us" : "%u", le32(v));
+  return hexbytes(v, n, 64);
+}
+
+// The parameters of an Intel vendor event (after the event code and length); returns its summary.
+std::string intel_event(Rd& r) {
+  if (!r.has(1)) return "Intel Vendor";
+  const uint8_t* p = r.cur();
+  if (r.has(3) && p[0] == 0x87 && p[1] == 0x80 && p[2] >= 0x01 && p[2] <= 0x03) {
+    r.hex("Vendor prefix", 2);
+    const uint8_t code = static_cast<uint8_t>(r.named("Subevent", 1, [](uint32_t v) {
+      return v == 1 ? "MSFT RSSI Event" : v == 2 ? "MSFT LE Monitor Device" : "Intel Extended Telemetry";
+    }));
+    if (code == 0x02) {  // MSFT LE Monitor Device: a monitored device came in or left range
+      r.atype();
+      const std::string a = r.addr();
+      const uint8_t h = r.u8("Monitor handle");
+      const uint8_t st = static_cast<uint8_t>(r.named("State", 1, [](uint32_t v) {
+        return v == 0 ? "stop monitoring" : v == 1 ? "start monitoring" : "?";
+      }));
+      return sf("MSFT LE Monitor Device %s monitor %u %s", a.c_str(), h, st ? "start" : "stop");
+    }
+    if (code == 0x01) return "MSFT RSSI Event";
+    std::string type, handle;
+    while (r.has(2)) {
+      const uint8_t* t = r.cur();
+      if (!r.has(2u + t[1])) break;
+      const char* name = intel_telemetry_name(t[0]);
+      if (r.o.detail) r.o.add(name ? name : sf("Subevent 0x%02x", t[0]), intel_telemetry_value(t[0], t + 2, t[1]), t, 2u + t[1]);
+      if (t[0] == 0x01 && t[1] == 1) type = intel_telemetry_type(t[2]);
+      if ((t[0] == 0x4a || t[0] == 0x6a) && t[1] == 2) handle = sf(" %s handle %u", t[0] == 0x4a ? "ACL" : "SCO", le16(t + 2));
+      r.skip(2u + t[1]);
+    }
+    return "Intel Extended Telemetry" + (type.empty() ? "" : " " + type) + handle;
+  }
+  const uint8_t code = static_cast<uint8_t>(r.named("Event", 1, [](uint32_t v) {
+    const char* n = intel_evt_name(static_cast<uint8_t>(v));
+    return n ? n : "?";
+  }));
+  const char* name = intel_evt_name(code);
+  std::string s = name ? std::string("Intel ") + name : sf("Intel Vendor 0x%02x", code);
+  switch (code) {
+    case 0x01:  // Fatal Exception
+    case 0x08: {  // Debug Exception: where in the firmware
+      const uint16_t line = r.u16("Line");
+      const char* module = intel_module_name(r.has(1) ? r.cur()[0] : 0);
+      r.named("Module", 1, intel_module_name);
+      const uint8_t reason = r.u8("Reason", "0x%02x");
+      s += sf(" %s line %u reason 0x%02x", module, line, reason);
+      break;
+    }
+    case 0x02: {  // Bootup
+      r.u8("Zero", "0x%02x");
+      r.u8("Number of packets");
+      const uint8_t src = static_cast<uint8_t>(r.named("Source", 1, [](uint32_t v) {
+        return v == 0 ? "bootloader" : v == 1 ? "operational firmware" : v == 2 ? "self test firmware" : "?";
+      }));
+      r.named("Reset type", 1, [](uint32_t v) {
+        static const char* const t[] = {"hardware reset", "soft watchdog reset", "soft software reset",
+                                        "hard watchdog reset", "hard software reset"};
+        return v < 5 ? t[v] : "?";
+      });
+      auto reason = [](uint32_t v) {
+        static const char* const t[] = {"power on", "reset command", "Intel reset command", "watchdog",
+                                        "fatal exception", "system exception"};
+        return v < 6 ? t[v] : v == 0xff ? "unknown" : "?";
+      };
+      const char* why = r.has(1) ? reason(r.cur()[0]) : nullptr;
+      r.named("Reset reason", 1, reason);
+      r.named("DDC status", 1, [](uint32_t v) {
+        static const char* const t[] = {"firmware default", "firmware default plus OTP", "persistent RAM", "not used"};
+        return v < 4 ? t[v] : "?";
+      });
+      s += src == 0 ? " bootloader" : src == 1 ? " firmware" : src == 2 ? " self test" : "";
+      if (why) s += std::string(" (") + why + ")";
+      break;
+    }
+    case 0x05:  // Default BD Data
+      r.named("Memory status", 1, [](uint32_t v) { return v == 2 ? "invalid manufacturing data" : "?"; });
+      break;
+    case 0x06: {  // Secure Send Commands Result: how the firmware file's commands went
+      static const char* const results[] = {"success", "general failure", "hardware failure",
+                                            "signature verification failed", "parsing error of command buffer",
+                                            "command execution failure", "command parameters error", "command missing"};
+      const uint8_t res = static_cast<uint8_t>(r.named("Result", 1, [](uint32_t v) { return v < 8 ? results[v] : "?"; }));
+      const uint16_t op = r.u16("Opcode", "0x%04x");
+      r.status();
+      s += std::string(" ") + (res < 8 ? results[res] : "?");
+      if (res) s += sf(" opcode 0x%04x", op);
+      break;
+    }
+    case 0x0f:  // LE Link Established
+      s += sf(" handle %u", r.handle());
+      r.hex("Link parameters", 8);
+      r.u32("Access address", "0x%08x");
+      break;
+    case 0x11:  // Scan Status
+      r.with("Scan", 1, [](uint32_t v) {
+        return sf("0x%02x (inquiry scan %s, page scan %s)", v, v & 1 ? "on" : "off", v & 2 ? "on" : "off");
+      });
+      break;
+    case 0x16:  // Activate Deactivate Traces Complete
+    case 0x19: {  // Write BD Data Complete
+      const uint8_t st = r.status();
+      if (st) s += " " + status_str(st);
+      break;
+    }
+    case 0x17: {  // LMP PDU Trace: the PDU, then the clock (and an ID) for LMP; a count for LL
+      static const char* const types[] = {"RX LMP", "TX LMP", "ACK LMP", "RX LL", "TX LL", "ACK LL"};
+      const uint8_t type = static_cast<uint8_t>(r.named("Type", 1, [](uint32_t v) { return v < 6 ? types[v] : "?"; }));
+      s += std::string(" ") + (type < 6 ? types[type] : "?");
+      s += sf(" handle %u", r.handle());
+      const size_t left = r.left();
+      if (type == 0 || type == 1) {  // a byte btmon does not name, the PDU, the clock, TX's ID
+        r.hex("Unknown", 1);
+        r.hex("PDU", left >= 5u + type ? left - 5 - type : 0);
+        r.u32("Clock", "0x%08x");
+        if (type == 1) r.u8("ID", "0x%02x");
+      } else if (type == 2) {
+        r.u32("Clock", "0x%08x");
+        r.u8("ID", "0x%02x");
+      } else if (type == 3 || type == 4) {
+        r.u16("Count", "0x%04x");
+        if (type == 4) {
+          r.u8("ID", "0x%02x");
+        } else {
+          r.hex("Unknown", 1);
+        }
+        r.hex("Unknown", 2);
+        r.hex("PDU", r.left());
+      } else if (type == 5) {
+        r.u16("Count", "0x%04x");
+        r.u8("ID", "0x%02x");
+      }
+      break;
+    }
+    case 0x25: {  // SCO Rejected via LMP
+      s += " " + r.addr();
+      const uint8_t why = r.status("Reason");
+      s += " " + status_str(why);
+      break;
+    }
+    case 0x26:  // PTT Switch Notification: which packet table the link now uses
+      s += sf(" handle %u", r.handle());
+      s += r.named("Packet type table", 1, [](uint32_t v) { return v == 0 ? "basic rate" : v == 1 ? "enhanced data rate" : "?"; })
+               ? " EDR" : " BR";
+      break;
+    case 0x29:  // System Exception
+      r.named("Type", 1, [](uint32_t v) {
+        static const char* const t[] = {"no exception", "undefined instruction", "prefetch abort", "data abort"};
+        return v < 4 ? t[v] : "?";
+      });
+      r.hex("Exception data", r.left());
+      break;
+    case 0x2c:  // FW Trace String
+      if (r.left() && mostly_text(r.cur(), r.left())) {
+        const std::string text = printable(r.cur(), r.left(), 255);
+        if (r.o.detail) r.o.add("Text", text, r.cur(), r.left());
+        s += " " + quoted(r.cur(), r.left());
+        r.skip(r.left());
+      }
+      break;
+    default:
+      break;
+  }
+  return s;
+}
+
 void hci_command(Out& o, const uint8_t* d, size_t len) {
   if (len < 3) {
     o.summary = "Command (truncated)";
@@ -5158,7 +5428,11 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
       s = le_meta(o, p, n);
       break;
     case 0xff:
-      if (n) F("Data", hexbytes(p, n, 64), p, n);
+      if (o.manufacturer == kCompanyIntel) {
+        s = intel_event(r);
+      } else if (n) {
+        F("Data", hexbytes(p, n, 64), p, n);
+      }
       break;
     default:
       // The rest that start with status + handle.
