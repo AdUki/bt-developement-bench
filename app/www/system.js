@@ -32,6 +32,11 @@ function renderSystem(s) {
     ${s.board ? `<span>board</span><span class="mono">${esc(Object.entries(s.board).map(e => e.join('=')).join(' '))}</span>` : ''}</div>`);
   renderServices(s.services || {});
   if (idle($('sys-btargs'))) $('sys-btargs').value = s.bluetoothd_args || '';
+  // Empty is the board's MAC name (btbench-59c787), shown as the placeholder while it is the name.
+  if (idle($('sys-name'))) {
+    $('sys-name').value = s.name || '';
+    $('sys-name').placeholder = s.name ? 'btbench-<mac>' : s.hostname || '';
+  }
   logsUnits(Object.keys(s.services || {}));
 }
 
@@ -79,6 +84,21 @@ function setupSystem() {
     post(`/system/services/${encodeURIComponent(b.dataset.restart)}/restart`).then(renderServices).catch(fail)
       .finally(() => { b.disabled = false; });
   };
+  const rename = () => {
+    const hostname = $('sys-name').value.trim().toLowerCase();
+    $('sys-name-save').disabled = true;
+    setHTML($('sys-name-msg'), '<span class="dots"></span>');
+    put('/system/hostname', {hostname}).then(r => {
+      setText($('sys-name-msg'), `the board is ${r.hostname} now`);
+      setText($('hostname'), r.hostname);
+      document.title = r.hostname;
+      $('sys-name').blur();
+      return refreshSystem();
+    }).catch(e => setText($('sys-name-msg'), e.message))
+      .finally(() => { $('sys-name-save').disabled = false; });
+  };
+  $('sys-name-save').onclick = rename;
+  $('sys-name').onkeydown = e => { if (e.key === 'Enter') rename(); };
   $('sys-btargs-save').onclick = () => {
     const args = $('sys-btargs').value.trim();
     const restart = $('sys-btargs-restart').checked;

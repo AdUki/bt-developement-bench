@@ -77,6 +77,31 @@ void test_bluetoothd_args() {
   CHECK(!bluetoothd_args_ok("debug", &err));
 }
 
+// The board's name is a DNS label: it is the mDNS name too.
+void test_board_name() {
+  std::string err;
+  CHECK(board_name_ok("btbench-rpi5", &err));
+  CHECK(board_name_ok("b", &err));
+  CHECK(!board_name_ok("", &err));
+  CHECK(!board_name_ok("BTBench", &err));
+  CHECK(!board_name_ok("-rpi5", &err));
+  CHECK(!board_name_ok("rpi5-", &err));
+  CHECK(!board_name_ok("rpi 5", &err));
+  CHECK(!board_name_ok("rpi5.local", &err));
+  CHECK(!board_name_ok(std::string(64, 'a'), &err));
+
+  char dir[] = "/tmp/btbench-test-XXXXXX";
+  CHECK(mkdtemp(dir) != nullptr);
+  const std::string d = dir;
+  CHECK_EQ(read_board_name(d), std::string());
+  CHECK(write_board_name(d, "btbench-vim3l", &err));
+  CHECK_EQ(read_board_name(d), std::string("btbench-vim3l"));
+  CHECK(write_board_name(d, "", &err));
+  CHECK_EQ(read_board_name(d), std::string());
+  CHECK(write_board_name(d, "", &err));  // already gone: still fine
+  rmdir(dir);
+}
+
 // Only BLUETOOTHD_ARGS is the API's: BLUETOOTHD_NOPLUGIN and comments in the same file survive.
 void test_bluetoothd_env() {
   char dir[] = "/tmp/btbench-test-XXXXXX";
@@ -128,6 +153,7 @@ int main() {
   test_versions();
   test_bluetoothd_args();
   test_bluetoothd_env();
+  test_board_name();
   test_names();
   return report("test_scripts");
 }

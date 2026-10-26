@@ -480,7 +480,8 @@ function renderBtPill(b) {
 
 function renderHealthPills(h) {
   if (!h) return;
-  if (h.hostname) setText($('hostname'), h.hostname);
+  // The board's name in the tab too: with several boards open, the tabs tell them apart.
+  if (h.hostname) { setText($('hostname'), h.hostname); document.title = h.hostname; }
   const p = $('pill-power');
   const bits = [];
   let cls = '';

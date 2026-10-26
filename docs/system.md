@@ -95,7 +95,9 @@ Plug the Zero W's **USB** port (not PWR) into the PC. It is one composite USB de
 and Wi-Fi). `<mac>` is the last three bytes of the board's Wi-Fi MAC address (`btbench-257bfc`):
 every image has the same `/etc/hostname`, and `btbench-hostname.service` puts the MAC after it at
 boot, as a transient hostname, so that several boards on one network each have a name of their
-own. `BTBENCH_HOSTNAME_MAC = "0"` in the device conf keeps the plain name. The boards also
+own. `BTBENCH_HOSTNAME_MAC = "0"` in the device conf keeps the plain name. A name given in the
+console (System → Name: `btbench-rpi5`) replaces it: it is kept in `/data/btbench/hostname`, taken at
+once and at every boot, and emptied it goes back to `btbench-<mac>`; a factory reset clears it. The boards also
 announce themselves as DNS-SD services on mDNS — the web console as `_http._tcp` and ssh as
 `_ssh._tcp`, under the board's name — so a service browser lists every bench in reach without
 knowing its name: `avahi-browse -rt _http._tcp` on a PC, the Bonjour/mDNS browser of a phone.

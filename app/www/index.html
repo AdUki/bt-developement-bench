@@ -723,6 +723,14 @@
   <!-- ======================================================== System -->
   <section id="system" class="panel">
     <div class="pane" data-pane="overview">
+      <div class="card">
+        <h3>Name</h3>
+        <div class="row wrap">
+          <input id="sys-name" class="mono grow" maxlength="63" spellcheck="false" autocapitalize="off" aria-label="The board's name">
+          <button id="sys-name-save" class="primary">Rename</button>
+        </div>
+        <div id="sys-name-msg" class="small muted"></div>
+      </div>
       <div class="cols">
         <div class="card"><h3>Health</h3><div id="sys-health" class="ld"></div></div>
         <div class="card"><h3>Versions</h3><div id="sys-versions" class="ld"></div></div>

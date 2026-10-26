@@ -158,6 +158,9 @@ class BtManager {
   // an alias set to "" goes back to that. Off on a PC, whose adapters are the desktop's.
   // Before start().
   void set_default_alias(bool on);
+  // The hostname changed (PUT /api/system/hostname): every adapter called by it takes the new one
+  // now; an alias set here stays.
+  void hostname_changed();
   // The board's own controller (not on USB) asks for the central role on every link it accepts
   // (the kernel's HCI_LM_MASTER: Accept Connection Request with a role switch), set each time BlueZ
   // shows it. For a Wi-Fi/Bluetooth combo chip that shares its radio badly as a peripheral (the

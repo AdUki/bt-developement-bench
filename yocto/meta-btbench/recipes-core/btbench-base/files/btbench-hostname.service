@@ -1,10 +1,11 @@
 [Unit]
-Description=Put the board's MAC address after its hostname
+Description=Give the board its name: the one given in the console, or its MAC address after the hostname
 # Early and alongside the rest of the boot, not before it: the Wi-Fi interface whose address it
 # takes appears some seconds in, and nothing waits for the name (systemd-resolved's mDNS and
-# networkd's DHCP pick up a changed hostname by themselves).
+# networkd's DHCP pick up a changed hostname by themselves). After /data, where the console's
+# name is kept (a nofail mount is not ordered before local-fs.target).
 DefaultDependencies=no
-After=systemd-udev-trigger.service local-fs.target
+After=systemd-udev-trigger.service local-fs.target data.mount
 Conflicts=shutdown.target
 
 [Service]

@@ -31,6 +31,16 @@ std::string read_bluetoothd_noplugin(const std::string& data_dir);
 // Replaces one variable of bluetoothd.env, keeping the other lines.
 bool write_bluetoothd_env(const std::string& data_dir, const std::string& key, const std::string& value, std::string* err);
 
+// The board's own name (/data/btbench/hostname, docs/contracts.md), given in the console so a
+// person tells the boards apart by what they are (btbench-rpi5) rather than by their MAC
+// (btbench-59c787). btbench-hostname makes it the kernel's hostname at boot and when it changes;
+// with none, the board is btbench-<mac> as before. A DNS label, lower case: it is also the board's
+// mDNS name (btbench-rpi5.local) and its adapters' alias.
+bool board_name_ok(const std::string& name, std::string* err);
+std::string read_board_name(const std::string& data_dir);
+// "" removes it: the name goes back to btbench-<mac>.
+bool write_board_name(const std::string& data_dir, const std::string& name, std::string* err);
+
 // What the System page and `bench sys` show.
 class SystemInfo {
  public:
@@ -41,7 +51,7 @@ class SystemInfo {
   SysInfo last_sample() const;
 
   // Everything: {hostname, ips, uname, os, uptime_s, load1, cpu_pct, temp_c, mem, power,
-  // versions, services, bluetoothd_args, board, device}. versions are cached for a while: each is
+  // versions, services, bluetoothd_args, name, board, device}. versions are cached for a while: each is
   // a process start, and on a Zero W `pipewire --version` alone takes a noticeable fraction of a
   // second.
   nlohmann::json full();

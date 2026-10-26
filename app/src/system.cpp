@@ -4,6 +4,8 @@
 #include <unistd.h>
 
 #include <cctype>
+#include <cerrno>
+#include <cstring>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -168,6 +170,60 @@ std::string read_bluetoothd_noplugin(const std::string& data_dir) {
   return it == env.end() ? std::string{} : it->second;
 }
 
+bool board_name_ok(const std::string& name, std::string* err) {
+  if (name.empty() || name.size() > 63) {
+    *err = "a name is 1 to 63 characters";
+    return false;
+  }
+  for (char c : name) {
+    if ((c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-') {
+      *err = "a name has only lower-case letters, digits and -";
+      return false;
+    }
+  }
+  if (name.front() == '-' || name.back() == '-') {
+    *err = "a name does not start or end with -";
+    return false;
+  }
+  return true;
+}
+
+std::string read_board_name(const std::string& data_dir) {
+  const std::string n = trim(read_file(data_dir + "/hostname"));
+  std::string err;
+  return board_name_ok(n, &err) ? n : std::string{};
+}
+
+bool write_board_name(const std::string& data_dir, const std::string& name, std::string* err) {
+  const std::string path = data_dir + "/hostname";
+  if (name.empty()) {
+    if (unlink(path.c_str()) != 0 && errno != ENOENT) {
+      *err = "cannot remove " + path + ": " + strerror(errno);
+      return false;
+    }
+    sync();
+    return true;
+  }
+  mkdir(data_dir.c_str(), 0755);
+  const std::string tmp = path + ".new";
+  {
+    std::ofstream f(tmp, std::ios::trunc);
+    f << name << "\n";
+    f.flush();
+    if (!f) {
+      *err = "cannot write " + tmp;
+      return false;
+    }
+  }
+  // Renamed into place: a power cut leaves the old name or the new one.
+  if (rename(tmp.c_str(), path.c_str()) != 0) {
+    *err = "cannot replace " + path;
+    return false;
+  }
+  sync();
+  return true;
+}
+
 json sysinfo_json(const SysInfo& s) {
   return json{{"hostname", s.hostname},
               {"ips", s.ips},
@@ -247,6 +303,7 @@ json SystemInfo::full() {
   j["bluetoothd_args"] = read_bluetoothd_args(data_dir_);
   j["bluetoothd_noplugin"] = read_bluetoothd_noplugin(data_dir_);
   j["data_dir"] = data_dir_;
+  j["name"] = read_board_name(data_dir_);
   j["board"] = env_json("/etc/btbench/board.env");
   j["device"] = env_json("/etc/btbench/device.env");
   return j;

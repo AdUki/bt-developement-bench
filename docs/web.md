@@ -21,7 +21,8 @@ own. The cards worth reading big (the library, the packet tables, the D-Bus and 
 link's graphs, each chart in *Graphs*) have a full-screen button; Esc puts them back. On a very
 wide screen (1700 px) the pages are allowed wider.
 
-The foot of the rail (the top bar on a phone) shows the board's name, the adapter (on / visible /
+The foot of the rail (the top bar on a phone) shows the board's name (also the browser tab's
+title, so several boards' tabs are told apart; System → Name renames it), the adapter (on / visible /
 scanning; *slow to answer*, in amber, when BlueZ missed a read — the devices stay as it last listed
 them), the WebSocket (live / offline; it reconnects by itself), temperature, CPU and — in red
 — undervoltage, which on a Zero W corrupts the Bluetooth UART long before anything else notices.
@@ -349,7 +350,8 @@ written), *Open* (the file in *Packets*), download, delete, and *Summary* (`btmo
 board).
 
 **System** — the board itself, in eight views: its state and tools, then how it is set up.
-*Overview*: health, versions of BlueZ, PipeWire, WirePlumber and the
+*Overview*: the board's name (e.g. `btbench-rpi5`; the hostname, mDNS name and adapter alias
+follow it, and emptied it is `btbench-<mac>` again), health, versions of BlueZ, PipeWire, WirePlumber and the
 kernel, the stack's services with restart buttons, bluetoothd's command line under a
 disclosure (e.g. `-d -E`; saved to `/data/btbench/bluetoothd.env` and applied by restarting
 bluetooth), the log files to download (`clog` reads them on the board), reboot, and under a

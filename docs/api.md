@@ -1027,10 +1027,11 @@ servers did. A restart drops every connection. Answers with the state plus `rest
 
 | route | what |
 |---|---|
-| `GET /api/system` | `{hostname, ips, uptime_s, load1, cpu_pct, temp_c, mem: {total_kb, used_kb, available_kb}, power: {available, under_voltage, seen}, versions: {bluetoothd, pipewire, wireplumber, btmon, kernel, os}, services: {unit: state}, bluetoothd_args, bluetoothd_noplugin, data_dir, board, device}` |
+| `GET /api/system` | `{hostname, ips, uptime_s, load1, cpu_pct, temp_c, mem: {total_kb, used_kb, available_kb}, power: {available, under_voltage, seen}, versions: {bluetoothd, pipewire, wireplumber, btmon, kernel, os}, services: {unit: state}, bluetoothd_args, bluetoothd_noplugin, data_dir, name, board, device}`; `name` is the one given with `PUT /api/system/hostname`, `""` while the board is `btbench-<mac>` |
 | `GET /api/system/health` | the first part only (what the `system` topic carries) |
 | `GET /api/system/services` | `{unit: "active\|inactive\|failed\|..."}` for bluetooth, pipewire, wireplumber, btbench-btsnoop, btbench-wifi, btbenchd |
 | `POST /api/system/services/{unit}/restart` | restart one of those (not btbenchd itself) |
+| `PUT /api/system/hostname` `{"hostname": "btbench-rpi5"}` | the board's name from now on, `{ok, hostname, name}`: kept in `/data/btbench/hostname` and made the hostname at once (btbench-hostname), so the console's header and tab, mDNS (`btbench-rpi5.local`) and the adapters called by the hostname follow it (an alias set with `PUT /api/bluetooth` stays). A DNS label: lower-case letters, digits and `-`, at most 63. `""` goes back to `btbench-<mac>`. 403 on a PC |
 | `GET /api/system/bluetoothd-args` | `{args, noplugin, file}` |
 | `PUT /api/system/bluetoothd-args` `{"args": "-d -E", "restart": true}` | writes `BLUETOOTHD_ARGS` in `/data/btbench/bluetoothd.env` (other lines, `BLUETOOTHD_NOPLUGIN`, are kept) and restarts bluetooth.service |
 | `GET /api/system/journal?unit=bluetooth&lines=200` | `{unit, entries: [{ts, prio, unit, ident, pid, msg}]}`, oldest first; `unit=kernel` is the kernel's log (`journalctl -k`) |

@@ -345,6 +345,25 @@ void install_system_routes(httplib::Server& svr, Deps& d, const WebOptions& opt)
     send_json(res, json{{"ok", true}, {"args", args}, {"restarted", restarted}});
   }));
 
+  // Body: {"hostname": "btbench-rpi5"}: the board's name from now on, kept in /data/btbench and
+  // made the hostname at once (btbench-hostname): the console's header, mDNS and the adapters'
+  // default alias follow it. "" goes back to btbench-<mac>. Not on a PC: the PC's name is not the
+  // bench's.
+  svr.Put("/api/system/hostname", json_route([&d, opt](const json& j, const httplib::Request&, httplib::Response& res) {
+    if (!opt.allow_power) return send_error(res, 403, "renaming is off on a PC");
+    const std::string name = lower(trim(j.at("hostname").get<std::string>()));
+    std::string err;
+    if (!name.empty() && !board_name_ok(name, &err)) return send_error(res, 400, err);
+    if (!write_board_name(d.sys.data_dir(), name, &err)) return send_error(res, 500, err);
+    const TargetScripts::Result r = d.scripts.action("btbench-hostname", {}, 30000);
+    if (r.http != 200) return reply(res, r);
+    char h[256] = {};
+    gethostname(h, sizeof h - 1);
+    LOG_INFO("system: the board is {} now", h);
+    d.bt.hostname_changed();
+    send_json(res, json{{"ok", true}, {"hostname", h}, {"name", name}});
+  }));
+
   // ?unit=bluetooth&lines=200: the last lines of a unit's journal.
   svr.Get("/api/system/journal", [&d](const httplib::Request& req, httplib::Response& res) {
     std::string unit;

@@ -12,17 +12,40 @@
 # It runs alongside the network services, not before them (the Wi-Fi interface appears seconds
 # into the boot): for them it is a rename, which they follow.
 #
+# A name given in the console (System → Name, PUT /api/system/hostname) is kept in
+# /data/btbench/hostname and is the board's as it is, with no MAC after it: btbench-rpi5 says which
+# board it is where btbench-59c787 does not. btbenchd runs this again when it changes.
+#
 # Settings (/etc/btbench/device.env): HOSTNAME_MAC=0 keeps the plain name.
 # Never fails the boot: without an address the name stays as it is, and that is logged.
 
 log() { echo "btbench-hostname: $*"; }
 
-HOSTNAME_MAC=1
-[ -r /etc/btbench/device.env ] && . /etc/btbench/device.env
-[ "${HOSTNAME_MAC:-1}" = 0 ] && exit 0
+# The kernel's hostname, written directly: `hostnamectl --transient` does nothing while a static
+# hostname is set (it says it did), and the static one cannot change on a read-only root.
+set_name() {
+    [ "$(hostname)" = "$1" ] && return 0
+    if echo "$1" > /proc/sys/kernel/hostname; then
+        log "hostname $1 ($2)"
+    else
+        log "could not set the hostname to $1"
+    fi
+}
+
+# btbenchd checks the name on the way in; a hand-written one is checked here the same way.
+own=$(cat /data/btbench/hostname 2>/dev/null | tr -d '[:space:]')
+case $own in
+    '' | -* | *- | *[!a-z0-9-]*) ;;
+    *) [ ${#own} -le 63 ] && { set_name "$own" "given in the console"; exit 0; } ;;
+esac
 
 base=$(cat /etc/hostname 2>/dev/null)
 [ -n "$base" ] || base=btbench
+
+# A console name taken back goes back to the image's (set again here, the kernel keeps the old).
+HOSTNAME_MAC=1
+[ -r /etc/btbench/device.env ] && . /etc/btbench/device.env
+[ "${HOSTNAME_MAC:-1}" = 0 ] && { set_name "$base" "the image's"; exit 0; }
 
 # A burned-in (universally administered) address: bit 1 of the first byte clear. usb0's, the
 # gadget's, is made up at every boot.
@@ -56,12 +79,5 @@ fi
 
 tag=$(echo "$mac" | cut -d: -f4-6 | tr -d : | tr 'A-F' 'a-f')
 case $base in *-"$tag") name=$base ;; *) name=$base-$tag ;; esac
-[ "$(hostname)" = "$name" ] && exit 0
-# The kernel's hostname, written directly: `hostnamectl --transient` does nothing while a static
-# hostname is set (it says it did), and the static one cannot change on a read-only root.
-if echo "$name" > /proc/sys/kernel/hostname; then
-    log "hostname $name (from $mac)"
-else
-    log "could not set the hostname to $name"
-fi
+set_name "$name" "from $mac"
 exit 0

@@ -373,6 +373,23 @@ std::string BtManager::default_alias(const BtAdapterId& a) const {
   return host + "-" + lower(a.address.substr(12, 2) + a.address.substr(15, 2));
 }
 
+void BtManager::hostname_changed() {
+  if (!default_alias_ || !running_.load()) return;
+  std::vector<BtAdapterId> ids;
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    for (const BtAdapterId& a : ids_)
+      if (!(kept_adapters_.contains(a.address) && kept_adapters_[a.address].contains("alias"))) ids.push_back(a);
+  }
+  for (const BtAdapterId& a : ids) {
+    const std::string alias = default_alias(a);
+    const BtCallResult r = set_property(a.path, kAdapterIface, "Alias", DVar::str(alias), 5000);
+    if (r.ok) LOG_INFO("bluetooth: {} is {} now", adapter_from_path(a.path), alias);
+    else LOG_WARN("bluetooth: {}: alias {}: {}", adapter_from_path(a.path), alias, r.error);
+  }
+  touch();
+}
+
 void BtManager::set_state_file(std::string path) {
   state_file_ = std::move(path);
   std::ifstream f(state_file_);

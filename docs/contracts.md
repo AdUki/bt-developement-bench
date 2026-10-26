@@ -67,6 +67,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     (`.1`) at 2 MiB; `btsnoop` → `/tmp/btsnoop`. RAM (tmpfs), gone at reboot, like the journal.
     `bluez-dbus.log` is btbenchd's, not logd's: BlueZ's D-Bus traffic, a message a line (dbus_log.h),
     rotated the same way.
+  - `/data/btbench/hostname` — the board's name given in the console (`PUT /api/system/hostname`),
+    one line, a DNS label; btbench-hostname makes it the hostname, with no MAC after it.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
   - `/data/btbench/route.json` — the route's outputs (Listen's "Play to"), `{"outputs":[{"type",
@@ -101,7 +103,8 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
 - `/run/btbench-rw/` — btbench-rw's counts.
 - Network: USB gadget `usb0` = `10.55.0.1/24` (DHCP server for the PC), Wi-Fi AP `10.42.0.1/24`,
   mDNS `<hostname>-<mac>.local` (btbench-hostname: the last three bytes of wlan0's MAC after
-  `/etc/hostname`, a transient hostname; `HOSTNAME_MAC=0` in device.env keeps it plain), with the
+  `/etc/hostname`, a transient hostname; `HOSTNAME_MAC=0` in device.env keeps it plain; a name in
+  `/data/btbench/hostname` replaces both), with the
 console and ssh announced as DNS-SD `_http._tcp` and `_ssh._tcp` (`/etc/systemd/dnssd/`).
 - `wlan0` is always the board's own Wi-Fi. A PCIe Wi-Fi card (iwlwifi: the rpi5's BE200) is renamed
   `wlpcie0` as it appears (btbench-base's `70-btbench-pcie-wifi.link`), and nothing configures it.
