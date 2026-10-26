@@ -570,6 +570,7 @@ body.wifi-page main { max-width: 560px; margin: 0 auto; padding: 0.5rem 16px 2re
 .cv-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0 0.3rem; }
 .cv-chip { border-radius: 999px; padding: 0.1rem 0.55rem; }
 .cv-chip.on { border-color: var(--accent); color: var(--accent); }
+.cv-chip.off { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
 .cv-hint { margin: 0.2rem 0; }
 .cv-hint summary { cursor: pointer; }
 .cv-hint p { margin: 0.3rem 0; line-height: 1.7; }

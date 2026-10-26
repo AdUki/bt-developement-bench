@@ -8437,7 +8437,49 @@ void acl(Out& o, const IndexEntry& e, const uint8_t* d, size_t len, const GattDb
   o.summary = s + frag;
 }
 
-void sco_iso(Out& o, const uint8_t* d, size_t len, bool iso) {
+// What the stream of an ISO packet is (iso_stream.h): its link, its codec configuration and data
+// path, with no bytes of this packet behind them.
+void iso_stream_node(Out& o, const IsoStream& st) {
+  OPEN("Stream", st.link.empty() ? std::string("setup not in the capture") : st.link);
+  if (st.have_codec) {
+    F("Codec", codec_id_str(st.codec));
+    if (st.freq) F("Sampling frequency", lc3_freq_name(st.freq));
+    if (st.duration != 0xff) F("Frame duration", st.duration == 0 ? "7.5 ms" : st.duration == 1 ? "10 ms" : "?");
+    F("Audio channel allocation", st.have_alloc ? locations_str(st.alloc) : "not given (one channel)");
+    if (st.octets) F("Octets per codec frame", std::to_string(st.octets));
+    F("Codec frame blocks per SDU", std::to_string(st.blocks));
+    F("Configured by", st.config_from);
+  } else if (!st.link.empty()) {
+    F("Codec", "configuration not in the capture");
+  }
+  if (!st.path.empty()) F("Data path", st.path);
+  CLOSE();
+}
+
+// The SDU cut into its codec frames: per block, one frame per channel in the order of the
+// allocation's bits (BAP 4.3). Returns false when the configuration does not describe this SDU.
+bool iso_frames(Out& o, const IsoStream& st, const uint8_t* p, size_t n) {
+  const size_t want = st.sdu_bytes();
+  if (!want || n != want) return false;
+  std::vector<std::string> ch;
+  for (unsigned b = 0; b < 32 && st.have_alloc; ++b)
+    if (st.alloc >> b & 1) ch.push_back(b < 28 ? kAudioLocations[b] : sf("location bit %u", b));
+  if (ch.empty()) ch.push_back("mono");
+  const std::string codec = st.codec[0] == 0xff ? "Codec" : coding_format_name(st.codec[0]);
+  OPEN("SDU", sf("%u frames of %u bytes", static_cast<unsigned>(ch.size()) * st.blocks, st.octets), p, n);
+  for (unsigned b = 0; b < st.blocks; ++b) {
+    for (const std::string& c : ch) {
+      const std::string name = st.blocks > 1 ? sf("%s frame %u %s", codec.c_str(), b + 1, c.c_str())
+                                             : sf("%s frame %s", codec.c_str(), c.c_str());
+      F(name, hexbytes(p, st.octets, 32), p, st.octets);
+      p += st.octets;
+    }
+  }
+  CLOSE();
+  return true;
+}
+
+void sco_iso(Out& o, const IndexEntry& e, const uint8_t* d, size_t len, bool iso, const IsoStream* st) {
   if (len < (iso ? 4u : 3u)) {
     o.summary = iso ? "ISO (truncated)" : "SCO (truncated)";
     return;
@@ -8465,6 +8507,7 @@ void sco_iso(Out& o, const uint8_t* d, size_t len, bool iso) {
   F("Data length", std::to_string(dl), d + 2, 2);
   std::string s = sf("ISO %zu bytes", len - 4);
   size_t at = 4;
+  size_t sdu_len = 0;
   if (pb == 0 || pb == 2) {  // a first (or complete) fragment carries the SDU header
     if (tsf && at + 4 <= len) {
       F("Timestamp", sf("%u us", le32(d + at)), d + at, 4);
@@ -8473,15 +8516,21 @@ void sco_iso(Out& o, const uint8_t* d, size_t len, bool iso) {
     if (at + 4 <= len) {
       // The packet status flag only means something from the controller (Core Vol 4 Part E 5.4.5).
       static const char* const st[] = {"valid", "possibly invalid", "lost", "?"};
+      const uint8_t psf = le16(d + at + 2) >> 14;
+      sdu_len = le16(d + at + 2) & 0x0fff;
       F("Sequence number", std::to_string(le16(d + at)), d + at, 2);
-      F("SDU length", std::to_string(le16(d + at + 2) & 0x0fff), d + at + 2, 2);
-      F("Packet status", st[le16(d + at + 2) >> 14], d + at + 3, 1);
-      s = sf("ISO seq %u, SDU %u bytes", le16(d + at), le16(d + at + 2) & 0x0fff);
-      if ((le16(d + at + 2) >> 14) == 2) s += " (lost)";
+      F("SDU length", std::to_string(sdu_len), d + at + 2, 2);
+      F("Packet status", e.flags & kFlagTx ? sf("%u (not used from the host)", psf) : std::string(st[psf]), d + at + 3, 1);
+      s = sf("ISO seq %u, SDU %zu bytes", le16(d + at), sdu_len);
+      if (psf == 2 && !(e.flags & kFlagTx)) s += " (lost)";
       at += 4;
     }
   }
-  if (at < len) F("Data", hexbytes(d + at, len - at, 32), d + at, len - at);
+  if (st) iso_stream_node(o, *st);
+  // A complete SDU is cut into its frames; a fragment of one, or an SDU the configuration does not
+  // describe, stays bytes.
+  const bool cut = st && pb == 2 && at < len && sdu_len == len - at && o.detail && iso_frames(o, *st, d + at, len - at);
+  if (!cut && at < len) F(pb == 2 || pb == 0 ? "Data" : "SDU fragment", hexbytes(d + at, len - at, 32), d + at, len - at);
   CLOSE();
   o.summary = s;
 }
@@ -8717,8 +8766,24 @@ uint16_t GattDb::owner(bool local_server, uint16_t handle) const {
   return it == v.begin() ? 0 : *(it - 1);
 }
 
+bool ase_notification(const uint8_t* d, size_t len) {
+  if (len < 12 || ((le16(d) >> 12) & 3) == 1 || le16(d + 6) != kCidAtt) return false;
+  const size_t pdu = std::min<size_t>(len - 8, le16(d + 4));
+  return pdu >= 3 && looks_like_ascs(d[8], d + 11, pdu - 3) == 0x2bc4;
+}
+
+bool base_report(const uint8_t* d, size_t len) {
+  if (len < 3 || d[0] != kEvtLeMeta || d[1] < 1 || (d[2] != 0x0f && d[2] != 0x25)) return false;
+  const size_t k = std::min<size_t>(d[1], len - 2) - 1;
+  const uint8_t* q = d + 3;
+  const size_t at = d[2] == 0x25 ? 10 : 7;
+  const uint8_t* b = nullptr;
+  size_t bl = 0;
+  return k >= at && find_base(q + at, std::min<size_t>(q[at - 1], k - at), &b, &bl);
+}
+
 void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out, const GattDb* gatt,
-             uint16_t manufacturer) {
+             uint16_t manufacturer, const IsoStream* iso) {
   Out o(d, detail);
   o.manufacturer = manufacturer;
   switch (e.mon) {
@@ -8727,9 +8792,9 @@ void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dis
     case kMonAclTx:
     case kMonAclRx: acl(o, e, d, len, gatt); break;
     case kMonScoTx:
-    case kMonScoRx: sco_iso(o, d, len, false); break;
+    case kMonScoRx: sco_iso(o, e, d, len, false, nullptr); break;
     case kMonIsoTx:
-    case kMonIsoRx: sco_iso(o, d, len, true); break;
+    case kMonIsoRx: sco_iso(o, e, d, len, true, iso); break;
     default: monitor_note(o, e, d, len); break;
   }
   out->summary = std::move(o.summary);

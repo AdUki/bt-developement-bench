@@ -13,7 +13,9 @@
 // `<file>.ctx`: a btsnoop file (datalink 2001) the indexer and the btmon view read first.
 //
 // Bounded per link (signalling, AVDTP, ATT discovery each keep their newest), so a link that
-// stays up for days costs at most a few hundred KiB.
+// stays up for days costs at most a few hundred KiB. ISO streams (iso_stream.h) the same way: the
+// newest setup packets per controller, the newest BASE per periodic train (one, however often it
+// is sent), and the newest ASE states per link.
 
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +34,8 @@ class ContextJournal {
   static constexpr size_t kMaxAvdtp = 200;   // per link
   static constexpr size_t kMaxAtt = 1500;    // per link
   static constexpr size_t kMaxIndex = 16;    // per controller
+  static constexpr size_t kMaxIso = 64;      // per controller
+  static constexpr size_t kMaxAse = 32;      // per link
 
   // Every packet of the live stream, in order.
   void packet(int64_t ts_us, uint16_t index, uint16_t mon, const uint8_t* d, size_t len);
@@ -56,7 +60,7 @@ class ContextJournal {
     std::string bytes;  // a btsnoop record: header and packet
   };
   struct Link {
-    std::deque<Rec> conn, sig, avdtp, att;
+    std::deque<Rec> conn, sig, avdtp, att, ase;
   };
   void keep(std::deque<Rec>* q, size_t cap, int64_t ts_us, uint16_t index, uint16_t mon,
             const uint8_t* d, size_t len);
@@ -64,6 +68,8 @@ class ContextJournal {
   Classifier cls_;
   uint64_t seq_ = 0;
   std::map<uint16_t, std::deque<Rec>> index_;  // per controller
+  std::map<uint16_t, std::deque<Rec>> iso_;    // per controller
+  std::map<uint32_t, Rec> base_;               // index << 16 | sync handle
   std::map<uint32_t, Link> links_;             // index << 16 | handle
 };
 

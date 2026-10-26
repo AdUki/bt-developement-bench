@@ -9,6 +9,7 @@
 #include <string>
 
 #include "packet_view.h"
+#include "wire.h"
 
 using nlohmann::json;
 
@@ -73,6 +74,16 @@ int main(int argc, char** argv) {
       btb::hci::gatt_before(idx, i, &gatt);
       btb::hci::Dissection ds;
       btb::hci::dissect(e, bytes.data(), bytes.size(), true, &ds, &gatt, idx.manufacturer(e.index));
+      print_tree(ds.fields, 0);
+      continue;
+    }
+    // ISO data by its stream's setup (the BIS or CIS, its codec configuration).
+    if (e.mon == btb::hci::kMonIsoTx || e.mon == btb::hci::kMonIsoRx) {
+      const std::vector<uint8_t> bytes(d, d + len);
+      btb::hci::IsoStream iso;
+      btb::hci::iso_before(idx, i, &iso);
+      btb::hci::Dissection ds;
+      btb::hci::dissect(e, bytes.data(), bytes.size(), true, &ds, nullptr, idx.manufacturer(e.index), &iso);
       print_tree(ds.fields, 0);
       continue;
     }

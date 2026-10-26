@@ -587,18 +587,20 @@
       <div id="cv-stats" class="cv-stats" hidden></div>
       <div id="cv-hint" class="small muted cv-hint cv-fpart" hidden>
         <p>Terms separated by spaces, all must match; <code>!term</code> negates one; <code>|</code> is "or" inside a value;
-          <code>a b || c</code> matches either group; the quick filters combine this way (click several).
+          <code>a b || c</code> matches either group; the quick filters combine this way (click several; a right
+          or shift click hides a quick filter's packets instead: its <code>!term</code> goes into every group).
           <code>type:cmd|evt|acl|sco|iso|index|log|mgmt</code> · <code>dir:tx|rx</code> ·
           <code>proto:hci|l2cap|att|smp|sdp|rfcomm|avdtp|rtp|avctp|bnep|hid|sco|iso</code> ·
           <code>handle:11</code> <code>cid:0x40</code> <code>psm:25</code> <code>index:0</code> ·
           <code>opcode:0x0406</code> (a command and its Complete/Status) <code>evt:0x13</code> <code>subevt:0x02</code> ·
-          <code>is:err|mark|cont|lat</code> · <code>len&gt;100</code> <code>n&lt;=500</code> <code>lat&gt;20</code> (TX → NOCP, ms) ·
+          <code>is:err|mark|cont|lat|vendor|adv</code> (<code>adv</code>: advertising and inquiry reports, MGMT Device Found) · <code>len&gt;100</code> <code>n&lt;=500</code> <code>lat&gt;20</code> (TX → NOCP, ms) ·
           <code>t&gt;=12.5 t&lt;30</code> (seconds since the first packet) ·
           <code>addr:AA:BB:CC:DD:EE:FF</code> (that peer's links, and packets that name it; its first bytes are enough).
           Any other word, or a <code>"quoted phrase"</code>,
           is searched in the summaries (case-insensitive) — slower, so on a big file the results arrive over a few seconds.
           Drag across the graph to select a time range; click it to jump there. In a packet's detail, a term under
-          its summary adds it to the filter (shift-click: without it).</p>
+          its summary adds it to the filter (shift-click: without it), and a right click on a packet, in the list or
+          the detail, filters what it is in or out.</p>
       </div>
       <div class="cv-graph-wrap">
         <div class="row wrap small">

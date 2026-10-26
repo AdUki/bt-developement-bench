@@ -23,6 +23,8 @@
 #include <string>
 #include <vector>
 
+#include "iso_stream.h"
+
 namespace btb::hci {
 
 // The kinds of packet the filter's type: term names. Derived from the monitor opcode.
@@ -69,6 +71,8 @@ enum EntryFlags : uint8_t {
   kFlagErr = 0x04,   // a failure status, a reject, an error response (filter is:err)
   kFlagCont = 0x08,  // an L2CAP continuation fragment: cid/psm/proto are its start fragment's
   kFlagMark = 0x10,  // a btbench mark (user logging with ident "btbench")
+  kFlagVendor = 0x20,  // a vendor command (OGF 0x3f), its Command Complete/Status, a vendor event
+  kFlagAdv = 0x40,     // an advertising or inquiry report, MGMT Device Found (filter is:adv)
 };
 
 constexpr uint16_t kNoHandle = 0xffff;
@@ -183,8 +187,11 @@ struct GattDb {
 // given, decodes ATT values by their characteristic in the field tree (the summary stays the
 // list's). manufacturer is the company of the packet's controller (Classifier::manufacturer()):
 // vendor commands are decoded by it.
+// iso, when given, is what the ISO packet's stream is: the detail names it and cuts the SDU into its
+// codec frames.
 void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out,
-             const GattDb* gatt = nullptr, uint16_t manufacturer = kNoManufacturer);
+             const GattDb* gatt = nullptr, uint16_t manufacturer = kNoManufacturer,
+             const IsoStream* iso = nullptr);
 
 // For the indexer: where the handle sits in a command (first parameter) — and whether the
 // payload of an L2CAP channel is a failure (error response, reject, refused connection).
@@ -199,7 +206,8 @@ nlohmann::json packet_json(const IndexEntry& e, uint64_t n, double t, const std:
 // nodes are put into it after the time (what this view numbers or measures from).
 nlohmann::json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d,
                                   size_t len, const std::vector<nlohmann::json>& frame_extra,
-                                  const GattDb* gatt = nullptr, uint16_t manufacturer = kNoManufacturer);
+                                  const GattDb* gatt = nullptr, uint16_t manufacturer = kNoManufacturer,
+                                  const IsoStream* iso = nullptr);
 
 // ---- Context: the packets that explain later ones ----
 
@@ -212,7 +220,9 @@ nlohmann::json packet_detail_json(const IndexEntry& e, uint64_t n, double t, con
 enum ContextKind : uint8_t {
   kCtxNone,
   kCtxIndex,  // New/Delete/Open/Close Index, Index Info
-  kCtxLink,   // connection complete (BR/EDR, SCO, LE, CIS, BIG) and disconnection complete
+  kCtxLink,   // connection complete (BR/EDR, SCO, LE, CIS) and disconnection complete
+  kCtxIso,    // what sets up ISO streams: BIGs, CIGs, data paths, periodic advertising data
+  kCtxBase,   // a periodic advertising report: context only if it carries a BASE
   kCtxSig,    // L2CAP signalling, fragments included
   kCtxAvdtp,  // AVDTP signalling
   kCtxAtt,    // an ATT start fragment: context only if att_discovery() says so
@@ -221,6 +231,11 @@ ContextKind context_kind(const IndexEntry& e);
 // Exchange MTU, Find Information, Read By Type and Read By Group Type, requests and responses,
 // and Error Response. d/len: the ACL packet as the monitor carries it.
 bool att_discovery(const uint8_t* d, size_t len);
+// An ATT notification or indication whose value is an ASE state with a CIS (ASCS 4.1: QoS
+// Configured to Disabling) or its codec configuration (Codec Configured). d/len: the ACL packet.
+bool ase_notification(const uint8_t* d, size_t len);
+// A periodic advertising report (LE Meta event) whose data holds a BASE.
+bool base_report(const uint8_t* d, size_t len);
 
 // ---- Classifying packets ----
 
@@ -353,6 +368,9 @@ class PacketIndex {
 // What ATT discovery on the link of entry i said before it (dissect()'s gatt): the file's context,
 // then the link's ATT packets from the file's start; a connection event on the handle starts over.
 void gatt_before(PacketIndex& idx, size_t i, GattDb* g);
+// What the ISO stream of entry i is (dissect()'s iso): the file's context, then the setup packets
+// of the file before it (iso_stream.h).
+void iso_before(PacketIndex& idx, size_t i, IsoStream* s);
 
 // ---- The cache of indexed files, shared by the HTTP workers ----
 

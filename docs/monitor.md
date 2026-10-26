@@ -392,10 +392,13 @@ So btbenchd's reader thread, which sees every packet anyway, keeps a **context j
 | Kept | Until |
 |---|---|
 | New/Open/Close Index, Index Info (the controllers) | Delete Index |
-| connection complete events: BR/EDR, SCO/eSCO, LE, CIS, BIG | the link's Disconnection Complete, a new connection on its handle, or its controller's Close Index (a power-off, a bluetoothd restart: the kernel ends every link without a Disconnection Complete) |
+| connection complete events: BR/EDR, SCO/eSCO, LE, CIS | the link's Disconnection Complete, a new connection on its handle, or its controller's Close Index (a power-off, a bluetoothd restart: the kernel ends every link without a Disconnection Complete) |
 | L2CAP signalling, fragments included (which PSM and mode a channel is) | the link goes; the newest 400 per link |
 | AVDTP signalling (which codec a stream carries) | the link goes; the newest 200 per link |
 | ATT discovery: Exchange MTU, Find Information, Read By (Group) Type, their errors (btmon's att.c names characteristics from them) | the link goes; the newest 1500 per link |
+| ISO setup ([ISO data](#iso-data)): LE Create BIG (and its test form) and its Complete, LE BIG Create Sync and BIG Sync Established, LE Set CIG Parameters (and its test form) and its Command Complete, LE Create CIS, LE CIS Request, LE Setup ISO Data Path, LE Set Periodic Advertising Data | its controller's Close Index; the newest 64 per controller |
+| the newest periodic advertising report of each sync train that carries a BASE (a train repeats it every interval: only a different one replaces it) | its controller's Close Index |
+| ASE states notified on a link (Codec Configured to Disabling), by their characteristic or their layout | the link goes; the newest 32 per link |
 
 The journal classifies packets with the indexer's `Classifier`, so it knows the channels the
 same way. It costs one classification per packet, and a few hundred KiB at most for a link that
@@ -513,7 +516,7 @@ Terms are separated by spaces, and all of them must match. `!term` negates a ter
 | `cid:0x40`, `psm:25`, `index:0` | the L2CAP channel as carried in the packet, its PSM, the controller |
 | `opcode:0x0406` | an HCI command, and the Command Complete/Status that answer it |
 | `evt:0x13`, `subevt:0x02` | an HCI event code; an LE Meta subevent |
-| `is:err\|mark\|cont\|lat` | a failure (non-zero status, ATT error, L2CAP reject or refusal, SMP Pairing Failed, AVDTP reject, SDP error, RFCOMM DM, AV/C rejected); a btbench mark; an L2CAP continuation fragment; a TX packet with a latency |
+| `is:err\|mark\|cont\|lat\|vendor\|adv` | a failure (non-zero status, ATT error, L2CAP reject or refusal, SMP Pairing Failed, AVDTP reject, SDP error, RFCOMM DM, AV/C rejected); a btbench mark; an L2CAP continuation fragment; a TX packet with a latency; a vendor command (OGF 0x3f) with its Command Complete/Status, or a vendor event (0xff); an advertising report (legacy, directed, extended, periodic v1 and v2), BIGInfo report, scan request received, inquiry result (all three forms) or MGMT Device Found (and Advertisement Monitor Device Found): what scanning and periodic sync report, often most of a capture |
 | `len>100`, `len<10`, `len:27` | the HCI packet length. Also `>=`, `<=` and `=` |
 | `t>=12.5 t<30` | seconds since the first packet. The graph zooms to the range |
 | `n<=500` | the frame number |
@@ -533,7 +536,10 @@ the peer) decode the summary of every packet that passed the structured terms, s
 
 In the console, a packet's detail lists its terms under the summary (`handle:12`, `addr:...`,
 `proto:avctp`, `cid:0x0076`, `opcode:0x0406`, ...). A click adds one to the filter, and a shift-click
-adds it negated. The statistics' protocols and links work the same way.
+adds it negated; a term goes into every `||` group. The statistics' protocols and links work the
+same way. A right click on a packet, in the list or the detail, filters what it is in or out: its
+command or event, its protocol or channel, its link (an MGMT packet by its name, a quoted phrase,
+as the index keeps no MGMT opcodes); several picked packets, their kinds together.
 
 ### What is decoded
 
@@ -557,9 +563,44 @@ is hidden and none is shown twice:
 | AVDTP | signalling: signal, message type, SEIDs, the capability list with the codec decoded (the monitor's `decode_media_codec`: SBC, MPEG-1,2, AAC with the A2DP 1.4 object types, aptX, aptX HD, aptX LL, aptX Adaptive, FastStream, LDAC, Opus from Google and from PipeWire (both directions, channels, audio location, frame durations, maximum bitrate), LC3plus HR; every field in the tree, and SBC's bitrate at the maximum bitpool), content protection (SCMS-T, DTCP), recovery, header compression, delay reporting, DISCOVER's SEPs, delay reports, rejects with the error by name (AVDTP and A2DP codes) and the failing category or SEID. Media: the RTP header, and SBC's frame count and first frame header (recognised by its syncword) |
 | AVCTP / AVRCP | AVCTP fragmentation (start/continue/end); the AV/C frame type; PASS THROUGH operations (every panel operation, vendor-unique next/previous group). Vendor-dependent PDUs with their parameters: GetCapabilities (the events or company IDs), the player application settings (repeat, shuffle, equalizer, scan by value), GetElementAttributes (the attributes asked for; the response's title, artist, album, track number, total, genre, playing time and cover art handle with their text), GetPlayStatus (status, position, length), RegisterNotification with each event's data in interim and changed responses (play status, track UID, position, battery, settings, addressed player, UIDs, volume with its percentage), SetAbsoluteVolume, SetAddressedPlayer, PlayItem, AddToNowPlaying, continuing responses; AVRCP packet types (a response's start is decoded as far as it goes); rejects with their status. Browsing (behind the channel's ERTM control field: I- and S-frames, SAR, SDU length, the FCS checked): SetBrowsedPlayer (items, folder path), GetFolderItems (scope and range; the items: players, folders and media elements with their names and attributes), ChangePath, GetItemAttributes, GetTotalNumberOfItems, Search, GeneralReject. Summaries carry the values: `RegisterNotification CHANGED VOLUME_CHANGED: 87 (69%)`, `GetElementAttributes STABLE: Title "…", Artist "…", Album "…", Track 3, Time 3:25` |
 | OBEX | over RFCOMM, and over L2CAP channels of their own (GOEP 2.0: recognised by a good ERTM FCS, the start of a segmented SDU included): opcode or response code, Connect's version and maximum packet length, SetPath flags, every header (Name, Type, Length, Target/Who with the service named — FTP, PBAP, MAP, BIP cover art —, Connection ID, SRM, Body sizes, ...) |
-| SCO / ISO | handle, packet status; ISO packet boundary, timestamp flag and timestamp, sequence number, SDU length, packet status (lost or possibly invalid) |
+| SCO / ISO | handle, packet status; ISO packet boundary, timestamp flag and timestamp, sequence number, SDU length, packet status (lost or possibly invalid; from the host it is not used). In the detail, an ISO packet's stream and its SDU cut into codec frames: see [ISO data](#iso-data) |
 | Monitor notices | new index (bus, address, name), index info, system notes, user logging (`ident: message`), management channel open/close |
 | MGMT | every command and event by name (btmon's tables), with the parameters bluetoothd sends and reads: modes, settings, the device a command or event is about; controller info (address, version, manufacturer, supported and current settings, class, names), index lists, versions, supported commands and events, UUIDs added and removed (16-bit ones by name) with the class they lead to, class and name changes, IO capability, device ID, privacy, discovery, devices added and their flags, key loads (how many), new keys, connection information (RSSI, TX power), connected (flags, EIR), found (RSSI, EIR), new connection parameters, security level changes, advertising instances and features, controller capabilities, experimental features (by name, the active ones in the summary), advertisement monitors |
+
+### ISO data
+
+An ISO packet says only its handle, sequence number and SDU length. Which BIS or CIS the handle is,
+and how its SDUs are cut into codec frames, was said once, when the stream was set up. For the one
+ISO packet the detail shows, `iso_before()` (`iso_stream.{h,cpp}`) feeds what set it up, from the
+file's context and then the file before the packet, to an `IsoTracker`:
+
+- **A BIS of a broadcaster**: LE Create BIG names the BIG's advertising set, LE Create BIG Complete
+  its BIS handles (BIS 1, 2, ... in order), and the newest LE Set Periodic Advertising Data of
+  that set carries the BASE (fragments put together).
+- **A BIS of a receiver**: LE BIG Create Sync names the sync handle and the BIS indices asked for,
+  BIG Sync Established their handles in that order, and the newest periodic advertising report of
+  that train with a complete BASE (found backwards from the packet; the context's otherwise).
+- **A CIS**: LE Set CIG Parameters names the CIS IDs and its Command Complete their handles (a
+  central), or LE CIS Request gives the CIG and CIS ID of a handle (a peripheral); LE Create CIS
+  or the request names its ACL link. On that link, the ASE states the server notified: Codec
+  Configured carries the codec configuration, QoS Configured to Disabling the CIG and CIS. Of the
+  ASEs on one CIS, the one in the packet's direction: the peer's sink ASE for what this side sends,
+  its source ASE for what it receives (the other way round when this side is the server), as ATT
+  discovery named the characteristics; without discovery, the ASE whose configuration makes an SDU
+  of the packet's size.
+- LE Setup ISO Data Path, in the packet's direction: the data path and its coding format.
+
+The BASE's codec configuration is the subgroup's, with the BIS's own entries over it (BAP 3.7.2.2).
+The detail adds a **Stream** node (`BIS 1 of BIG 0`, the codec, sampling frequency, frame
+duration, channel allocation, octets per codec frame, frame blocks per SDU, the frame that
+configured it and the data path) and, when the SDU is complete and its size is what the
+configuration describes (blocks × channels × octets), cuts it into its frames: per block, one
+frame per channel in the order of the allocation's bits (BAP 4.3), `LC3 frame FL`, `LC3 frame FR`.
+A fragment of an SDU, or an SDU of another size, stays bytes. Without its setup in the file or its
+context the stream says so. The summary is the list's either way.
+
+The setup packets are found from the index alone and are few; a CIS reads the ATT packets of its
+ACL link, and a receiver's BIS the periodic reports newest first until one of its train.
 
 ### Routes
 
@@ -580,8 +621,10 @@ when the page is empty):
 
 `n` is the 1-based frame number in the file, as btmon and Wireshark count it. `t` is seconds since
 the first packet, `ts_ms` the capture's own clock. `index`, `handle`, `cid`, `psm`, `proto` and
-`lat_ms` are `null` when they do not apply. `"err": true`, `"mark": true` and `"cont": true` appear
-on the packets they describe. A tail request's answer carries `"newer": "<name>"` when a newer
+`lat_ms` are `null` when they do not apply. `"err": true`, `"mark": true`, `"cont": true`,
+`"vendor": true` and `"adv": true` appear on the packets they describe (the `is:` terms), and
+`opcode`, `evt` and `subevt` on the commands and events that have them (the filter's terms of the
+same names). A tail request's answer carries `"newer": "<name>"` when a newer
 capture exists in the directory (the live end moved there); its `packets` are then whatever the
 page had, usually none.
 
@@ -702,7 +745,8 @@ Every error is `{"error": "..."}`: 400 for a bad name or filter, 404 for a missi
   whole module through its HTTP routes on a loopback server, the recording of a paced replay and
   a tail request following it included. `hci_packets` covers the packet view:
   the index (and its growth while a file is written), the filter language, the summaries and
-  field trees of the common packet kinds, the graph's buckets and the packet routes, including
+  field trees of the common packet kinds, ISO streams by their setup (in the file and through the
+  context), the `is:vendor` and `is:adv` flags, the graph's buckets and the packet routes, including
   partial answers under a zero budget, and the live end: a tail request woken by records
   appended to the file (a burst as one page, a filter's matches only), by a new file in the
   directory and by the file's deletion, its timeout, and the limit on waiting requests.

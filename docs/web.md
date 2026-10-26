@@ -273,11 +273,14 @@ fetched then), scrolling back to the end or ticking it switches it on. At a rota
 moves to the new file. Everything below is the same for an old file and for the live end:
 - a filter box (`proto:att handle:64 lat>20 "read request"`; the syntax opens under *Filter syntax*
   beside *Statistics*, and is in
-  [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, L2CAP signalling,
-  ATT, SMP, AVDTP, media, AVRCP, RFCOMM, MGMT (what bluetoothd asks the kernel, by name), errors,
-  marks and logs, slow TX. They combine: a click adds one or takes it away, and the ones picked are
-  joined with `||` (ATT and media: `proto:att || proto:rtp`); *all* clears them, and a time range
-  dragged on the graph goes into each;
+  [monitor.md](monitor.md#filter-syntax)) and quick filters: HCI commands/events, vendor
+  commands and events, advertising (advertising, periodic and BIGInfo reports, inquiry results,
+  MGMT Device Found), ACL, L2CAP signalling, ATT, SMP, AVDTP, media, AVRCP, RFCOMM, SCO, ISO, MGMT
+  (what bluetoothd asks the kernel, by name), errors, marks and logs, slow TX. They combine: a click
+  shows one's packets or takes it away again, and the ones shown are joined with `||` (ATT and
+  media: `proto:att || proto:rtp`); a right click (or shift-click) hides one's packets instead,
+  struck through, its `!term` in every group (`proto:att !is:adv || type:iso !is:adv`), and again
+  shows them. *all* clears them, and a time range dragged on the graph goes into each;
 - a graph strip of the whole file: packets per time bucket of the filtered set, and for a chosen
   connection its TX/RX throughput and TX latency p50/p95. Drag across it to keep only that time
   range (it becomes `t>=… t<…` in the filter, and the graph zooms to it); click to jump the table
@@ -288,12 +291,16 @@ moves to the new file. Everything below is the same for an old file and for the 
   fetched, so a 300 000-packet file scrolls like a small one. ↑ ↓, Page Up/Down, Home and End
   move the selection. Ctrl-click adds or drops a packet, shift-click (or shift with the arrows)
   picks a range of up to 5000; a right click copies the picked rows as shown, columns lined up,
-  or only their summaries, and Ctrl+C copies the rows;
+  or only their summaries, and filters what they are in or out (one packet: its command or event,
+  protocol or channel, and link; several: their kinds together); Ctrl+C copies the rows;
 - the selected packet decoded: a tree of fields, and the hex dump with offsets. Hovering a field
   highlights its bytes; the terms under the summary add themselves to the filter on a click
-  (shift: negated). Lines of the tree are picked the same way (click, ctrl, shift); a right click
-  copies text selected with the mouse, the picked lines (indented as in the tree), all the fields,
-  the hex dump or the bytes as plain hex, and Ctrl+C copies the picked lines;
+  (shift: negated; a right click offers both). Lines of the tree are picked the same way (click,
+  ctrl, shift); a right click copies text selected with the mouse, the picked lines (indented as in
+  the tree), all the fields, the hex dump or the bytes as plain hex, and filters the packet in or
+  out like the list's; Ctrl+C copies the picked lines. An ISO packet names its BIS or CIS and its
+  codec configuration, and its SDU is cut into codec frames per channel
+  ([monitor.md](monitor.md#iso-data));
 - the separator between the table and the detail drags (or ← → when focused, a double click
   puts it back), and *filter* and *graph* in the head put away the filter (box, quick filters,
   syntax) and the graph strip for a taller table; this browser remembers both;

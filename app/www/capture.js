@@ -71,10 +71,15 @@
   const WAIT = 25000; // ms a tail request may wait on the board (it allows 30 s)
   const END_N = 2147483647;  // at_n beyond any frame: the page after the last match, the totals known
 
-  // A few filters people reach for. Clicking one replaces the filter but keeps a time range.
+  // A few filters people reach for. A chip shows its packets: its terms are one group of the
+  // filter, and the chips shown are joined with "||", any of them. Or it hides them: its `x` term
+  // is in every group. A time range is kept either way; "all" clears the rest.
   const CHIPS = [
     ['all', ''],
-    ['HCI cmd/evt', 'type:cmd|evt !evt:0x13'],
+    ['HCI cmd/evt', 'type:cmd|evt !evt:0x13', '!type:cmd|evt'],
+    ['vendor', 'is:vendor'],
+    ['advertising', 'is:adv'],
+    ['ACL', 'type:acl'],
     ['L2CAP sig', 'cid:1|5'],
     ['ATT', 'proto:att'],
     ['SMP', 'proto:smp'],
@@ -82,11 +87,13 @@
     ['media', 'proto:rtp'],
     ['AVRCP', 'proto:avctp'],
     ['RFCOMM', 'proto:rfcomm'],
+    ['SCO', 'type:sco'],
+    ['ISO', 'type:iso'],
     ['MGMT', 'type:mgmt'],
     ['errors', 'is:err'],
     ['marks + logs', 'type:log'],
     ['slow TX', 'lat>20'],
-  ];
+  ].map(([label, f, x]) => ({label, f, x: f ? x || '!' + f : ''}));
 
   const cv = {
     name: null, active: false, filter: lsGet('btbench.cv.filter') || '', gen: 0,
@@ -221,8 +228,73 @@
     renderSave();
   }
 
+  // ------------------------------------------------------------ the chips
+
+  // A group's terms; a quoted phrase is one.
+  const words = g => g.match(/!?"[^"]*"|\S+/g) || [];
+  const sameWords = (a, b) => a.length === b.length && a.every(w => b.includes(w));
+
+  // The filter (without its time range) as chips: the chips shown (their terms, one group each),
+  // the chips hidden (their `x` in every group) and the other words every group has. `custom`: a
+  // filter typed by hand whose groups are not chips (none is shown then).
+  function chipState(f) {
+    const groups = splitGroups(f).map(words);
+    const xs = CHIPS.map(c => c.x).filter(Boolean);
+    if (!groups.length) return {on: [], off: [], rest: []};
+    let common = groups[0].filter(w => groups.every(g => g.includes(w)));
+    const on = [];
+    if (groups.length === 1) {
+      // One group: the chip whose terms it holds (the one with most of them), and words besides.
+      const fit = CHIPS.filter(c => c.f && words(c.f).every(w => common.includes(w)))
+        .sort((a, b) => words(b.f).length - words(a.f).length)[0];
+      if (fit) {
+        on.push(fit.f);
+        common = common.filter(w => !words(fit.f).includes(w));
+      }
+    } else {
+      for (const g of groups) {
+        const c = CHIPS.find(c => c.f && sameWords(words(c.f), g.filter(w => !common.includes(w))));
+        if (!c) return {on: [], off: common.filter(w => xs.includes(w)), rest: [f], custom: true};
+        on.push(c.f);
+      }
+    }
+    return {on, off: common.filter(w => xs.includes(w)), rest: common.filter(w => !xs.includes(w))};
+  }
+
+  function chipFilter(st) {
+    const tail = st.off.concat(st.rest).join(' ');
+    const on = CHIPS.filter(c => st.on.includes(c.f));
+    return on.length ? on.map(c => (c.f + ' ' + tail).trim()).join(' || ') : tail;
+  }
+
+  // A click shows a chip's packets or stops showing them; hide (a right or shift click) hides
+  // them or shows them again. A filter typed by hand starts over from the chip shown, and keeps
+  // what it was when a chip is hidden: its term goes into each group.
+  function chipClick(c, hide) {
+    const t = tTerms(cv.filter);
+    if (!c.f) return applyFilter(withT('', t));
+    const st = chipState(nonT(cv.filter));
+    if (st.custom) return applyFilter(hide ? toggleTerm(cv.filter, c.x) : withT(c.f, t));
+    if (hide) {
+      st.on = st.on.filter(f => f !== c.f);
+      st.off = st.off.includes(c.x) ? st.off.filter(w => w !== c.x) : st.off.concat(c.x);
+    } else {
+      st.off = st.off.filter(w => w !== c.x);
+      st.on = st.on.includes(c.f) ? st.on.filter(f => f !== c.f) : st.on.concat(c.f);
+    }
+    applyFilter(withT(chipFilter(st), t));
+  }
+
   function renderChips() {
-    setHTML($('cv-chips'), chipsHTML(nonT(cv.filter), CHIPS) +
+    const f = nonT(cv.filter);
+    const st = chipState(f);
+    const all = !st.on.length && !st.off.length && !st.rest.length;
+    setHTML($('cv-chips'), CHIPS.map((c, k) => {
+      const state = !c.f ? (all ? 'on' : '') : st.on.includes(c.f) ? 'on' : st.off.includes(c.x) ? 'off' : '';
+      const title = !c.f ? 'every packet' : `${c.f} — click: show these, right click: hide them`;
+      return `<button class="small-btn cv-chip ${state}" data-k="${k}" aria-pressed="${state === 'on'}"` +
+        `${state === 'off' ? ' aria-label="' + esc(c.label) + ', hidden"' : ''} title="${esc(title)}">${esc(c.label)}</button>`;
+    }).join('') +
       (tTerms(cv.filter).length ? '<button class="small-btn cv-chip on" data-unzoom="1">whole capture ✕</button>' : ''));
   }
 
@@ -540,17 +612,79 @@
 
   // ------------------------------------------------------------ adding a term to the filter
 
-  // The filter with one more term (or "!term"), keeping everything else: what a click on a term
-  // in the detail or the statistics does. A filter with "||" groups is left to be edited by hand.
+  // A term into every group of the filter, or out of every group when all have it: what hiding a
+  // chip does to a filter typed by hand.
+  function toggleTerm(f, t) {
+    const groups = splitGroups(f.trim()).map(words);
+    if (groups.length && groups.every(g => g.includes(t))) return groups.map(g => g.filter(w => w !== t).join(' ')).filter(Boolean).join(' || ');
+    return withGroups(f, t);
+  }
+
+  // The filter with one more term in each group ("a || b" and t: "a t || b t"), its opposite taken
+  // out ("handle:12" replaces "!handle:12").
+  function withGroups(f, t) {
+    const opposite = t[0] === '!' ? t.slice(1) : '!' + t;
+    const groups = splitGroups(f.trim()).map(words);
+    return (groups.length ? groups : [[]]).map(g => {
+      const w = g.filter(x => x !== opposite);
+      return (w.includes(t) ? w : w.concat(t)).join(' ');
+    }).join(' || ');
+  }
+
+  // What a click on a term in the detail or the statistics does, and the menus' filter in/out:
+  // the filter keeps everything and narrows by the term (or "!term") in each of its groups.
   function addTerm(term, neg) {
-    const cur = cv.filter.trim();
-    if (/(^|\s)\|\|(\s|$)/.test(cur)) { toast('This filter has || groups: add the term where it belongs by hand'); return; }
-    const t = (neg ? '!' : '') + term;
-    const words = cur ? cur.split(/\s+/) : [];
-    if (words.includes(t)) return;
-    // The opposite term goes (handle:12 → !handle:12 replaces it).
-    const opposite = neg ? term : '!' + term;
-    applyFilter(words.filter(w => w !== opposite).concat(t).join(' '));
+    const f = withGroups(cv.filter, (neg ? '!' : '') + term);
+    if (f !== cv.filter) applyFilter(f);
+  }
+
+  // What a packet is, as filter terms, the most particular first: its command (with the Complete
+  // and Status that answer it) or event, its protocol or channel, its link; is:adv, is:vendor.
+  // An MGMT packet by its name, a phrase of the summary: the index keeps no MGMT opcodes.
+  function kindTerms(p) {
+    const hex = (v, w) => '0x' + v.toString(16).padStart(w, '0');
+    const t = [];
+    if (p.type === 'mgmt') {
+      const name = [];
+      for (const w of (p.summary || '').split(' ')) {
+        if (!/^[A-Za-z][A-Za-z/-]*:?$/.test(w) || (w.endsWith(':') && name.length > 2)) break;
+        name.push(w);
+      }
+      if (name.length > 1) t.push(`"${name.join(' ')}"`);
+    }
+    if (p.opcode != null) t.push(`opcode:${hex(p.opcode, 4)}`);
+    else if (p.subevt != null) t.push(`subevt:${hex(p.subevt, 2)}`);
+    else if (p.evt != null) t.push(`evt:${hex(p.evt, 2)}`);
+    if (p.type === 'acl') {
+      if (p.proto && p.proto !== 'l2cap') t.push(`proto:${p.proto}`);
+      else if (p.cid != null) t.push(`cid:${hex(p.cid, 4)}`);
+    }
+    if (p.handle != null) t.push(`handle:${p.handle}`);
+    if (p.adv) t.push('is:adv');
+    if (p.vendor) t.push('is:vendor');
+    if (!t.length || ['sco', 'iso', 'mgmt', 'log', 'index'].includes(p.type)) t.push(`type:${p.type}`);
+    return t;
+  }
+
+  // Terms of one field joined into one: opcode:0x2042 and opcode:0x200c are opcode:0x2042|0x200c.
+  // Null when they are of different fields.
+  function oneTerm(terms) {
+    const field = t => (/^[a-z]+:/.exec(t) || [''])[0];
+    if (!terms.length || terms.some(t => field(t) !== field(terms[0]) || !field(t))) return null;
+    return field(terms[0]) + [...new Set(terms.map(t => t.slice(field(t).length)))].join('|');
+  }
+
+  // The menu's filter items for packets: each of one packet's terms in and out; for several, their
+  // kinds (the first term of each) in and out together.
+  function filterItems(ps) {
+    if (!ps.length) return [];
+    if (ps.length === 1) {
+      return kindTerms(ps[0]).slice(0, 3).flatMap(t => [[`Filter in ${t}`, () => addTerm(t)], [`Filter out ${t}`, () => addTerm(t, true)]]);
+    }
+    const kinds = [...new Set(ps.map(p => kindTerms(p)[0]))];
+    const one = oneTerm(kinds);
+    if (!one) return [[`Filter out ${kinds.length} kinds`, () => applyFilter(kinds.reduce((f, t) => withGroups(f, '!' + t), cv.filter))]];
+    return [[`Filter in ${one}`, () => addTerm(one)], [`Filter out ${one}`, () => addTerm(one, true)]];
   }
 
   function termsOf(d) {
@@ -567,6 +701,8 @@
     if (d.dir) t.push(`dir:${d.dir}`);
     t.push(`type:${d.type}`);
     if (d.err) t.push('is:err');
+    if (d.adv) t.push('is:adv');
+    if (d.vendor) t.push('is:vendor');
     return t;
   }
 
@@ -791,9 +927,15 @@
     const n = cv.sel.size;
     if (!n) return;
     $('cv-table').focus({preventScroll: true});
+    // The kinds of the picked rows loaded (a shift-click range is all fetched, and at most 20
+    // kinds make a menu item that still reads).
+    const picked = [...cv.sel].map(i => cv.rows.get(i)).filter(Boolean);
+    const kinds = new Set(picked.map(p => kindTerms(p)[0]));
+    const filter = kinds.size <= 20 ? filterItems(picked) : [];
     openMenu(e, [
       [n > 1 ? `Copy ${fmtN(n)} rows` : 'Copy row', () => copyText(rowsText(false))],
       [n > 1 ? 'Copy summaries' : 'Copy summary', () => copyText(rowsText(true))],
+      ...(filter.length ? ['-', ...filter] : []),
     ]);
   }
 
@@ -808,6 +950,13 @@
       cv.danchor = line;
       paintDsel();
     }
+    // A term under the summary: that term in or out, before anything else.
+    const term = e.target.closest('[data-term]');
+    if (term) {
+      const t = term.dataset.term;
+      $('cv-detail').focus({preventScroll: true});
+      return openMenu(e, [[`Filter in ${t}`, () => addTerm(t)], [`Filter out ${t}`, () => addTerm(t, true)]]);
+    }
     const items = [];
     if (text) items.push(['Copy selected text', () => copyText(text)]);
     if (cv.dsel.size) items.push([cv.dsel.size > 1 ? `Copy ${cv.dsel.size} lines` : 'Copy line', () => copyText(dselText())]);
@@ -817,6 +966,7 @@
       items.push(['Copy hex dump', () => copyText($('cv-hex').textContent.replace(/\n$/, ''))]);
       items.push(['Copy bytes as hex', () => copyText(d.hex)]);
     }
+    items.push('-', ...filterItems([d]));
     $('cv-detail').focus({preventScroll: true});
     openMenu(e, items);
   }
@@ -1162,8 +1312,14 @@
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.unzoom) return applyFilter(nonT(cv.filter));
-      applyFilter(withT(chipToggle(nonT(cv.filter), b.dataset.chip, CHIPS), tTerms(cv.filter)));
+      chipClick(CHIPS[Number(b.dataset.k)], e.shiftKey);
     };
+    $('cv-chips').addEventListener('contextmenu', e => {
+      const b = e.target.closest('button[data-k]');
+      if (!b || e.shiftKey) return;
+      e.preventDefault();
+      chipClick(CHIPS[Number(b.dataset.k)], true);
+    });
     $('cv-conn').onchange = e => { cv.conn = e.target.value; fetchGraph(); };
     $('cv-time').onchange = e => setTimeMode(e.target.value);
     $('cv-ctx').onchange = renderSave;

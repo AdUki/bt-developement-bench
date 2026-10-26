@@ -431,6 +431,8 @@ bool parse_group(const std::vector<Token>& toks, Filter* out, std::string* err) 
               else if (v == "mark") mask |= 2;
               else if (v == "cont") mask |= 4;
               else if (v == "lat") mask |= 8;
+              else if (v == "vendor") mask |= 16;
+              else if (v == "adv") mask |= 32;
               else ok = false;
               break;
             default: {
@@ -448,7 +450,7 @@ bool parse_group(const std::vector<Token>& toks, Filter* out, std::string* err) 
             if (t.kind == Term::kType) hint = hints[0];
             if (t.kind == Term::kDir) hint = hints[1];
             if (t.kind == Term::kProto) hint = hints[2];
-            if (t.kind == Term::kIs) hint = "err|mark|cont|lat";
+            if (t.kind == Term::kIs) hint = "err|mark|cont|lat|vendor|adv";
             *err = "unknown " + field + " '" + v + "' (" + hint + ")";
             return false;
           }
@@ -512,7 +514,8 @@ bool Filter::match_index(const IndexEntry& e, double t, uint32_t n) const {
       case Term::kIs: {
         const uint32_t mask = term.values[0];
         m = ((mask & 1) && (e.flags & kFlagErr)) || ((mask & 2) && (e.flags & kFlagMark)) ||
-            ((mask & 4) && (e.flags & kFlagCont)) || ((mask & 8) && e.lat_us != kNoLat);
+            ((mask & 4) && (e.flags & kFlagCont)) || ((mask & 8) && e.lat_us != kNoLat) ||
+            ((mask & 16) && (e.flags & kFlagVendor)) || ((mask & 32) && (e.flags & kFlagAdv));
         break;
       }
       case Term::kCmp: {
@@ -850,6 +853,7 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
       e.flags |= kFlagTx;
       if (len >= 3) {
         e.opcode = le16(d);
+        if ((e.opcode >> 10) == 0x3f) e.flags |= kFlagVendor;
         if (hci_cmd_has_handle(e.opcode) && len >= 5) e.handle = le16(d + 3) & 0x0fff;
       }
       break;
@@ -872,6 +876,10 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
       } else if (e.evt == 0x0f && n >= 4) {
         e.opcode = le16(p + 2);
         if (p[0]) e.flags |= kFlagErr;
+      } else if (e.evt == 0xff) {
+        e.flags |= kFlagVendor;
+      } else if (e.evt == 0x02 || e.evt == 0x22 || e.evt == 0x2f) {
+        e.flags |= kFlagAdv;  // inquiry results
       } else if (e.evt == kEvtNumCompletedPackets && n >= 1) {
         for (size_t i = 0; i < p[0] && 1 + 4 * (i + 1) <= n; ++i) {
           const uint16_t h = le16(p + 1 + 4 * i) & 0x0fff;
@@ -892,6 +900,12 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
         }
       } else if (e.evt == kEvtLeMeta && n >= 1) {
         e.sub = p[0];
+        // Advertising, direct, extended and periodic advertising reports (v1 and v2), BIGInfo,
+        // scan requests received: what scanning and periodic sync report, many a second.
+        if (e.sub == 0x02 || e.sub == 0x0b || e.sub == 0x0d || e.sub == 0x0f || e.sub == 0x13 ||
+            e.sub == 0x22 || e.sub == 0x25) {
+          e.flags |= kFlagAdv;
+        }
         const uint8_t* q = p + 1;
         const size_t m = n - 1;
         if (le_status_handle(e.sub) && m >= 3) {
@@ -931,6 +945,7 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
       } else if (e.evt == 0x10 || e.evt == 0x1a) {
         e.flags |= kFlagErr;  // Hardware Error, Data Buffer Overflow
       }
+      if ((e.opcode >> 10) == 0x3f) e.flags |= kFlagVendor;  // a vendor command's Complete/Status
       break;
     }
     case kMonAclTx:
@@ -1058,6 +1073,9 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
       data(e.handle, tx, static_cast<uint32_t>(len - hdr), iso ? "cis" : "sco");
       break;
     }
+    case kMonCtrlEvent:  // cookie, event code: Device Found and Advertisement Monitor Device Found
+      if (len >= 6 && (le16(d + 4) == 0x0012 || le16(d + 4) == 0x002f)) e.flags |= kFlagAdv;
+      break;
     case kMonIndexInfo:  // address, manufacturer
       if (len >= 8 && le16(d + 6) != kNoManufacturer) tr.manufacturer[e.index] = le16(d + 6);
       break;
@@ -1199,10 +1217,15 @@ ContextKind context_kind(const IndexEntry& e) {
       return kCtxIndex;
     case kMonEvent:
       if (e.evt == 0x03 || e.evt == 0x05 || e.evt == 0x2c) return kCtxLink;
-      return e.evt == 0x3e && (e.sub == 0x01 || e.sub == 0x0a || e.sub == 0x29 || e.sub == 0x19 ||
-                               e.sub == 0x1b)
-                 ? kCtxLink
-                 : kCtxNone;
+      if (e.evt == kEvtLeMeta && (e.sub == kLeConnComplete || e.sub == kLeEnhConnComplete ||
+                                  e.sub == kLeEnhConnCompleteV2 || e.sub == kLeCisEstablished ||
+                                  e.sub == kLeCisEstablishedV2)) {
+        return kCtxLink;
+      }
+      if (IsoTracker::setup_packet(e.mon, e.evt, e.sub, e.opcode)) return kCtxIso;
+      return IsoTracker::report_packet(e.mon, e.evt, e.sub) ? kCtxBase : kCtxNone;
+    case kMonCommand:
+      return IsoTracker::setup_packet(e.mon, e.evt, e.sub, e.opcode) ? kCtxIso : kCtxNone;
     case kMonAclTx:
     case kMonAclRx:
       if (e.proto == kProtoL2cap && (e.cid == 1 || e.cid == 5)) return kCtxSig;
@@ -1393,13 +1416,20 @@ json packet_json(const IndexEntry& e, uint64_t n, double t, const std::string& s
   if (e.flags & kFlagErr) j["err"] = true;
   if (e.flags & kFlagMark) j["mark"] = true;
   if (e.flags & kFlagCont) j["cont"] = true;
+  if (e.flags & kFlagVendor) j["vendor"] = true;
+  if (e.flags & kFlagAdv) j["adv"] = true;
+  // What the filter can name besides the columns: the console's menu offers a row's kind.
+  if (e.opcode) j["opcode"] = e.opcode;
+  if (e.mon == kMonEvent) j["evt"] = e.evt;
+  if (e.mon == kMonEvent && e.evt == kEvtLeMeta) j["subevt"] = e.sub;
   return j;
 }
 
 json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d, size_t len,
-                        const std::vector<json>& frame_extra, const GattDb* gatt, uint16_t manufacturer) {
+                        const std::vector<json>& frame_extra, const GattDb* gatt, uint16_t manufacturer,
+                        const IsoStream* iso) {
   Dissection ds;
-  dissect(e, d, len, true, &ds, gatt, manufacturer);
+  dissect(e, d, len, true, &ds, gatt, manufacturer, iso);
 
   json frame{{"name", "Frame"}, {"value", std::to_string(n)}, {"children", json::array()}};
   auto& fc = frame["children"];
@@ -1434,10 +1464,6 @@ json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t
     hex.push_back(digits[d[i] & 15]);
   }
   json out = packet_json(e, n, t, ds.summary);
-  // What the filter can name besides the list's columns (the console offers them as terms).
-  if (e.opcode) out["opcode"] = e.opcode;
-  if (e.mon == kMonEvent) out["evt"] = e.evt;
-  if (e.mon == kMonEvent && e.evt == kEvtLeMeta) out["subevt"] = e.sub;
   out["fields"] = std::move(fields);
   out["hex"] = std::move(hex);
   return out;
@@ -1660,6 +1686,93 @@ void gatt_before(PacketIndex& idx, size_t i, GattDb* g) {
   }
 }
 
+// Like gatt_before(): the setup packets are few and cheap to find in the index. Only a CIS reads
+// the ATT packets of its ACL link (its ASEs), and only a receiver's BIS the periodic advertising
+// reports, newest first until one of its train carries the BASE.
+void iso_before(PacketIndex& idx, size_t i, IsoStream* s) {
+  const IndexEntry at = idx.at(i);
+  const bool tx = at.flags & kFlagTx;
+  size_t sdu_len = 0;
+  {
+    size_t len = 0;
+    const uint8_t* d = idx.read(i, &len);
+    if (!d || len < 4) return;
+    const uint16_t hf = le16(d);
+    const size_t sdu_at = 4 + ((hf & 0x4000) ? 4 : 0);
+    if (((hf >> 12) & 1) == 0 && sdu_at + 4 <= len) sdu_len = le16(d + sdu_at + 2) & 0x0fff;
+  }
+  IsoTracker tr;
+  const std::string& ctx = idx.context_records();
+  const auto* c = reinterpret_cast<const uint8_t*>(ctx.data());
+  auto each_ctx = [&](const std::function<void(uint16_t index, uint16_t mon, const uint8_t* d, size_t len)>& fn) {
+    for (size_t off = 0; off + kRecHdr <= ctx.size();) {
+      const uint32_t incl = be32(c + off + 4);
+      if (off + kRecHdr + incl > ctx.size()) break;
+      const uint32_t flags = be32(c + off + 8);
+      fn(static_cast<uint16_t>(flags >> 16), static_cast<uint16_t>(flags & 0xffff), c + off + kRecHdr, incl);
+      off += kRecHdr + incl;
+    }
+  };
+  each_ctx([&](uint16_t index, uint16_t mon, const uint8_t* d, size_t len) {
+    if (index == at.index) tr.packet(index, mon, d, len, 0);
+  });
+  for (size_t j = 0; j < i; ++j) {
+    const IndexEntry& e = idx.at(j);
+    if (e.index != at.index || !IsoTracker::setup_packet(e.mon, e.evt, e.sub, e.opcode)) continue;
+    size_t len = 0;
+    const uint8_t* d = idx.read(j, &len);
+    if (d) tr.packet(at.index, e.mon, d, len, static_cast<uint32_t>(j + 1));
+  }
+
+  // A CIS: the ASE states its server notified on the ACL link, by the characteristic discovery
+  // named (or by their shape when the capture has no discovery).
+  const uint16_t acl = tr.acl_of(at.index, at.handle);
+  if (acl != IsoTracker::kNoAcl) {
+    GattDb g;
+    auto att = [&](const uint8_t* d, size_t len, bool atx, uint32_t frame) {
+      g.learn_acl(d, len, atx);
+      if (len < 12 || (d[8] != 0x1b && d[8] != 0x1d)) return;
+      const size_t pdu = std::min<size_t>(len - 8, le16(d + 4));
+      if (pdu < 3) return;
+      const uint16_t uuid = g.uuid(atx, le16(d + 9));
+      if (uuid == 0x2bc4 || uuid == 0x2bc5 || (!uuid && ase_notification(d, len)))
+        tr.ase_state(at.index, acl, atx, uuid, d + 11, pdu - 3, frame);
+    };
+    each_ctx([&](uint16_t index, uint16_t mon, const uint8_t* d, size_t len) {
+      if (index == at.index && (mon == kMonAclTx || mon == kMonAclRx) && len >= 9 && (le16(d) & 0x0fff) == acl &&
+          ((le16(d) >> 12) & 3) != 1 && le16(d + 6) == kCidAtt)
+        att(d, len, mon == kMonAclTx, 0);
+    });
+    for (size_t j = 0; j < i; ++j) {
+      const IndexEntry& e = idx.at(j);
+      if (e.index != at.index || e.handle != acl) continue;
+      if (e.mon == kMonEvent && context_kind(e) == kCtxLink) {
+        g.clear();
+      } else if (e.proto == kProtoAtt && !(e.flags & kFlagCont)) {
+        size_t len = 0;
+        const uint8_t* d = idx.read(j, &len);
+        if (d) att(d, len, e.flags & kFlagTx, static_cast<uint32_t>(j + 1));
+      }
+    }
+  }
+
+  // A synchronized BIS: the newest BASE of its train before the packet (the context's otherwise).
+  const uint16_t sync = tr.sync_of(at.index, at.handle);
+  if (sync != 0xffff) {
+    for (size_t j = i; j-- > 0;) {
+      const IndexEntry& e = idx.at(j);
+      if (e.index != at.index || !IsoTracker::report_packet(e.mon, e.evt, e.sub)) continue;
+      size_t len = 0;
+      const uint8_t* d = idx.read(j, &len);
+      if (d && len >= 5 && (le16(d + 3) & 0x0fff) == sync && base_report(d, len)) {
+        tr.base_report(at.index, d, len, static_cast<uint32_t>(j + 1));
+        break;
+      }
+    }
+  }
+  *s = tr.stream(at.index, at.handle, tx, sdu_len);
+}
+
 bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* status,
                          std::string* err) {
   std::shared_ptr<PacketIndex> idx = get(name, status, err);
@@ -1686,9 +1799,13 @@ bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* st
   const double t = static_cast<double>(e.ts_us - idx->t0_us()) / 1e6;
   GattDb gatt;
   if (e.proto == kProtoAtt) gatt_before(*idx, i, &gatt);
+  IsoStream iso;
+  const bool is_iso = e.mon == kMonIsoTx || e.mon == kMonIsoRx;
+  if (is_iso) iso_before(*idx, i, &iso);
   *out = packet_detail_json(e, n, t, bytes.data(), bytes.size(),
                             {json{{"name", "Since first packet"}, {"value", std::to_string(t) + " s"}}},
-                            e.proto == kProtoAtt ? &gatt : nullptr, idx->manufacturer(e.index));
+                            e.proto == kProtoAtt ? &gatt : nullptr, idx->manufacturer(e.index),
+                            is_iso ? &iso : nullptr);
   (*out)["packets_in_file"] = idx->size();
   // The link's peer, when its connection (or the file's context) said.
   for (const ConnInfo& c : idx->conns()) {
@@ -1705,9 +1822,11 @@ std::string monitor_header() {
   return std::string(reinterpret_cast<const char*>(hdr), sizeof hdr);
 }
 
-// Whether btmon needs entry i to decode what comes after it.
+// Whether btmon needs entry i to decode what comes after it. (Not the periodic advertising
+// reports: btmon does not follow a BASE, and a synchronized train sends one 50 times a second.)
 bool btmon_context(PacketIndex& idx, size_t i) {
   const ContextKind k = context_kind(idx.at(i));
+  if (k == kCtxBase) return false;
   if (k != kCtxAtt) return k != kCtxNone;
   size_t len = 0;
   const uint8_t* d = idx.read(i, &len);

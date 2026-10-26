@@ -57,16 +57,17 @@ void ContextJournal::packet(int64_t ts_us, uint16_t index, uint16_t mon, const u
       // every controller to each monitor socket that opens, btmon's at every ring file.)
       // A controller that closes (powered off: bluetoothd restarting, an adapter power cycle)
       // ends its links without a Disconnection Complete for each; the decoder drops them too.
-      if (mon == kMonCloseIndex) {
+      if (mon == kMonCloseIndex || mon == kMonDelIndex) {
         for (auto it = links_.begin(); it != links_.end();) {
           it = (it->first >> 16) == index ? links_.erase(it) : std::next(it);
         }
+        for (auto it = base_.begin(); it != base_.end();) {
+          it = (it->first >> 16) == index ? base_.erase(it) : std::next(it);
+        }
+        iso_.erase(index);
       }
       if (mon == kMonDelIndex) {
         index_.erase(index);
-        for (auto it = links_.begin(); it != links_.end();) {
-          it = (it->first >> 16) == index ? links_.erase(it) : std::next(it);
-        }
         return;
       }
       keep(&index_[index], kMaxIndex, ts_us, index, mon, d, len);
@@ -89,6 +90,19 @@ void ContextJournal::packet(int64_t ts_us, uint16_t index, uint16_t mon, const u
       return;
     case kCtxAtt:
       if (att_discovery(d, len)) keep(&links_[link].att, kMaxAtt, ts_us, index, mon, d, len);
+      else if (ase_notification(d, len)) keep(&links_[link].ase, kMaxAse, ts_us, index, mon, d, len);
+      return;
+    case kCtxIso:
+      keep(&iso_[index], kMaxIso, ts_us, index, mon, d, len);
+      return;
+    case kCtxBase:
+      // The newest report of the train that carries a BASE, taken only when it differs: the
+      // train repeats it every interval.
+      if (len >= 5 && base_report(d, len)) {
+        Rec& r = base_[static_cast<uint32_t>(index) << 16 | (le16(d + 3) & 0x0fff)];
+        if (r.bytes.size() == 24 + len && std::memcmp(r.bytes.data() + 24, d, len) == 0) return;
+        r = Rec{seq_++, record(ts_us, index, mon, d, len)};
+      }
       return;
     default:
       return;
@@ -98,7 +112,9 @@ void ContextJournal::packet(int64_t ts_us, uint16_t index, uint16_t mon, const u
 size_t ContextJournal::size() const {
   size_t n = 0;
   for (const auto& [i, q] : index_) n += q.size();
-  for (const auto& [k, l] : links_) n += l.conn.size() + l.sig.size() + l.avdtp.size() + l.att.size();
+  for (const auto& [i, q] : iso_) n += q.size();
+  n += base_.size();
+  for (const auto& [k, l] : links_) n += l.conn.size() + l.sig.size() + l.avdtp.size() + l.att.size() + l.ase.size();
   return n;
 }
 
@@ -106,11 +122,14 @@ std::string ContextJournal::snapshot() const {
   // In the order they happened: btmon and the Classifier both follow state forward.
   std::vector<const Rec*> all;
   all.reserve(size());
-  for (const auto& [i, q] : index_) {
-    for (const Rec& r : q) all.push_back(&r);
+  for (const auto* m : {&index_, &iso_}) {
+    for (const auto& [i, q] : *m) {
+      for (const Rec& r : q) all.push_back(&r);
+    }
   }
+  for (const auto& [k, r] : base_) all.push_back(&r);
   for (const auto& [k, l] : links_) {
-    for (const auto* q : {&l.conn, &l.sig, &l.avdtp, &l.att}) {
+    for (const auto* q : {&l.conn, &l.sig, &l.avdtp, &l.att, &l.ase}) {
       for (const Rec& r : *q) all.push_back(&r);
     }
   }

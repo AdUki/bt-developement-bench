@@ -322,6 +322,235 @@ void test_filter() {
   CHECK_EQ(count_matches(idx, "addr:11:22:33"), 0u);
 }
 
+// is:vendor and is:adv: vendor commands with their answers and vendor events; the advertising and
+// inquiry reports and MGMT Device Found, the bulk of a capture made while scanning.
+void test_filter_flags() {
+  std::vector<Pkt> v;
+  int64_t t = kT0;
+  auto at = [&](uint16_t op, const Bytes& d) {
+    v.push_back({t, 0, op, d});
+    t += 1000;
+  };
+  at(kMonCommand, Bytes{0x09, 0xfc, 0x01, 0x00});            // Intel vendor command 0xfc09
+  at(kMonEvent, cmd_complete(0xfc09, Bytes{0x00}));          // its Command Complete
+  at(kMonEvent, evt(0xff, Bytes{0x01, 0x02}));               // a vendor event
+  at(kMonCommand, Bytes{0x03, 0x0c, 0x00});                  // Reset: neither
+  at(kMonEvent, cmd_complete(0x0c03, Bytes{0x00}));
+  at(kMonEvent, le_meta(0x0d, Bytes{0x01, 0x13, 0x00}));     // extended advertising report
+  at(kMonEvent, le_meta(0x0f, Bytes{0x40, 0x00, 0x7f, 0xc4, 0xff, 0x00, 0x00}));  // periodic
+  at(kMonEvent, evt(0x2f, Bytes(255, 0)));                   // extended inquiry result
+  at(kMonEvent, le_meta(0x01, Bytes(18, 0)));                // a connection: neither
+  at(kMonCtrlEvent, cat(Bytes{0x01, 0x00, 0x00, 0x00, 0x12, 0x00}, Bytes(14, 0)));  // Device Found
+  at(kMonCtrlEvent, cat(Bytes{0x01, 0x00, 0x00, 0x00, 0x0b, 0x00}, Bytes(7, 0)));   // Device Connected
+
+  const std::string path = tmp_path("flags.btsnoop");
+  write_file(path, v);
+  PacketIndex idx;
+  std::string err;
+  std::lock_guard<std::mutex> lk(idx.mu);
+  CHECK(idx.open(path, &err));
+  idx.extend(INT64_MAX);
+  CHECK_EQ(count_matches(idx, "is:vendor"), 3u);
+  CHECK_EQ(count_matches(idx, "is:adv"), 4u);
+  CHECK_EQ(count_matches(idx, "!is:adv !is:vendor"), 4u);
+  CHECK_EQ(count_matches(idx, "is:vendor|adv"), 7u);
+  CHECK_EQ(count_matches(idx, "is:adv type:mgmt"), 1u);
+  // The list's rows say so, and name what the filter can (the console's menu offers it).
+  const json row = btb::hci::packet_json(idx.at(5), 6, 0, "");
+  CHECK(row.value("adv", false));
+  CHECK_EQ(row.value("subevt", 0), 0x0d);
+  CHECK(btb::hci::packet_json(idx.at(0), 1, 0, "").value("vendor", false));
+  CHECK_EQ(btb::hci::packet_json(idx.at(1), 2, 0, "").value("opcode", 0), 0xfc09);
+}
+
+// ISO data by its stream: a broadcaster's BISes (Create BIG, the BASE it sets as periodic data), a
+// receiver's BIS on another controller (BIG Create Sync, the BASE in the train's reports) and a
+// CIS of a central (Set CIG Parameters, Create CIS) with the peer's ASEs, told apart by size as no
+// discovery is in the capture. Then the same packets with their setup in a ring file before: the
+// context journal carries it.
+Bytes lc3_ltv(uint8_t freq, uint8_t dur, uint16_t octets) {
+  Bytes b{0x02, 0x01, freq, 0x02, 0x02, dur, 0x03, 0x04};
+  add16(b, octets);
+  return b;
+}
+Bytes alloc_ltv(uint8_t bits) { return Bytes{0x05, 0x03, bits, 0x00, 0x00, 0x00}; }
+
+// Service data 0x1851 with a BASE: one LC3 subgroup of two BISes, FL and FR.
+Bytes base_ad() {
+  Bytes base{0x40, 0x9c, 0x00, 0x01, 0x02, 0x06, 0x00, 0x00, 0x00, 0x00};
+  const Bytes cfg = lc3_ltv(0x08, 0x01, 100);
+  base.push_back(static_cast<uint8_t>(cfg.size()));
+  base = cat(base, cfg);
+  base.push_back(0x00);  // no metadata
+  for (uint8_t b = 1; b <= 2; ++b) base = cat(base, cat(Bytes{b, 6}, alloc_ltv(b)));
+  Bytes ad{static_cast<uint8_t>(base.size() + 3), 0x16, 0x51, 0x18};
+  return cat(ad, base);
+}
+
+Bytes hci_cmd(uint16_t opcode, const Bytes& p) {
+  Bytes b;
+  add16(b, opcode);
+  b.push_back(static_cast<uint8_t>(p.size()));
+  return cat(b, p);
+}
+
+Bytes iso_sdu(uint16_t handle, uint16_t seq, size_t n) {
+  Bytes b;
+  add16(b, static_cast<uint16_t>(handle | 0x2000));  // complete SDU, no timestamp
+  add16(b, static_cast<uint16_t>(n + 4));
+  add16(b, seq);
+  add16(b, static_cast<uint16_t>(n));
+  for (size_t i = 0; i < n; ++i) b.push_back(static_cast<uint8_t>(i));
+  return b;
+}
+
+// An ASE state notified by the peer on ACL 64: Codec Configured with LC3 16 kHz 7.5 ms, or QoS
+// Configured on CIG 0 CIS 5.
+Bytes ase_codec(uint8_t id, uint16_t octets, uint8_t alloc) {
+  Bytes v{id, 0x01, 0x00, 0x02, 0x02, 0x14, 0x00};
+  v = cat(v, Bytes(12, 0));
+  v = cat(v, Bytes{0x06, 0x00, 0x00, 0x00, 0x00});
+  Bytes cfg = lc3_ltv(0x03, 0x00, octets);
+  if (alloc) cfg = cat(cfg, alloc_ltv(alloc));
+  v.push_back(static_cast<uint8_t>(cfg.size()));
+  return cat(v, cfg);
+}
+Bytes ase_qos(uint8_t id) {
+  Bytes v{id, 0x02, 0x00, 0x05, 0x4c, 0x1d, 0x00, 0x00, 0x02, 0x28, 0x00, 0x02, 0x0a, 0x00, 0x40, 0x9c, 0x00};
+  return v;
+}
+Bytes notify(uint16_t handle, const Bytes& v) {
+  Bytes a{0x1b};
+  add16(a, handle);
+  return acl(64, 2, l2cap(kCidAtt, cat(a, v)));
+}
+
+void test_iso_streams() {
+  std::vector<Pkt> setup, data;
+  int64_t t = kT0;
+  auto at = [&](std::vector<Pkt>& v, uint16_t index, uint16_t op, const Bytes& d) {
+    v.push_back({t, index, op, d});
+    t += 1000;
+  };
+  // Broadcaster, controller 0: advertising set 1 carries the BASE; BIG 0 of 2 BISes.
+  {
+    const Bytes ad = base_ad();
+    at(setup, 0, kMonCommand, hci_cmd(0x203f, cat(Bytes{0x01, 0x03, static_cast<uint8_t>(ad.size())}, ad)));
+    at(setup, 0, kMonCommand, hci_cmd(0x2068, cat(Bytes{0x00, 0x01, 0x02}, Bytes(28, 0))));
+    Bytes big{0x00, 0x00};
+    big = cat(big, Bytes(15, 0));
+    big.push_back(2);
+    add16(big, 0x0010);
+    add16(big, 0x0011);
+    at(setup, 0, kMonEvent, le_meta(0x1b, big));
+    at(setup, 0, kMonCommand, hci_cmd(0x206e, Bytes{0x10, 0x00, 0x00, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0}));
+  }
+  // Receiver, controller 1: sync 0x40's reports carry the BASE; BIG 1 synchronized to BIS 2.
+  {
+    const Bytes ad = base_ad();
+    at(setup, 1, kMonEvent, le_meta(0x0f, cat(Bytes{0x40, 0x00, 0x7f, 0xc4, 0xff, 0x00, static_cast<uint8_t>(ad.size())}, ad)));
+    Bytes cs{0x01, 0x40, 0x00, 0x00};
+    cs = cat(cs, Bytes(16, 0));
+    cs = cat(cs, Bytes{0x00, 0x00, 0x10, 0x01, 0x02});
+    at(setup, 1, kMonCommand, hci_cmd(0x206b, cs));
+    Bytes est{0x00, 0x01};
+    est = cat(est, Bytes(11, 0));
+    est.push_back(1);
+    add16(est, 0x0020);
+    at(setup, 1, kMonEvent, le_meta(0x1d, est));
+  }
+  // A CIS of a central, controller 0: ACL 64 to the peer, its ASEs 1 (40 octets, FL) and 2 (30,
+  // mono), CIG 0 with CIS 5 as handle 0x60.
+  {
+    Bytes p{0x00, 64, 0x00, 0x00, 0x01};
+    p = cat(p, kLePeer);
+    p = cat(p, Bytes{0x18, 0x00, 0x00, 0x00, 0xc8, 0x00, 0x00});
+    at(setup, 0, kMonEvent, le_meta(0x01, p));
+    at(setup, 0, kMonAclRx, notify(0x0030, ase_codec(1, 40, 0x01)));
+    at(setup, 0, kMonAclRx, notify(0x0033, ase_codec(2, 30, 0x00)));
+    at(setup, 0, kMonCommand, hci_cmd(0x2062, cat(cat(Bytes{0x00}, Bytes(13, 0)), cat(Bytes{0x01, 0x05}, Bytes(8, 0)))));
+    at(setup, 0, kMonEvent, cmd_complete(0x2062, Bytes{0x00, 0x00, 0x01, 0x60, 0x00}));
+    at(setup, 0, kMonAclRx, notify(0x0030, ase_qos(1)));
+    at(setup, 0, kMonAclRx, notify(0x0033, ase_qos(2)));
+    at(setup, 0, kMonCommand, hci_cmd(0x2064, Bytes{0x01, 0x60, 0x00, 64, 0x00}));
+  }
+  at(data, 0, kMonIsoTx, iso_sdu(0x10, 7, 100));
+  at(data, 0, kMonIsoTx, iso_sdu(0x11, 7, 100));
+  at(data, 1, kMonIsoRx, iso_sdu(0x20, 9, 100));
+  at(data, 0, kMonIsoTx, iso_sdu(0x60, 3, 40));
+  at(data, 0, kMonIsoRx, iso_sdu(0x60, 3, 30));
+  at(data, 0, kMonIsoTx, iso_sdu(0x60, 4, 41));  // not what the ASEs describe: bytes, not frames
+
+  auto details = [&](const std::string& path) {
+    std::vector<std::string> out;
+    PacketIndex idx;
+    std::string err;
+    std::lock_guard<std::mutex> lk(idx.mu);
+    CHECK(idx.open(path, &err));
+    idx.extend(INT64_MAX);
+    for (size_t i = 0; i < idx.size(); ++i) {
+      const auto& e = idx.at(i);
+      if (e.mon != kMonIsoTx && e.mon != kMonIsoRx) continue;
+      btb::hci::IsoStream st;
+      btb::hci::iso_before(idx, i, &st);
+      size_t len = 0;
+      const uint8_t* d = idx.read(i, &len);
+      btb::hci::Dissection ds;
+      btb::hci::dissect(e, d, len, true, &ds, nullptr, btb::hci::kNoManufacturer, &st);
+      out.push_back(ds.fields.dump());
+    }
+    return out;
+  };
+  auto has = [](const std::string& s, const std::string& w) {
+    const bool ok = s.find(w) != std::string::npos;
+    if (!ok) std::printf("  missing %s\n", w.c_str());
+    return ok;
+  };
+  auto check = [&](const std::vector<std::string>& d) {
+    CHECK_EQ(d.size(), 6u);
+    if (d.size() != 6) return;
+    CHECK(has(d[0], "\"BIS 1 of BIG 0\""));
+    CHECK(has(d[0], "\"LC3 frame FL\""));
+    CHECK(has(d[0], "\"HCI, transparent\""));
+    CHECK(has(d[1], "\"BIS 2 of BIG 0\""));
+    CHECK(has(d[1], "\"LC3 frame FR\""));
+    CHECK(has(d[2], "\"BIS 2 of BIG 1\""));
+    CHECK(has(d[2], "\"LC3 frame FR\""));
+    CHECK(has(d[3], "\"CIS 5 of CIG 0\""));
+    CHECK(has(d[3], "\"LC3 frame FL\""));
+    CHECK(has(d[3], "\"7.5 ms\""));
+    CHECK(has(d[4], "\"LC3 frame mono\""));
+    CHECK(has(d[4], "\"len\":30"));
+    CHECK(has(d[5], "\"CIS 5 of CIG 0\""));
+    CHECK(has(d[5], "\"Data\""));
+    CHECK(d[5].find("LC3 frame") == std::string::npos);
+  };
+  const std::string whole = tmp_path("iso-whole.btsnoop");
+  std::vector<Pkt> all = setup;
+  all.insert(all.end(), data.begin(), data.end());
+  write_file(whole, all);
+  check(details(whole));
+
+  // The setup in an earlier ring file: the journal's context makes the later file say the same.
+  // A periodic train's repeats keep one BASE.
+  btb::hci::ContextJournal j;
+  for (const auto& p : setup) j.packet(p.ts, p.index, p.opcode, p.data.data(), p.data.size());
+  const size_t held = j.size();
+  for (const auto& p : setup) {
+    if (p.opcode == kMonEvent && p.data[2] == 0x0f) j.packet(p.ts + 20000, p.index, p.opcode, p.data.data(), p.data.size());
+  }
+  CHECK_EQ(j.size(), held);
+  const std::string later = tmp_path("iso-later.btsnoop");
+  write_file(later, data);
+  std::string err;
+  CHECK(j.write(later + ".ctx", &err));
+  check(details(later));
+  // Without it, the streams are unnamed and stay bytes.
+  unlink((later + ".ctx").c_str());
+  const auto bare = details(later);
+  CHECK(bare.size() == 6 && bare[0].find("setup not in the capture") != std::string::npos);
+}
+
 void test_filter_syntax() {
   Filter f;
   std::string err;
@@ -805,6 +1034,8 @@ int main() {
   test_index();
   test_context();
   test_filter();
+  test_filter_flags();
+  test_iso_streams();
   test_filter_syntax();
   test_summaries_and_detail();
   test_incremental();
