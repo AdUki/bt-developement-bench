@@ -116,6 +116,9 @@ class Out {
   const uint8_t* reach() const { return reach_; }
 
   const bool detail;
+  // The company of the packet's controller (kNoManufacturer: not known): picks the vendor
+  // commands' decoder.
+  uint16_t manufacturer = kNoManufacturer;
   std::string summary;
   json root = json::array();
 
@@ -437,9 +440,74 @@ const char* cmd_name(uint16_t op) {
   }
 }
 
-std::string cmd_label(uint16_t op) {
+// Vendor opcodes (OGF 0x3f) mean one thing on an Intel controller and another on a Broadcom or
+// Realtek one, so they are Intel's only where the controller said it is Intel (Out::manufacturer).
+constexpr uint16_t kCompanyIntel = 0x0002;
+// Intel's opcode for the Microsoft extension (btintel_set_msft_opcode), which bluetoothd's
+// advertisement monitors go through.
+constexpr uint16_t kIntelMsft = 0xfc1e;
+
+bool intel_vendor(uint16_t manufacturer, uint16_t op) { return manufacturer == kCompanyIntel && (op >> 10) == 0x3f; }
+
+// Named as btmon's monitor/intel.c names them; the ones it leaves unnamed (0xfc0a, 0xfc4e, 0xfc86,
+// 0xfca1, 0xfcb3) as the kernel's btintel.c uses them.
+const char* intel_cmd_name(uint16_t op) {
+  switch (op) {
+    case 0xfc01: return "Intel Reset";
+    case 0xfc02: return "Intel No Operation";
+    case 0xfc05: return "Intel Read Version";
+    case 0xfc06: return "Intel Set UART Baudrate";
+    case 0xfc07: return "Intel Enable LPM";
+    case 0xfc08: return "Intel PCM Write Configuration";
+    case 0xfc09: return "Intel Secure Send";
+    case 0xfc0a: return "Intel Set DSBR";
+    case 0xfc0d: return "Intel Read Secure Boot Params";
+    case 0xfc0e: return "Intel Write Secure Boot Params";
+    case 0xfc0f: return "Intel Unlock";
+    case 0xfc10: return "Intel Change UART Baudrate";
+    case 0xfc11: return "Intel Manufacturer Mode";
+    case 0xfc12: return "Intel Read Link RSSI";
+    case kIntelMsft: return "MSFT Extension";
+    case 0xfc22: return "Intel Get Exception Info";
+    case 0xfc24: return "Intel Clear Exception Info";
+    case 0xfc2f: return "Intel Write BD Data";
+    case 0xfc30: return "Intel Read BD Data";
+    case 0xfc31: return "Intel Write BD Address";
+    case 0xfc32: return "Intel Flow Specification";
+    case 0xfc34: return "Intel Read Secure ID";
+    case 0xfc38: return "Intel Set Synchronous USB Interface Type";
+    case 0xfc39: return "Intel Config Synchronous Interface";
+    case 0xfc3f: return "Intel SW RF Kill";
+    case 0xfc43: return "Intel Activate Deactivate Traces";
+    case 0xfc4d: return "Intel Stimulate Exception";
+    case 0xfc4e: return "Intel Coredump";
+    case 0xfc50: return "Intel Read HW Version";
+    case 0xfc52: return "Intel Set Event Mask";
+    case 0xfc53: return "Intel Config Link Controller";
+    case 0xfc86: return "Intel Read Offload Use Cases";
+    case 0xfc89: return "Intel DDC Write";
+    case 0xfc8a: return "Intel DDC Read";
+    case 0xfc8b: return "Intel DDC Config Write";
+    case 0xfc8c: return "Intel DDC Config Read";
+    case 0xfc8d: return "Intel Memory Read";
+    case 0xfc8e: return "Intel Memory Write";
+    case 0xfca1: return "Intel Set Link Statistics Traces";
+    case 0xfca6: return "Intel Read Supported Features";
+    case 0xfcb3: return "Intel Read FSEQ Status";
+    case 0xfe0b: return "Intel PPAG Enable";
+    default: return nullptr;
+  }
+}
+
+std::string cmd_label(uint16_t op, uint16_t manufacturer) {
   if (const char* n = cmd_name(op)) return n;
-  if ((op >> 10) == 0x3f) return sf("Vendor 0x%04x", op);
+  if ((op >> 10) == 0x3f) {
+    if (intel_vendor(manufacturer, op)) {
+      if (const char* n = intel_cmd_name(op)) return n;
+      return sf("Intel 0x%04x", op);
+    }
+    return sf("Vendor 0x%04x", op);
+  }
   return sf("Command 0x%04x", op);
 }
 
@@ -2509,6 +2577,439 @@ void adv_data_block(Out& o, const uint8_t* p, size_t n, std::string* s) {
   if (!info.empty()) *s += " " + info;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Intel vendor commands: what btintel sends a BE200 and its relatives (the firmware download in
+// Secure Send fragments, the DDC entries written after it, the version and feature reads) and the
+// Microsoft extension. Their layouts are those of btmon's monitor/intel.c and msft.c, and of
+// btintel.c for the commands btmon leaves undecoded.
+
+const char* intel_variant_name(uint32_t v) {
+  switch (v) {
+    case 0x17: return "Typhoon Peak2";
+    case 0x18: return "Solar";
+    case 0x19: return "Solar F";
+    case 0x1b: return "Magnetor";
+    case 0x1c: return "Gale Peak2";
+    case 0x1d: return "BlazarU";
+    case 0x1e: return "BlazarI";
+    case 0x1f: return "Scorpius Peak";
+    case 0x22: return "BlazarIW";
+    default: return nullptr;
+  }
+}
+
+const char* intel_image_name(uint32_t v) {
+  return v == 0x01 ? "bootloader" : v == 0x02 ? "IML" : v == 0x03 ? "firmware" : "?";
+}
+
+// The TLVs of Read Version (every controller since Typhoon Peak), types 16 to 49.
+const char* intel_tlv_name(uint8_t t) {
+  static const char* const names[] = {
+      "CNVi TOP", "CNVr TOP", "CNVi BT", "CNVr BT", "CNVi OTP", "CNVr OTP", "Device revision ID",
+      "USB VID", "USB PID", "PCIe VID", "PCIe DID", "PCIe subsystem ID", "Image type", "Time stamp",
+      "Build type", "Build number", "FW build product", "FW build HW", "FW build step", "BT spec",
+      "Manufacturer", "HCI revision", "LMP subversion", "OTP patch version", "Secure boot",
+      "Key from header", "OTP lock", "API lock", "Debug lock", "Minimum FW", "Limited CCE", "SBE type",
+      "OTP BD_ADDR", "Unlocked state"};
+  return t >= 16 && t - 16u < sizeof names / sizeof *names ? names[t - 16] : nullptr;
+}
+
+std::string intel_tlv_value(uint8_t t, const uint8_t* v, size_t n) {
+  switch (t) {
+    case 18:  // CNVi BT: the variant is bits 16-21
+      if (n >= 4) {
+        const char* name = intel_variant_name(le32(v) >> 16 & 0x3f);
+        return sf("0x%08x", le32(v)) + (name ? std::string(" (") + name + ")" : "");
+      }
+      break;
+    case 28:
+      if (n >= 1) return sf("%s (0x%02x)", intel_image_name(v[0]), v[0]);
+      break;
+    case 29:  // week, year: what btintel prints as "Firmware timestamp 20yy.ww"
+      if (n >= 2) return sf("20%02u.%u", v[1], v[0]);
+      break;
+    case 31:
+      if (n >= 4) return std::to_string(le32(v));
+      break;
+    case 36:
+      if (n >= 2) return company_str(le16(v));
+      break;
+    case 40: case 41: case 42: case 43: case 44: case 46: case 49:
+      if (n >= 1) return sf("%s (0x%02x)", v[0] ? "enabled" : "disabled", v[0]);
+      break;
+    case 45:
+      if (n >= 3) return sf("%u-%u.%u", v[0], v[1], 2000 + v[2]);
+      break;
+    case 48:
+      if (n >= 6) return bdaddr_str(v);
+      break;
+    default:
+      break;
+  }
+  if (n == 1) return sf("0x%02x", v[0]);
+  if (n == 2) return sf("0x%04x", le16(v));
+  if (n == 4) return sf("0x%08x", le32(v));
+  return hexbytes(v, n, 64);
+}
+
+// The DDC (device configuration) entries named so far: LE features is where the BE200's firmware
+// keeps Auracast off (docs/audio.md), LE extended features is btmon's.
+const char* intel_ddc_name(uint16_t id) {
+  switch (id) {
+    case 0x0126: return "LE features";
+    case 0x031f: return "LE extended features";
+    default: return nullptr;
+  }
+}
+
+// Set Event Mask's bits (btmon's events_table).
+const char* const kIntelEvents[] = {"bootup", "SCO rejected via LMP", "PTT switch notification", nullptr,
+                                    nullptr, nullptr, nullptr, "scan status", nullptr, "debug exception",
+                                    "fatal exception", "system exception", nullptr, "LE link established",
+                                    "FW trace string"};
+
+const char* msft_name(uint32_t code) {
+  switch (code) {
+    case 0x00: return "Read Supported Features";
+    case 0x01: return "Monitor RSSI";
+    case 0x02: return "Cancel Monitor RSSI";
+    case 0x03: return "LE Monitor Advertisement";
+    case 0x04: return "LE Cancel Monitor Advertisement";
+    case 0x05: return "LE Set Advertisement Filter Enable";
+    case 0x06: return "Read Absolute RSSI";
+    default: return "?";
+  }
+}
+
+const char* const kMsftFeatures[] = {
+    "RSSI monitoring for BR/EDR", "RSSI monitoring for LE connections", "RSSI monitoring of LE advertisements",
+    "advertisement monitoring", "P-192/P-256 key validation", "continuous advertisement monitoring v1",
+    nullptr, "AVDTP offload", nullptr, nullptr, "continuous advertisement monitoring v2"};
+
+// A 64-bit little-endian bit field of the parameters, named from a table.
+void bits64(Rd& r, const char* name, const char* const* names, size_t count) {
+  if (!r.has(8)) return r.skip(8);
+  const uint8_t* p = r.cur();
+  uint64_t v = 0;
+  for (int i = 7; i >= 0; --i) v = v << 8 | p[i];
+  if (r.o.detail) r.o.add(name, sf("0x%016llx (%s)", static_cast<unsigned long long>(v), bit_names(v, names, count).c_str()), p, 8);
+  r.skip(8);
+}
+
+void msft_rssi_params(Rd& r) {
+  r.dbm("RSSI threshold high");
+  r.dbm("RSSI threshold low");
+  r.u8("RSSI threshold low interval", "%u s");
+  r.with("RSSI sampling period", 1, [](uint32_t v) { return sf("%u ms (0x%02x)", v * 100, v); });
+}
+
+std::string msft_cmd(Rd& r) {
+  if (!r.has(1)) return {};
+  const uint8_t code = static_cast<uint8_t>(r.named("Subcommand", 1, msft_name));
+  std::string s = std::string(" ") + msft_name(code);
+  switch (code) {
+    case 0x01:  // Monitor RSSI
+      s += sf(" handle %u", r.handle());
+      msft_rssi_params(r);
+      break;
+    case 0x02:  // Cancel Monitor RSSI
+    case 0x06:  // Read Absolute RSSI
+      s += sf(" handle %u", r.handle());
+      break;
+    case 0x03: {  // LE Monitor Advertisement: thresholds, then what to match
+      msft_rssi_params(r);
+      const uint8_t type = static_cast<uint8_t>(r.named("Condition type", 1, [](uint32_t v) {
+        return v == 1 ? "patterns" : v == 2 ? "UUID" : v == 3 ? "IRK" : v == 4 ? "address" : "?";
+      }));
+      if (type == 1) {
+        const uint8_t num = r.u8("Patterns");
+        s += sf(" %u pattern%s", num, num == 1 ? "" : "s");
+        for (unsigned i = 0; i < num && r.has(1); ++i) {
+          const uint8_t len = static_cast<uint8_t>(r.raw(1));
+          OPEN_R(r, "Pattern", sf("%u", i + 1), r.cur(), std::min<size_t>(1 + len, r.left()));
+          r.u8("Length");
+          r.named("AD type", 1, [](uint32_t v) { return ad_type_name(static_cast<uint8_t>(v)); });
+          r.u8("Start byte");
+          r.hex("Data", len >= 2 ? len - 2 : 0);
+          CLOSE_R(r);
+        }
+      } else if (type == 2 && r.has(1)) {
+        const uint8_t ut = r.u8("UUID type");
+        const size_t k = ut == 1 ? 2 : ut == 2 ? 4 : ut == 3 ? 16 : 0;
+        if (k && r.has(k)) {
+          const std::string u = uuid_str(r.cur(), k);
+          if (r.o.detail) r.o.add("UUID", u, r.cur(), k);
+          r.skip(k);
+          s += " " + u;
+        }
+      } else if (type == 3) {
+        r.hex("IRK", 16);
+      } else if (type == 4) {
+        r.atype();
+        s += " " + r.addr();
+      }
+      break;
+    }
+    case 0x04:  // LE Cancel Monitor Advertisement
+      s += sf(" monitor %u", r.u8("Monitor handle"));
+      break;
+    case 0x05:  // LE Set Advertisement Filter Enable
+      s += r.with("Enable", 1, [](uint32_t v) {
+             return sf("%s (0x%02x)", v == 0 ? "current allow list" : v == 1 ? "all filter conditions" : "?", v);
+           }) ? " on" : " off";
+      break;
+    default:
+      break;
+  }
+  return s;
+}
+
+// After the status: the subcommand, then its return parameters.
+std::string msft_return(Rd& r) {
+  if (!r.has(1)) return {};
+  const uint8_t code = static_cast<uint8_t>(r.named("Subcommand", 1, msft_name));
+  std::string s = std::string(" ") + msft_name(code);
+  switch (code) {
+    case 0x00: {  // Read Supported Features
+      bits64(r, "Features", kMsftFeatures, sizeof kMsftFeatures / sizeof *kMsftFeatures);
+      const uint8_t len = r.u8("Event prefix length");
+      r.hex("Event prefix", len);
+      break;
+    }
+    case 0x03:  // LE Monitor Advertisement
+      s += sf(" monitor %u", r.u8("Monitor handle"));
+      break;
+    case 0x06:  // Read Absolute RSSI
+      s += sf(" handle %u", r.handle());
+      r.dbm("RSSI");
+      break;
+    default:
+      break;
+  }
+  return s;
+}
+
+// The parameters of an Intel vendor command; returns what the summary adds to its name.
+std::string intel_cmd(Rd& r, uint16_t op) {
+  std::string s;
+  switch (op) {
+    case 0xfc01:  // Reset
+      r.named("Reset type", 1, [](uint32_t v) { return v == 0 ? "soft" : v == 1 ? "hard" : "?"; });
+      r.yes_no("Patch vectors");
+      r.named("DDC parameters", 1, [](uint32_t v) { return v == 0 ? "keep" : v == 1 ? "reload from OTP" : "?"; });
+      if (r.named("Boot option", 1, [](uint32_t v) { return v == 0 ? "current image" : v == 1 ? "boot address" : "?"; })) {
+        s += sf(" boot 0x%08x", r.u32("Boot address", "0x%08x"));
+      } else {
+        r.u32("Boot address", "0x%08x");
+      }
+      break;
+    case 0xfc05:  // Read Version: none for the legacy layout, else the TLV types wanted
+      if (r.has(1) && r.cur()[0] == 0xff) s += " all types";
+      while (r.has(1)) {
+        r.with("Requested type", 1, [](uint32_t v) {
+          const char* n = v == 0xff ? "all supported" : intel_tlv_name(static_cast<uint8_t>(v));
+          return sf("%s (0x%02x)", n ? n : "?", v);
+        });
+      }
+      break;
+    case 0xfc06: {  // Set UART Baudrate
+      static const char* const rates[] = {"9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600",
+                                          "1843200", "3250000", "2000000", "3000000", "3714286", "4333333", "6500000"};
+      r.with("Baudrate", 1, [](uint32_t v) { return sf("%s (0x%02x)", v < 15 ? rates[v] : "?", v); });
+      break;
+    }
+    case 0xfc09: {  // Secure Send: one fragment of the firmware file
+      auto type = [](uint32_t v) { return v == 0 ? "init" : v == 1 ? "data" : v == 2 ? "sign" : v == 3 ? "public key" : "?"; };
+      const char* t = type(r.named("Type", 1, type));
+      s += sf(" %s %zu bytes", t, r.left());
+      r.hex("Fragment", r.left());
+      break;
+    }
+    case 0xfc0a:  // Set DSBR (btintel_set_dsbr)
+      r.yes_no("Enable");
+      r.u8("DSBR", "0x%02x");
+      break;
+    case 0xfc0e:  // Write Secure Boot Params, from the firmware file
+      s += sf(" boot 0x%08x", r.u32("Boot address", "0x%08x"));
+      r.u8("Firmware build number");
+      r.u8("Firmware build week");
+      r.u8("Firmware build year", "20%02u");
+      break;
+    case 0xfc11:  // Manufacturer Mode
+      s += r.yes_no("Mode") ? " on" : " off";
+      r.named("Reset", 1, [](uint32_t v) {
+        return v == 0 ? "no reset" : v == 1 ? "reset, patches off" : v == 2 ? "reset, patches on" : "?";
+      });
+      break;
+    case kIntelMsft:
+      s += msft_cmd(r);
+      break;
+    case 0xfc2f:  // Write BD Data
+      s += " " + r.addr();
+      break;
+    case 0xfc31:  // Write BD Address
+      s += " " + r.addr();
+      break;
+    case 0xfc43:  // Activate Deactivate Traces
+      r.u8("Transmit traces", "0x%02x");
+      r.u8("Transmit ARQ", "0x%02x");
+      r.u8("Receive traces", "0x%02x");
+      break;
+    case 0xfc4d:  // Stimulate Exception
+      r.named("Type", 1, [](uint32_t v) { return v == 0 ? "fatal exception" : v == 1 ? "debug exception" : "?"; });
+      break;
+    case 0xfc52:  // Set Event Mask
+      bits64(r, "Mask", kIntelEvents, sizeof kIntelEvents / sizeof *kIntelEvents);
+      break;
+    case 0xfc8b: {  // DDC Config Write: entries of length (of id and value), id, value
+      std::string ids;
+      while (r.has(3)) {
+        const uint8_t len = static_cast<uint8_t>(r.raw(1));
+        if (len < 2 || !r.has(1 + len)) break;
+        const uint16_t id = le16(r.cur() + 1);
+        const char* name = intel_ddc_name(id);
+        OPEN_R(r, "DDC entry", sf("0x%04x", id) + (name ? std::string(" (") + name + ")" : ""), r.cur(), 1 + len);
+        r.u8("Length");
+        r.u16("Identifier", "0x%04x");
+        if (id == 0x0126 && len - 2 >= 8) {
+          const std::string f = le_features_str(r.cur());
+          if (r.o.detail) r.o.add("LE features", hexbytes(r.cur(), 8) + " (" + f + ")", r.cur(), 8);
+          r.skip(8);
+          r.hex("Value", len - 10);
+        } else {
+          r.hex("Value", len - 2);
+        }
+        CLOSE_R(r);
+        ids += sf(" 0x%04x", id);
+      }
+      s += ids;
+      break;
+    }
+    case 0xfc8c:  // DDC Config Read: the entry's id
+      if (r.has(2)) s += sf(" 0x%04x", r.u16("Identifier", "0x%04x"));
+      break;
+    case 0xfc8e:  // Memory Write
+      s += sf(" 0x%08x", r.u32("Address", "0x%08x"));
+      r.named("Mode", 1, [](uint32_t v) { return v == 0 ? "byte" : v == 1 ? "half word" : v == 2 ? "word" : "?"; });
+      r.u8("Length");
+      r.hex("Data", r.left());
+      break;
+    case 0xfca1:  // btintel_set_debug_features: 0x02 on, 0x00 off
+      r.u8("Trace enable", "0x%02x");
+      break;
+    case 0xfca6:  // Read Supported Features
+      r.u8("Page");
+      break;
+    case 0xfe0b:  // PPAG Enable
+      r.with("Enable", 4, [](uint32_t v) {
+        return sf("%s (0x%08x)", v == 1 ? "EU" : v == 2 ? "China" : v == 3 ? "EU and China" : "?", v);
+      });
+      break;
+    default:
+      break;
+  }
+  return s;
+}
+
+// The return parameters after a successful status.
+std::string intel_return(Rd& r, uint16_t op, size_t n) {
+  std::string s;
+  switch (op) {
+    case 0xfc05: {  // Read Version: btmon's test for the legacy layout (status and 9 bytes)
+      if (n == 10 || (r.has(1) && r.cur()[0] == 0x37)) {
+        r.u8("Hardware platform", "0x%02x");
+        const uint8_t hw = r.u8("Hardware variant", "0x%02x");
+        r.with("Hardware revision", 1, [](uint32_t v) { return sf("%u.%u", v >> 4, v & 0x0f); });
+        const uint8_t fw = r.u8("Firmware variant", "0x%02x");
+        r.with("Firmware revision", 1, [](uint32_t v) { return sf("%u.%u", v >> 4, v & 0x0f); });
+        if (r.has(3)) {
+          const uint8_t* b = r.cur();
+          if (r.o.detail) r.o.add("Firmware build", sf("%u-%u.%u", b[0], b[1], 2000 + b[2]), b, 3);
+          r.skip(3);
+        }
+        r.u8("Firmware patch");
+        s += sf(" hw variant 0x%02x fw variant 0x%02x", hw, fw);
+        break;
+      }
+      const char* variant = nullptr;
+      const char* image = nullptr;
+      while (r.has(2)) {
+        const uint8_t* t = r.cur();
+        if (!r.has(2u + t[1])) break;
+        const char* name = intel_tlv_name(t[0]);
+        if (r.o.detail) r.o.add(name ? name : sf("Type %u", t[0]), intel_tlv_value(t[0], t + 2, t[1]), t, 2u + t[1]);
+        if (t[0] == 18 && t[1] >= 4) variant = intel_variant_name(le32(t + 2) >> 16 & 0x3f);
+        if (t[0] == 28 && t[1] >= 1) image = intel_image_name(t[2]);
+        r.skip(2u + t[1]);
+      }
+      if (variant) s += std::string(" ") + variant;
+      if (image) s += std::string(" ") + image;
+      break;
+    }
+    case 0xfc0d:  // Read Secure Boot Params (btintel's struct intel_boot_params)
+      r.u8("OTP format", "0x%02x");
+      r.u8("OTP content", "0x%02x");
+      r.u8("OTP patch", "0x%02x");
+      r.u16("Device revision ID", "0x%04x");
+      r.yes_no("Secure boot");
+      r.yes_no("Key from header");
+      r.u8("Key type", "0x%02x");
+      r.yes_no("OTP lock");
+      r.yes_no("API lock");
+      r.yes_no("Debug lock");
+      r.addr("OTP BD_ADDR");
+      if (r.has(3)) {
+        const uint8_t* b = r.cur();
+        if (r.o.detail) r.o.add("Minimum firmware build", sf("%u-%u.%u", b[0], b[1], 2000 + b[2]), b, 3);
+        r.skip(3);
+      }
+      r.yes_no("Limited CCE");
+      r.yes_no("Unlocked state");
+      break;
+    case kIntelMsft:
+      s += msft_return(r);
+      break;
+    case 0xfc30:  // Read BD Data
+      s += " " + r.addr();
+      break;
+    case 0xfc86:  // Read Offload Use Cases: btintel turns on HFP offload if preset[0] & 0x03
+      r.hex("Use cases", 8);
+      break;
+    case 0xfc8b:  // DDC Config Write
+      r.u16("Identifier", "0x%04x");
+      break;
+    case 0xfca6:  // Read Supported Features
+      r.u8("Page");
+      r.u8("Max pages");
+      r.hex("Features", 16);
+      break;
+    case 0xfcb3: {  // Read FSEQ Status (btintel_print_fseq_info)
+      const uint8_t st = static_cast<uint8_t>(r.named("FSEQ status", 1, [](uint32_t v) {
+        return v == 0 ? "success" : v == 1 ? "fatal error" : v == 2 ? "semaphore acquire error" : "?";
+      }));
+      if (st) s += " fseq error";
+      r.u32("Reason", "0x%08x");
+      r.u32("Global version", "0x%08x");
+      r.u32("Installed version", "0x%08x");
+      for (const char* name : {"Executed", "BT top"}) {
+        if (!r.has(4)) break;
+        const uint8_t* b = r.cur();
+        if (r.o.detail) r.o.add(name, sf("%02u.%02u.%02u.%02u", b[0], b[1], b[2], b[3]), b, 4);
+        r.skip(4);
+      }
+      for (const char* name : {"Top init version", "CNVio init version", "MBX WiFi file version", "BT version",
+                               "Top reset address", "MBX timeout", "MBX ack", "CNVi ID", "CNVr ID", "Error handle",
+                               "Magic no-alive indication", "OTP version", "MBX OTP version"}) {
+        r.u32(name, "0x%08x");
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return s;
+}
+
 void hci_command(Out& o, const uint8_t* d, size_t len) {
   if (len < 3) {
     o.summary = "Command (truncated)";
@@ -2517,7 +3018,7 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
   const uint16_t op = le16(d);
   const uint8_t* p = d + 3;
   const size_t n = std::min<size_t>(d[2], len - 3);
-  const std::string name = cmd_label(op);
+  const std::string name = cmd_label(op, o.manufacturer);
 
   OPEN("HCI Command", name, d, len);
   F("Opcode", sf("0x%04x (OGF 0x%02x, OCF 0x%03x) %s", op, op >> 10, op & 0x3ff, name.c_str()), d, 2);
@@ -2534,6 +3035,13 @@ void hci_command(Out& o, const uint8_t* d, size_t len) {
     return std::string();
   };
   Rd r(o, p, n);
+  if (intel_vendor(o.manufacturer, op)) {
+    s += intel_cmd(r, op);
+    rest(o, p, n);
+    CLOSE();
+    o.summary = s;
+    return;
+  }
 
   switch (op) {
     case 0x0401:  // Inquiry
@@ -3417,6 +3925,11 @@ std::string cmd_return(Out& o, uint16_t op, const uint8_t* r, size_t n) {
   if (r[0] != 0) return s;
   o.mark(r + 1);
   Rd rd(o, r + 1, n - 1);
+  if (intel_vendor(o.manufacturer, op)) {
+    s += intel_return(rd, op, n);
+    rest(o, r + 1, n - 1, "Return parameters");
+    return s;
+  }
   auto inquiry_scan_type = [](uint32_t v) { return std::string(v ? "interlaced" : "standard"); };
   switch (op) {
     case 0x1001:  // Read Local Version Information
@@ -4344,8 +4857,8 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
       if (n < 3) break;
       const uint16_t op = le16(p + 1);
       F("Num HCI command packets", std::to_string(p[0]), p, 1);
-      F("Command opcode", sf("0x%04x (%s)", op, cmd_label(op).c_str()), p + 1, 2);
-      s = cmd_label(op) + " complete" + cmd_return(o, op, p + 3, n - 3);
+      F("Command opcode", sf("0x%04x (%s)", op, cmd_label(op, o.manufacturer).c_str()), p + 1, 2);
+      s = cmd_label(op, o.manufacturer) + " complete" + cmd_return(o, op, p + 3, n - 3);
       break;
     }
     case 0x0f: {  // Command Status
@@ -4353,8 +4866,8 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
       const uint16_t op = le16(p + 2);
       F("Status", status_str(p[0]), p, 1);
       F("Num HCI command packets", std::to_string(p[1]), p + 1, 1);
-      F("Command opcode", sf("0x%04x (%s)", op, cmd_label(op).c_str()), p + 2, 2);
-      s = cmd_label(op) + (p[0] ? " status " + status_str(p[0]) : " pending");
+      F("Command opcode", sf("0x%04x (%s)", op, cmd_label(op, o.manufacturer).c_str()), p + 2, 2);
+      s = cmd_label(op, o.manufacturer) + (p[0] ? " status " + status_str(p[0]) : " pending");
       break;
     }
     case 0x13: {  // Number of Completed Packets
@@ -7930,8 +8443,10 @@ uint16_t GattDb::owner(bool local_server, uint16_t handle) const {
   return it == v.begin() ? 0 : *(it - 1);
 }
 
-void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out, const GattDb* gatt) {
+void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out, const GattDb* gatt,
+             uint16_t manufacturer) {
   Out o(d, detail);
+  o.manufacturer = manufacturer;
   switch (e.mon) {
     case kMonCommand: hci_command(o, d, len); break;
     case kMonEvent: hci_event(o, d, len); break;

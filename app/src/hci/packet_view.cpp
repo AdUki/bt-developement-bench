@@ -17,6 +17,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <iterator>
 #include <map>
 
 #include "btsnoop.h"
@@ -604,6 +605,9 @@ struct Classifier::State {
   };
   std::vector<std::unique_ptr<Link>> links;
   std::vector<ConnInfo> conns;
+  uint16_t manufacturer[256];  // by IndexEntry::index
+
+  State() { std::fill(std::begin(manufacturer), std::end(manufacturer), kNoManufacturer); }
 
   Link* find(uint16_t index, uint16_t handle) {
     for (auto& l : links) {
@@ -761,6 +765,8 @@ Classifier::~Classifier() = default;
 
 const std::vector<ConnInfo>& Classifier::conns() const { return st_->conns; }
 
+uint16_t Classifier::manufacturer(uint8_t index) const { return st_->manufacturer[index]; }
+
 void Classifier::reset_counts() {
   for (ConnInfo& c : st_->conns) {
     c.first_us = c.last_us = 0;
@@ -857,6 +863,11 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
       if (e.evt == kEvtCmdComplete && n >= 3) {
         e.opcode = le16(p + 1);
         if (n >= 4 && p[3]) e.flags |= kFlagErr;
+        // Read Local Version Information: a capture without Index Info (an H4 snoop log) names
+        // its controller here.
+        if (e.opcode == 0x1001 && n >= 12 && !p[3] && le16(p + 8) != kNoManufacturer) {
+          tr.manufacturer[e.index] = le16(p + 8);
+        }
         if (hci_cmd_has_handle(e.opcode) && n >= 6) e.handle = le16(p + 4) & 0x0fff;
       } else if (e.evt == 0x0f && n >= 4) {
         e.opcode = le16(p + 2);
@@ -1047,6 +1058,9 @@ void Classifier::classify(int64_t ts_us, uint16_t index, uint16_t mon, const uin
       data(e.handle, tx, static_cast<uint32_t>(len - hdr), iso ? "cis" : "sco");
       break;
     }
+    case kMonIndexInfo:  // address, manufacturer
+      if (len >= 8 && le16(d + 6) != kNoManufacturer) tr.manufacturer[e.index] = le16(d + 6);
+      break;
     case kMonUserLogging:
       if (len >= 2 + 7u && d[1] >= 7 && std::strncmp(reinterpret_cast<const char*>(d + 2), "btbench", 7) == 0) {
         e.flags |= kFlagMark;
@@ -1171,7 +1185,7 @@ std::string PacketIndex::summary(size_t i) {
   const uint8_t* d = read(i, &len);
   if (!d) return "(unreadable)";
   Dissection ds;
-  dissect(entries_[i], d, len, false, &ds);
+  dissect(entries_[i], d, len, false, &ds, nullptr, manufacturer(entries_[i].index));
   return ds.summary;
 }
 
@@ -1383,9 +1397,9 @@ json packet_json(const IndexEntry& e, uint64_t n, double t, const std::string& s
 }
 
 json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d, size_t len,
-                        const std::vector<json>& frame_extra, const GattDb* gatt) {
+                        const std::vector<json>& frame_extra, const GattDb* gatt, uint16_t manufacturer) {
   Dissection ds;
-  dissect(e, d, len, true, &ds, gatt);
+  dissect(e, d, len, true, &ds, gatt, manufacturer);
 
   json frame{{"name", "Frame"}, {"value", std::to_string(n)}, {"children", json::array()}};
   auto& fc = frame["children"];
@@ -1674,7 +1688,7 @@ bool PacketStore::packet(const std::string& name, uint32_t n, json* out, int* st
   if (e.proto == kProtoAtt) gatt_before(*idx, i, &gatt);
   *out = packet_detail_json(e, n, t, bytes.data(), bytes.size(),
                             {json{{"name", "Since first packet"}, {"value", std::to_string(t) + " s"}}},
-                            e.proto == kProtoAtt ? &gatt : nullptr);
+                            e.proto == kProtoAtt ? &gatt : nullptr, idx->manufacturer(e.index));
   (*out)["packets_in_file"] = idx->size();
   // The link's peer, when its connection (or the file's context) said.
   for (const ConnInfo& c : idx->conns()) {

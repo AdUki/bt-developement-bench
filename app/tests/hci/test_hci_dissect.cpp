@@ -244,7 +244,7 @@ void test_sdp_rfcomm_obex() {
 // One monitor packet of any kind (a command, an event, a management frame, an ACL packet), with
 // the summary-only path checked against the detail one as run() does.
 Dissection run_mon(uint16_t mon, const std::string& hex, uint8_t proto = 0, uint16_t cid = 0,
-                   const btb::hci::GattDb* gatt = nullptr) {
+                   const btb::hci::GattDb* gatt = nullptr, uint16_t manufacturer = btb::hci::kNoManufacturer) {
   const Bytes pkt = from_hex(hex);
   IndexEntry e{};
   e.mon = static_cast<uint8_t>(mon);
@@ -252,15 +252,18 @@ Dissection run_mon(uint16_t mon, const std::string& hex, uint8_t proto = 0, uint
   e.cid = cid;
   e.flags = mon == btb::hci::kMonAclTx ? btb::hci::kFlagTx : btb::hci::kFlagRx;
   Dissection ds;
-  btb::hci::dissect(e, pkt.data(), pkt.size(), true, &ds, gatt);
+  btb::hci::dissect(e, pkt.data(), pkt.size(), true, &ds, gatt, manufacturer);
   Dissection brief;
-  btb::hci::dissect(e, pkt.data(), pkt.size(), false, &brief);
+  btb::hci::dissect(e, pkt.data(), pkt.size(), false, &brief, nullptr, manufacturer);
   CHECK_EQ(brief.summary, ds.summary);
   return ds;
 }
 
 Dissection cmd(const std::string& hex) { return run_mon(btb::hci::kMonCommand, hex); }
 Dissection evt(const std::string& hex) { return run_mon(btb::hci::kMonEvent, hex); }
+// The same from an Intel controller (company 2).
+Dissection intel_cmd(const std::string& hex) { return run_mon(btb::hci::kMonCommand, hex, 0, 0, nullptr, 2); }
+Dissection intel_evt(const std::string& hex) { return run_mon(btb::hci::kMonEvent, hex, 0, 0, nullptr, 2); }
 
 // A decoded layout leaves no raw parameter block behind.
 bool no_blob(const json& fields) {
@@ -424,6 +427,70 @@ void test_hci_controller() {
                                                           "security manager)"));
 }
 
+void test_intel_vendor() {
+  // The VIM3L's BE200 at boot (2026-10-26): firmware download, the reset into it, its version,
+  // the DDC entry that turns Auracast on, and bluetoothd's Microsoft extension.
+  auto d = intel_cmd("09fcf9018efcf591b71a0000ef78408015204320" + std::string(2 * 232, '0'));
+  CHECK_EQ(d.summary, std::string("Intel Secure Send data 248 bytes"));
+  CHECK_EQ(field(d.fields, "Type"), std::string("0x01 (data)"));
+  d = intel_cmd("01fc080001000100081000");
+  CHECK_EQ(d.summary, std::string("Intel Reset boot 0x00100800"));
+  CHECK_EQ(field(d.fields, "Patch vectors"), std::string("enabled (0x01)"));
+  CHECK(no_blob(d.fields));
+  d = intel_evt("0e820105fc00100410190002110410190002120400371c00130400223100150232041602000017028780180236001c01031d"
+                "021d1a1e01011f0423d701002001082101082201a023010d2402020025022347260223472a01012b0101310100320487d8"
+                "9e2333040000000034003504cf011f023601023c01003d060000000000003e0100");
+  CHECK_EQ(d.summary, std::string("Intel Read Version complete Gale Peak2 firmware"));
+  CHECK_EQ(field(d.fields, "CNVi BT"), std::string("0x001c3700 (Gale Peak2)"));
+  CHECK_EQ(field(d.fields, "Time stamp"), std::string("2026.29"));
+  CHECK_EQ(field(d.fields, "Build number"), std::string("120611"));
+  CHECK_EQ(field(d.fields, "Manufacturer"), std::string("2 (Intel)"));
+  CHECK(no_blob(d.fields));
+  d = intel_cmd("8bfc0b0a2601fff901ffbe000000");
+  CHECK_EQ(d.summary, std::string("Intel DDC Config Write 0x0126"));
+  CHECK_EQ(field(d.fields, "DDC entry"), std::string("0x0126 (LE features)"));
+  CHECK(has(field(d.fields, "LE features"), "isochronous broadcaster, synchronized receiver"));
+  CHECK(no_blob(d.fields));
+  d = intel_evt("0e4d01b3fc000000000020ffffffff0600b100000004ca000004ca0600b100000000000600b1000600b10009220820715"
+                "6c83040291a241019000210190002000000204e4152450f00000014aa0000");
+  CHECK_EQ(field(d.fields, "FSEQ status"), std::string("0x00 (success)"));
+  CHECK_EQ(field(d.fields, "BT top"), std::string("00.00.04.202"));
+  CHECK(no_blob(d.fields));
+  d = intel_evt("0e10011efc00007f04000000000000028780");
+  CHECK_EQ(d.summary, std::string("MSFT Extension complete Read Supported Features"));
+  CHECK_EQ(field(d.fields, "Event prefix"), std::string("8780"));
+  CHECK(no_blob(d.fields));
+  d = intel_cmd("1efc020501");
+  CHECK_EQ(d.summary, std::string("MSFT Extension LE Set Advertisement Filter Enable on"));
+  // An advertisement monitor of one pattern (bluetoothd's, built per the MSFT spec): AD type 0x16,
+  // from byte 0, matching 0xfe2c.
+  d = intel_cmd("1efc0c03b49c050a01010416002cfe");
+  CHECK_EQ(d.summary, std::string("MSFT Extension LE Monitor Advertisement 1 pattern"));
+  CHECK_EQ(field(d.fields, "RSSI threshold high"), std::string("-76 dBm"));
+  CHECK_EQ(field(d.fields, "RSSI sampling period"), std::string("1000 ms (0x0a)"));
+  CHECK_EQ(field_under(d.fields, "Pattern", "AD type"), std::string("0x16 (Service data (16-bit UUID))"));
+  CHECK_EQ(field_under(d.fields, "Pattern", "Data"), std::string("2cfe"));
+  CHECK(no_blob(d.fields));
+  // The same opcodes from a controller not known to be Intel stay vendor commands.
+  d = cmd("8bfc0b0a2601fff901ffbe000000");
+  CHECK_EQ(d.summary, std::string("Vendor 0xfc8b"));
+  CHECK_EQ(field(d.fields, "Parameters"), std::string("0a2601fff901ffbe000000"));
+  d = run_mon(btb::hci::kMonCommand, "8bfc0b0a2601fff901ffbe000000", 0, 0, nullptr, 15);  // Broadcom
+  CHECK_EQ(d.summary, std::string("Vendor 0xfc8b"));
+
+  // The index learns a controller's company from its Index Info, and from Read Local Version
+  // Information where a capture has none.
+  btb::hci::Classifier cls;
+  IndexEntry e{};
+  const Bytes info = from_hex("2e5e36bba3440200");
+  cls.classify(0, 0, btb::hci::kMonIndexInfo, info.data(), info.size(), 0, &e);
+  CHECK_EQ(cls.manufacturer(0), 2);
+  CHECK_EQ(cls.manufacturer(1), btb::hci::kNoManufacturer);
+  const Bytes version = from_hex("0e0c01011000090000090f000000");
+  cls.classify(0, 1, btb::hci::kMonEvent, version.data(), version.size(), 1, &e);
+  CHECK_EQ(cls.manufacturer(1), 15);
+}
+
 void test_mgmt() {
   // bluetoothd's start (the VIM3L): the controller's info and the experimental features.
   auto d = run_mon(btb::hci::kMonCtrlEvent,
@@ -525,6 +592,7 @@ int main() {
   test_hci_advertising();
   test_hci_iso();
   test_hci_controller();
+  test_intel_vendor();
   test_mgmt();
   test_gatt_le_audio();
   return report("test_hci_dissect");

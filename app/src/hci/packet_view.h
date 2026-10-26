@@ -74,6 +74,8 @@ enum EntryFlags : uint8_t {
 constexpr uint16_t kNoHandle = 0xffff;
 constexpr uint32_t kNoLat = 0xffffffff;
 constexpr uint8_t kNoIndex = 0xff;
+// A controller's company ID not known yet (what the kernel's Index Info says before setup reads it).
+constexpr uint16_t kNoManufacturer = 0xffff;
 
 // One packet, 32 bytes. Everything the structured filter terms and the graphs need, so neither
 // touches the file.
@@ -179,9 +181,10 @@ struct GattDb {
 // what one packet cannot say about itself: direction, and the channel's protocol for L2CAP.
 // With detail=false only the summary is built (the text filter calls this per packet). gatt, when
 // given, decodes ATT values by their characteristic in the field tree (the summary stays the
-// list's).
+// list's). manufacturer is the company of the packet's controller (Classifier::manufacturer()):
+// vendor commands are decoded by it.
 void dissect(const IndexEntry& e, const uint8_t* d, size_t len, bool detail, Dissection* out,
-             const GattDb* gatt = nullptr);
+             const GattDb* gatt = nullptr, uint16_t manufacturer = kNoManufacturer);
 
 // For the indexer: where the handle sits in a command (first parameter) — and whether the
 // payload of an L2CAP channel is a failure (error response, reject, refused connection).
@@ -196,7 +199,7 @@ nlohmann::json packet_json(const IndexEntry& e, uint64_t n, double t, const std:
 // nodes are put into it after the time (what this view numbers or measures from).
 nlohmann::json packet_detail_json(const IndexEntry& e, uint64_t n, double t, const uint8_t* d,
                                   size_t len, const std::vector<nlohmann::json>& frame_extra,
-                                  const GattDb* gatt = nullptr);
+                                  const GattDb* gatt = nullptr, uint16_t manufacturer = kNoManufacturer);
 
 // ---- Context: the packets that explain later ones ----
 
@@ -259,6 +262,11 @@ class Classifier {
 
   const std::vector<ConnInfo>& conns() const;
 
+  // The company ID a controller index reported (Index Info, Read Local Version Information), or
+  // kNoManufacturer. The latest one is kept, not one per packet: btintel downloads the firmware
+  // before the kernel's Index Info names the controller, and those commands are Intel's too.
+  uint16_t manufacturer(uint8_t index) const;
+
   struct State;
 
  private:
@@ -319,6 +327,7 @@ class PacketIndex {
 
   // Maintained while indexing, for the graph's connection list.
   const std::vector<ConnInfo>& conns() const { return cls_.conns(); }
+  uint16_t manufacturer(uint8_t index) const { return cls_.manufacturer(index); }
 
  private:
   bool fill(uint64_t off, size_t n);  // makes [off, off+n) available in buf_

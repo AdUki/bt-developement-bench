@@ -72,12 +72,12 @@ int main(int argc, char** argv) {
       const std::vector<uint8_t> bytes(d, d + len);
       btb::hci::gatt_before(idx, i, &gatt);
       btb::hci::Dissection ds;
-      btb::hci::dissect(e, bytes.data(), bytes.size(), true, &ds, &gatt);
+      btb::hci::dissect(e, bytes.data(), bytes.size(), true, &ds, &gatt, idx.manufacturer(e.index));
       print_tree(ds.fields, 0);
       continue;
     }
     btb::hci::Dissection ds;
-    btb::hci::dissect(e, d, len, true, &ds);
+    btb::hci::dissect(e, d, len, true, &ds, nullptr, idx.manufacturer(e.index));
     print_tree(ds.fields, 0);
   }
   return 0;
