@@ -255,9 +255,12 @@ function buildNav() {
     const el = e.target.closest('[data-area]');
     if (!el) return;
     e.preventDefault();
-    // An area opens on the view last used in it.
+    // An area opens on the view last used in it, if that view is still the area's: one that moved
+    // to another area (System's Logs, now Traffic's) would open that area instead.
     const a = NAV.find(x => x.id === el.dataset.area);
-    go(lsGet('btbench.area.' + a.id) || viewKey(a.views[0]));
+    const last = lsGet('btbench.area.' + a.id);
+    const key = last && MOVED[last] || last;
+    go(key && areaOf(key.split('/')[0]) === a ? key : viewKey(a.views[0]));
   };
   $('views').onclick = e => {
     const el = e.target.closest('[data-view]');
