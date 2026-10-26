@@ -16,10 +16,16 @@
 //
 // Nothing is retried by itself: a device that sends no audio within 15 s of being picked, or whose
 // audio goes away, leaves the input failed with the reason until it is picked again.
+//
+// While nothing plays, a device that comes is connected by itself, as a speaker or a phone would:
+// one that starts sending while the input plays nothing becomes the input, and a Bluetooth sink
+// that connects while the input plays to no output becomes an output. Both only on BlueZ's news of
+// that device (a transport that came or started), never because something else went away.
 
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -95,6 +101,15 @@ class AudioRoute {
   nlohmann::json json_locked() const;
   void publish_locked();
   bool stream_alive(int id) const;
+  // Whether the input plays: a capture that runs, or the local stream unpaused.
+  bool playing_locked() const;
+  // The input put in place (PUT input): the route's capture goes, the local stream steps aside.
+  void set_input_locked(const std::string& type, const std::vector<RouteDevice>& devices, nlohmann::json* updated,
+                        std::string* err, int* status);
+  // BlueZ's transports against the last ones: a device that started sending, a sink that came.
+  void transports_changed_locked(const nlohmann::json& ts);
+  // A sink that came while the input plays to no output: one of the outputs now.
+  void look_for_sinks_locked();
   // The devices as the devices list names them, from BlueZ's transports ts.
   std::string who_locked(const nlohmann::json& ts) const;
 
@@ -108,6 +123,7 @@ class AudioRoute {
   bool stop_ = false;
   bool poked_ = false;
   bool unused_ = false;  // Bluetooth or the outputs changed: end_unused_ is to look
+  bool bt_changed_ = false;  // Bluetooth changed: its transports are to compare
   std::thread thread_;
 
   nlohmann::json outputs_ = nlohmann::json::array();  // the sinks, as stream_spec_json has them
@@ -121,6 +137,13 @@ class AudioRoute {
   static constexpr int64_t kUntilBack = INT64_MAX;
   int capture_ = 0;         // the capture the route made for a Bluetooth input
   int paused_ = 0;          // the board's stream paused for a Bluetooth input, resumed for local
+  // BlueZ's transports the last time (path → state); null until Bluetooth first said what it has,
+  // so the devices connected before do not count as coming.
+  nlohmann::json seen_transports_;
+  // Devices whose sending transport came: address → steady ms until which their sink is looked for
+  // (PipeWire makes the node a moment after BlueZ's transport).
+  std::map<std::string, int64_t> sink_looks_;
+  static constexpr int kSinkLookMs = 5000;
   EndUnused end_unused_;
 };
 

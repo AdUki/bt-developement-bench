@@ -720,6 +720,14 @@ stream loaded, playing or paused while a device is the input.
 | `PUT /api/audio/route` | `{"input": {"type": "bluetooth", "devices": [{"address", "kind"}]}}`, `{"input": {"type": "local"}}` (the local stream again, resumed) or `{"input": {"type": "none"}}`, and/or `{"outputs": [sinks]}` (as a stream's `sinks`). A new input takes the place of the one before: the route's capture goes, and the local stream steps aside — a URL stream (with its queue) is paused off its sinks, a test signal stopped. New outputs apply to the stream playing at once (`PUT /api/audio/streams/{id} {"sinks"}`: the kept ones play on untouched); the answer then has that stream as `updated` (its `sink_req`). The board's own Auracast broadcast exists to be an output: one that is not (taken off, or left from before) is cleared once it is off air (on BlueZ's signal that its transport went idle, or when the outputs change). 400 for an input or outputs that are not valid |
 | `POST /api/audio/route/play` | the board's own input: a `POST /api/audio/streams` body (not a capture) without its sinks — it plays on the route's outputs, in the place of every other local stream and of the route's capture (201, the stream) |
 
+While nothing plays, a device that comes is connected by itself. One that starts sending while
+the input plays nothing (`none`, `idle`, `waiting`, `failed`, the local stream paused) becomes the
+input: an A2DP source when it starts its stream, a broadcast when its BIS is synced, an LE Audio
+unicast source once its stream is configured (the board starts that one itself, by recording it).
+A Bluetooth sink (A2DP or LE Audio) whose transport comes while the input plays to no output (none
+on, or every one lost) becomes an output, or plays again if it was one; never the input's own
+device. Both act only on BlueZ's news of that device, never because another one went away.
+
 The outputs are kept in `/data/btbench/route.json` across restarts; the input is not. A browser
 listening is the browser's own (`GET /api/audio/streams/{stream}/listen`).
 

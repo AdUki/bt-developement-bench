@@ -379,6 +379,49 @@ bool AudioRoute::bind_locked() {
   return true;
 }
 
+void AudioRoute::set_input_locked(const std::string& type, const std::vector<RouteDevice>& devices, json* updated,
+                                  std::string* err, int* status) {
+  // The input that was: the route's capture goes, and the board's own stream steps aside — a
+  // playlist paused off its outputs (its queue kept, for when the board is the input again), a
+  // test signal or a station stopped.
+  if (capture_) engine_.remove(capture_);
+  capture_ = 0;
+  const int local = local_stream();
+  type_ = type;
+  devices_ = devices;
+  wait_until_ = 0;
+  if (type == "local") {
+    paused_ = 0;
+    if (local) {
+      json body2{{"sinks", outputs_}};
+      if (str(engine_.get(local)["source"], "type") == "url") body2["paused"] = false;
+      engine_.update(local, body2, updated, err, status);
+    }
+    set_input_state(local ? "playing" : "idle", "");
+    return;
+  }
+  if (local) {
+    const json s = engine_.get(local);
+    if (str(s["source"], "type") == "url") {
+      json ignored;
+      std::string e2;
+      int st2 = 0;
+      engine_.update(local, json{{"paused", true}, {"sinks", json::array()}}, &ignored, &e2, &st2);
+      paused_ = local;
+    } else {
+      engine_.remove(local);
+      paused_ = 0;
+    }
+  }
+  if (type == "none") {
+    set_input_state("idle", "");
+  } else {
+    set_input_state("waiting", "");
+    wait_until_ = mono_ms() + kWaitMs;
+    bind_locked();
+  }
+}
+
 bool AudioRoute::put(const json& body, json* out, std::string* err, int* status) {
   *status = 400;
   if (!body.is_object() || (!body.contains("input") && !body.contains("outputs"))) {
@@ -404,47 +447,7 @@ bool AudioRoute::put(const json& body, json* out, std::string* err, int* status)
     const int active = type_ == "bluetooth" ? (stream_alive(capture_) ? capture_ : 0) : type_ == "local" ? local_stream() : 0;
     if (active && !body.contains("input") && !engine_.update(active, json{{"sinks", outputs_}}, &updated, err, status)) return false;
   }
-  if (body.contains("input")) {
-    // The input that was: the route's capture goes, and the board's own stream steps aside — a
-    // playlist paused off its outputs (its queue kept, for when the board is the input again), a
-    // test signal or a station stopped.
-    if (capture_) engine_.remove(capture_);
-    capture_ = 0;
-    const int local = local_stream();
-    type_ = type;
-    devices_ = devices;
-    wait_until_ = 0;
-    if (type == "local") {
-      paused_ = 0;
-      if (local) {
-        json body2{{"sinks", outputs_}};
-        if (str(engine_.get(local)["source"], "type") == "url") body2["paused"] = false;
-        engine_.update(local, body2, &updated, err, status);
-      }
-      set_input_state(local ? "playing" : "idle", "");
-    } else {
-      if (local) {
-        const json s = engine_.get(local);
-        if (str(s["source"], "type") == "url") {
-          json ignored;
-          std::string e2;
-          int st2 = 0;
-          engine_.update(local, json{{"paused", true}, {"sinks", json::array()}}, &ignored, &e2, &st2);
-          paused_ = local;
-        } else {
-          engine_.remove(local);
-          paused_ = 0;
-        }
-      }
-      if (type == "none") {
-        set_input_state("idle", "");
-      } else {
-        set_input_state("waiting", "");
-        wait_until_ = mono_ms() + kWaitMs;
-        bind_locked();
-      }
-    }
-  }
+  if (body.contains("input")) set_input_locked(type, devices, &updated, err, status);
   *out = json_locked();
   if (!updated.is_null()) (*out)["updated"] = updated;
   publish_locked();
@@ -483,11 +486,93 @@ bool AudioRoute::play(const json& body, json* out, std::string* err, int* status
   return true;
 }
 
+bool AudioRoute::playing_locked() const {
+  if (type_ == "bluetooth") return state_ == "playing" && stream_alive(capture_);
+  if (type_ != "local") return false;
+  const int local = local_stream();
+  return local && !engine_.get(local).value("paused", false);
+}
+
+void AudioRoute::transports_changed_locked(const json& ts) {
+  const auto started = [](const std::string& st) { return st == "pending" || st == "active"; };
+  json now = json::object();
+  for (const json& t : ts.is_array() ? ts : json::array()) now[str(t, "path")] = str(t, "state");
+  if (seen_transports_.is_null()) {
+    seen_transports_ = now;
+    return;
+  }
+  for (const json& t : ts.is_array() ? ts : json::array()) {
+    const std::string path = str(t, "path"), st = str(t, "state"), u = str(t, "uuid"), addr = upper(str(t, "address"));
+    const bool had = seen_transports_.contains(path);
+    const std::string before = had ? seen_transports_[path].get<std::string>() : std::string{};
+    // The transport's UUID is the board's own role: A2DP source or a source PAC sends.
+    if (!had && (u == "110a" || u == "2bcb")) sink_looks_[addr] = mono_ms() + kSinkLookMs;
+    // A device that starts sending: A2DP's source starts its stream, a broadcast's BIS is synced.
+    // LE Audio unicast is the board's own to start (the central enables it when it records), so
+    // a receiving stream configured is the device being ready to send.
+    const std::string kind = u == "110b" ? "a2dp" : u == "2bc9" ? "bap" : u == "1851" ? "broadcast" : "";
+    if (kind.empty() || playing_locked()) continue;
+    if (kind == "bap" ? had : started(before) || !started(st)) continue;
+    LOG_INFO("route: {} sends while nothing plays: it is the input", addr);
+    json ignored;
+    std::string err;
+    int status = 0;
+    set_input_locked("bluetooth", {RouteDevice{addr, kind}}, &ignored, &err, &status);
+  }
+  seen_transports_ = now;
+}
+
+void AudioRoute::look_for_sinks_locked() {
+  const int64_t now = mono_ms();
+  const json ep = engine_.endpoints(false);
+  const int active = type_ == "bluetooth" ? (stream_alive(capture_) ? capture_ : 0) : type_ == "local" ? local_stream() : 0;
+  for (auto it = sink_looks_.begin(); it != sink_looks_.end();) {
+    const std::string addr = it->first;
+    std::string sink;
+    for (const json& e : ep.value("sinks", json::array())) {
+      const std::string k = route_kind(e);
+      if ((k == "a2dp" || k == "bap") && upper(str(e, "address")) == addr) {
+        sink = str(e, "id");
+        break;
+      }
+    }
+    if (sink.empty() && now < it->second) {
+      ++it;
+      continue;
+    }
+    it = sink_looks_.erase(it);
+    if (sink.empty() || !active || !playing_locked()) continue;
+    // Never the input's own device: what it sends would go back to it.
+    bool input = false;
+    for (const RouteDevice& d : devices_) input = input || (type_ == "bluetooth" && d.address == addr);
+    if (input) continue;
+    bool plays = false;
+    const json s = engine_.get(active);
+    for (const json& k : s.value("sinks_status", json::array())) {
+      const std::string st = str(k, "state");
+      plays = plays || st == "starting" || st == "playing" || st == "stalled";
+    }
+    if (plays) continue;
+    bool listed = false;
+    for (const json& o : outputs_) listed = listed || str(o, "target") == sink;
+    if (!listed) outputs_.push_back(json{{"type", "pipewire"}, {"target", sink}});
+    save();
+    json updated;
+    std::string err;
+    int status = 0;
+    if (engine_.update(active, json{{"sinks", outputs_}}, &updated, &err, &status))
+      LOG_INFO("route: {} came while the input played to no output: it is one now", sink);
+    else
+      LOG_WARN("route: {} came, but the input cannot play to it: {}", sink, err);
+  }
+}
+
 void AudioRoute::poke() {
   {
     std::lock_guard<std::mutex> lk(m_);
     // Every change may have left a broadcast unused (end_unused_); only a wait needs the binding.
     unused_ = true;
+    bt_changed_ = true;
     if (wait_until_) poked_ = true;
   }
   cv_.notify_all();
@@ -498,9 +583,11 @@ void AudioRoute::run() {
   while (!stop_) {
     cv_.wait_for(lk, std::chrono::seconds(1), [this] { return stop_ || poked_ || unused_; });
     if (stop_) break;
-    const bool unused = unused_;
-    poked_ = unused_ = false;
+    const bool unused = unused_, bt_changed = bt_changed_;
+    poked_ = unused_ = bt_changed_ = false;
     const json before = json_locked();
+    if (bt_changed && transports_) transports_changed_locked(transports_());
+    if (!sink_looks_.empty()) look_for_sinks_locked();
     if (type_ == "bluetooth" && wait_until_) {
       if (!bind_locked()) {
         const json ts = transports_ ? transports_() : json::array();

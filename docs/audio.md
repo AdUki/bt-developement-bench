@@ -200,7 +200,11 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
   input: two mono `pw-cat --record`, one each channel, interleaved by the pump (`target_right`); the
   left one paces, the right one is padded with silence when short, and cut back to its newest 20 ms
   once more than 200 ms of it waits (what stays queued is an offset between the two). A coordinated set (a pair of earbuds, or an LE Audio device's left and right
-  streams) is recorded from and played into PipeWire's combined node of it.
+  streams) is recorded from and played into PipeWire's combined node of it. While nothing plays,
+  a device that comes is connected by itself: one that starts sending becomes the input, and a sink
+  that connects while the input plays to no output becomes an output. So one board playing to
+  nothing and another connecting to it is a working link with no pick on either: the sender plays
+  into the new sink, and the receiver takes what starts arriving (api.md "The route").
 - **Roles that are streams.** Where PipeWire's Bluetooth node is a stream rather than a device —
   what a device sends the board, and what the board sends as HFP hands-free unit or LE Audio
   earbud (`bluez_output.…`, `Stream/Input/Audio`, which PipeWire would fill from the default
