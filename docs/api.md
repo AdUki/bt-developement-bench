@@ -727,7 +727,9 @@ input: an A2DP source when it starts its stream, a broadcast when its BIS is syn
 unicast source once its stream is configured (the board starts that one itself, by recording it).
 A Bluetooth sink (A2DP or LE Audio) whose transport comes while the input plays to no output (none
 on, or every one lost) becomes an output, or plays again if it was one; never the input's own
-device. Both act only on BlueZ's news of that device, never because another one went away.
+device. Both act only on BlueZ's news of that device, never because another one went away. When
+btbenchd starts, every transport BlueZ has is news: a device already sending to the board becomes
+the input as if it had just started.
 
 The outputs are kept in `/data/btbench/route.json` across restarts; the input is not. A browser
 listening is the browser's own (`GET /api/audio/streams/{stream}/listen`).

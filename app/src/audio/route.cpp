@@ -497,10 +497,10 @@ void AudioRoute::transports_changed_locked(const json& ts) {
   const auto started = [](const std::string& st) { return st == "pending" || st == "active"; };
   json now = json::object();
   for (const json& t : ts.is_array() ? ts : json::array()) now[str(t, "path")] = str(t, "state");
-  if (seen_transports_.is_null()) {
-    seen_transports_ = now;
-    return;
-  }
+  // The first look (btbenchd starting) takes every transport as new: a device that was already
+  // sending is the input as one that starts now would be, or the board would show nothing playing
+  // while its audio arrives.
+  if (seen_transports_.is_null()) seen_transports_ = json::object();
   for (const json& t : ts.is_array() ? ts : json::array()) {
     const std::string path = str(t, "path"), st = str(t, "state"), u = str(t, "uuid"), addr = upper(str(t, "address"));
     const bool had = seen_transports_.contains(path);
