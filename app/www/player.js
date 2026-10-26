@@ -750,8 +750,10 @@ function renderInputs() {
     `<div class="empty-line">No Bluetooth device sends the board audio: connect one in Devices (the board as its speaker)${rx ? '' : ', or scan for broadcasts in Audio → LE Audio'}.</div>`);
   if (rx) {
     // Broadcasters heard whose streams BlueZ has not read yet (it reads the BASE while it scans):
-    // listed, not pickable until they have streams.
-    const reading = (pl.la.sources || []).filter(x => !rows.some(r => r.kind === 'broadcast' && sameAddr(r.address, x.address)))
+    // listed, not pickable until they have streams. Only while they are heard (an RSSI): BlueZ keeps
+    // a device's last announcement after it stops broadcasting, and that one would be "reading"
+    // forever.
+    const reading = (pl.la.sources || []).filter(x => x.rssi != null && !rows.some(r => r.kind === 'broadcast' && sameAddr(r.address, x.address)))
       .map(x => row('', false, PL_SVG.bt, x.name || devName(x.address), 'Auracast', 'reading its streams…')).join('');
     // The dots while it scans, and while a start or stop is on the way.
     const dots = rx.discovering || pl.scanBusy ? '<span class="dots"></span>' : '';

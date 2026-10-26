@@ -75,7 +75,7 @@ capture stopped in Audio → Streams does the same. A broadcast that carries one
 *+ as left* / *+ as right* on the other channel's broadcasts while it is the input: the two are then
 one stereo input. On a board whose adapter can receive broadcasts, the broadcasts are a section of
 their own, *Auracast*, with *Scan* (dots while it scans; an LE scan of 30 s, as in Audio → LE Audio): a broadcaster heard
-whose streams BlueZ has not read yet is listed as *reading its streams…* until it can be picked.
+whose streams BlueZ has not read yet is listed as *reading its streams…* until it can be picked, and only while it is heard (a broadcaster that stopped leaves BlueZ its last announcement).
 
 *Library*, a page of its own so long folders get the screen: the phone's own folders and search
 (for a browsable player), the radio
