@@ -778,41 +778,11 @@ td.acts > * { margin-right: 0.25rem; }
 .np-vol { display: flex; align-items: center; gap: 0.5rem; flex: 1 1 100%; }
 .np-vol svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .np-vol input { flex: 1; }
-/* Where the board plays (player.js renderOuts): its outputs and this browser as buttons, each on
-   or off by itself, and a line saying what the board is doing about them. */
-.np-out { flex: 1 1 100%; min-width: 0; font-size: 0.85rem; text-align: left; }
-.np-out-head { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
-.np-out-label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; }
-.np-outs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.np-o {
-  display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.7rem; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 0.82rem; text-align: left; min-width: 0; max-width: 100%;
-}
-.np-o svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.np-o b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-o small { color: var(--muted); white-space: nowrap; }
-.np-o:hover { border-color: var(--accent); }
-.np-o.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.np-o.busy { border-color: var(--accent); border-style: dashed; }
-.np-o.bad { border-color: var(--bad); color: var(--bad); }
-.np-o.gone { opacity: 0.6; }
-.np-o:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--line); }
-.np-o .dots { margin-right: 0; }
-.np-out-status { display: flex; align-items: flex-start; gap: 0.45rem; margin-top: 0.5rem; min-height: 1.3em; color: var(--muted); }
-.np-out-status.quiet .dot { display: none; }
-.np-out-status .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 0.4em; background: var(--muted); }
-.np-out-status.good { color: var(--good); }
-.np-out-status.good .dot { background: var(--good); }
-.np-out-status.warn { color: var(--warn); }
-.np-out-status.warn .dot { background: var(--warn); }
-.np-out-status.bad { color: var(--bad); }
-.np-out-status.bad .dot { background: var(--bad); }
-.np-out-status .dots { margin: 0.55em 0 0; }
 /* Route, Library and Up next: the list grows with the page instead of scrolling in a box, and
-   the bar with what plays stays at the bottom of the screen (not under Now playing, which is it). */
+   the bar with what plays stays at the bottom of the screen under Route and Library. */
 .np-libcard .tracklist { max-height: none; }
 #audio:has(> .pane[data-pane="now"]:not([hidden])) > #np-mini { display: none; }
-.np-libcard .card-head { justify-content: flex-start; }
+.np-libcard .card-head { justify-content: flex-start; gap: 0.4rem 0.8rem; align-items: baseline; }
 .np-mini { position: sticky; bottom: 0.6rem; z-index: 5; display: flex; align-items: center; gap: 0.8rem; padding: 0.55rem 0.7rem; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18); }
 .np-mini-t { flex: 1; min-width: 0; display: flex; flex-direction: column; color: inherit; text-decoration: none; }
 .np-mini-t b, .np-mini-t span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1159,9 +1129,9 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 .gr-chart > h4:first-child { margin-top: 0; }
 #gr-charts > .gr-chart.is-full { margin: 0; }
 
-/* Audio on a wide screen (app.js updateFit): Now playing always on the left, and Route, Library
-   or Up next beside it (Library while Now playing is the one picked), each column scrolling on its
-   own and the page not at all. */
+/* Audio on a wide screen (app.js updateFit): Now playing (with Up next under it) always on the
+   left, and Route or Library beside it (Library while Now playing is the one picked), each column
+   scrolling on its own and the page not at all. */
 @media (min-width: 1400px) and (min-height: 560px) {
   body.fit-audio { overflow: hidden; }
   html:has(body.fit-audio) { scrollbar-gutter: auto; }
@@ -1175,8 +1145,6 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
   #audio > .pane[data-pane="now"], #audio > .pane[data-pane="now"][hidden] { display: block !important; grid-column: 1; }
   #audio:has(> .pane[data-pane="now"]:not([hidden])) > .pane[data-pane="library"] { display: block !important; }
   #audio #np-mini { display: none !important; }
-  /* Route beside Now playing shows the outputs in full: the buttons would say it twice. */
-  #audio:has(> .pane[data-pane="route"]:not([hidden])) #np-out-row { display: none; }
   #audio .tracklist { max-height: none; }
   /* The playing column is narrow: the cover over the title and controls, as a player's is. */
   #audio > .pane { overflow-x: hidden; }

@@ -466,7 +466,7 @@ function playOnBoard(items) {
 // in the place of whatever the board played of its own and of the device that was the input.
 function playLocal(body, started) {
   au.sw = null;
-  if (au.route && !au.route.outputs.length && !au.listen) toast('No output is on: turn on where it plays (Now playing or Route).');
+  if (au.route && !au.route.outputs.length && !au.listen) toast('No output is on: turn one on in Route.');
   post('/audio/route/play', body).then(s => {
     if (started) started(s);
     refreshPlayerStreams();

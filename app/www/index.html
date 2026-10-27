@@ -48,13 +48,13 @@
         <div class="np-foot">
           <label class="np-vol" id="np-vol-row" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7"/></svg>
             <input type="range" id="np-vol" min="0" max="100" aria-label="Volume"></label>
-          <div class="np-out" id="np-out-row">
-            <div class="np-out-head"><span class="np-out-label">Play to</span></div>
-            <div class="np-outs ld" id="np-outs" role="group" aria-label="The board's outputs"></div>
-            <div class="np-out-status" id="np-out-status" role="status" aria-live="polite"></div>
-          </div>
         </div>
       </div>
+    </div>
+    <!-- What plays next: the phone's now-playing list, or the board's queue. -->
+    <div class="card np-libcard np-queue" id="np-q-card" data-full hidden>
+      <div class="card-head"><h3>Up next</h3><span id="np-q-note" class="small muted"></span></div>
+      <div id="np-queue" class="tracklist"></div>
     </div>
     </div>
     <!-- What the board plays (its own music, or one Bluetooth device's audio) and where. -->
@@ -80,13 +80,7 @@
         <div id="np-lib" class="tracklist ld"></div>
       </div>
     </div>
-    <div class="pane" data-pane="queue">
-      <div class="card np-libcard" data-full>
-        <div class="card-head" id="np-q-head" hidden><span id="np-q-note" class="small muted"></span></div>
-        <div id="np-queue" class="tracklist"></div>
-      </div>
-    </div>
-    <!-- Under Route, Library and Up next: the track, play/pause and next in reach while browsing. -->
+    <!-- Under Route and Library: the track, play/pause and next in reach while browsing. -->
     <div class="np-mini card" id="np-mini" hidden>
       <a href="#audio/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
       <div class="np-mini-ctl" id="np-mini-ctl"></div>

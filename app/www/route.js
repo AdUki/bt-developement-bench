@@ -3,7 +3,7 @@
 // a phone). Inputs: the board's own music and every Bluetooth device that sends it audio, one row
 // a device and a kind of audio; picking one makes it the route's input. Outputs: this browser, the
 // board's sound card, every Bluetooth speaker or pair of earbuds and the board's Auracast
-// broadcast, each on or off by itself, as Now playing's buttons are (audio.js pickOut). Each row
+// broadcast, each on or off by itself (audio.js pickOut). Each row
 // says its state; under a Bluetooth one are its links that way (kind, codec, delay, state, volume)
 // and its codec picker, and folded its stream endpoints and the links' raw configuration. The
 // input that plays carries the stream's level meters and gain. Under the outputs, folded, the
@@ -239,7 +239,7 @@ function outRowState(x, cur, b) {
   if (!ks.length) return sinkState(b, v) === 'busy' ? {cls: '', text: 'opening…'} : {cls: 'bad-text', text: 'not playing: tap to retry'};
   const ls = ks.map(k => sinkLine(k, b));
   const l = ls.find(x => x.cls !== 'good') || ls[0];
-  return {cls: {good: 'good-text', warn: 'warn-text', bad: 'bad-text'}[l.cls] || '', text: l.short};
+  return {cls: {good: 'good-text', warn: 'warn-text', bad: 'bad-text'}[l.cls] || '', text: l.text};
 }
 
 // This browser's row, when it listens: its volume, and folded the spectrum of what it hears.
@@ -250,7 +250,7 @@ function browserMore() {
       <span class="rt-buf small mono muted"></span><canvas class="graph short rt-spec"></canvas></details></div>`;
 }
 
-// The outputs as rows, the same list and states as Now playing's buttons (outOptions, outState).
+// The outputs as rows (outOptions, outState).
 function renderRouteOutputs() {
   if (!(au.endpoints || au.endpointsFailed) || !au.route) return;
   const b = outStream(), cur = curOuts(), opts = outOptions();

@@ -85,11 +85,11 @@ sizes; the raw map under a disclosure), the last key pressed and a live log of p
 *Media keys control what plays*: a remote's play/pause, next, previous and volume keys drive the
 connected phone's player, as with a speaker.
 
-**Audio** — the board as a player and as the audio bench, in six views. The board plays one
+**Audio** — the board as a player and as the audio bench, in five views. The board plays one
 **input** at a time on any **outputs** picked: the route (`/api/audio/route`), the same for every
-browser and kept by the board with the page closed. *Now playing*, *Route*, *Library* and *Up
-next* are the route, what to play and what plays next; *LE Audio* is Auracast; *PipeWire* the
-audio server.
+browser and kept by the board with the page closed. *Now playing* is what plays and what next,
+*Route* where it comes from and where it goes, *Library* what to play; *LE Audio* is Auracast and
+*PipeWire* the audio server.
 
 *Now playing* shows the input: a connected phone (its AVRCP player — track, cover art, progress,
 previous / play / pause / next / stop, repeat and shuffle when the player has them, the link's
@@ -102,27 +102,14 @@ broadcast — ▶ receives it again, ■ lets it go and leaves no input; an LE A
 audio over HFP). Above the title it says which way the music flows: *Receiving · Bluetooth*,
 *Receiving · Auracast* or *Receiving · Call audio* from a device (and whether its audio streams into
 the board, the board is waiting for it, or why it failed), or *Playing from the board* · Internet
-radio, Media server or Test signal; then the path, source → this board → where it plays.
+radio, Media server or Test signal; then the path, source → this board → where it plays. The
+volume slider sets what a person means: the Bluetooth speaker's own volume when the link has one
+and the input plays on that one alone, else the stream's level (all its outputs at once), or this
+browser's.
 
-*Play to*, under Now playing's controls, is one list of buttons, each on or off by itself: *This browser* (this browser listens to
-the input: its own choice, remembered by the browser), the board's own sound card if it has one
-(not the loopback card, which nobody hears), each Bluetooth speaker or pair of earbuds (a set is
-one button), and the board's Auracast broadcasts — *Auracast* is the board's broadcast, one
-button for its BISes (a left and a right one too): on with none, it starts a stereo broadcast
-(48_2_1), and turned off it ends it. The device the input comes from is shown
-but cannot be turned on (it would get its own audio back), nor can Auracast while the input is a
-broadcast, and picking such an input takes those outputs off. Up to four of the board's at once; they are the board's, stay when the input changes,
-and change what plays at once: an output tapped joins (or leaves) the ones playing, which carry on
-untouched. A button is lit only once its output plays: while it opens and its Bluetooth link
-starts (BlueZ's Acquire) it shows the dots, and one that would not open, takes no audio or whose
-link does not stream within 8 s is not lit (a switch tapped here that fails takes it off the
-outputs again; tapping it is the retry). The line under the buttons says what the board is doing — opening the output, waiting
-for the Bluetooth link to stream, *Playing on … · codec and … · codec* — or why it could not (a
-speaker not connected, one that went away, one that takes no audio: the others play on without
-it); a line that says all plays well is cleared after 5 s. Nothing is retried on its own: a
-speaker lost is tapped again. The volume slider sets what a person means: the Bluetooth speaker's
-own volume when the link has one and the input plays on that one alone, else the stream's level
-(all its outputs at once), or this browser's.
+Under it, while something plays, *Up next*: the phone's now-playing list (read again when its
+shuffle changes or the phone says the list changed), or the board's queue with each track's artist and length and **×** to take a track
+out; shuffled, it is in the order it plays; a click plays that track.
 
 *Route* is the inputs and the outputs side by side (one under the other on a phone). *Inputs*: *This board* — what the library
 loaded (a station, the queue, a test signal, paused while a device is the input), or nothing — and
@@ -148,13 +135,25 @@ their capabilities and the links' raw configuration and paths; a phone that is n
 its player's previous / play / pause / next there. The input that plays carries the stream's level
 meters (RMS bar, peak mark, per channel), its gain, and for a tone its frequency and level, live.
 
-*Outputs* are Now playing's *Play to* buttons (above) as rows, each with a switch: one
-tapped joins or leaves at once. A row says what the board does about it — *asking…*, *opening…*,
-*waiting for its link*, *playing · SBC 48 kHz*, *lost: why*, *not connected* — and a Bluetooth
-speaker's row has its link, volume, codec picker (the link renegotiates on a change, the output
-is lost a moment and plays again) and *Details* as an input's has. *This browser* on has its
-volume and, folded, a *Spectrum* of what it hears with the time buffered (opened once, the browser's
-audio goes through Web Audio for the rest of the page's life). Under the outputs, folded, *This
+*Outputs* is one list, each with a switch, on or off by itself: *This browser* (this browser
+listens to the input: its own choice, remembered by the browser), the board's own sound card if it
+has one (not the loopback card, which nobody hears), each Bluetooth speaker or pair of earbuds (a
+set is one row), and the board's Auracast broadcast — one row for its BISes (a left and a right one
+too): on with none, it starts a stereo broadcast (48_2_1), and turned off it ends it. The device
+the input comes from is shown but cannot be turned on (it would get its own audio back), nor can
+Auracast while the input is a broadcast, and picking such an input takes those outputs off. Up to
+four of the board's at once; they are the board's, stay when the input changes, and change what
+plays at once: an output tapped joins (or leaves) the ones playing, which carry on untouched. A
+row is lit only once its output plays: while it opens and its Bluetooth link starts (BlueZ's
+Acquire) it shows the dots, and one that would not open, takes no audio or whose link does not
+stream within 8 s is not lit (one tapped on here that fails is taken off the outputs again;
+tapping it is the retry). The row says what the board does about it — *asking…*, *opening…*,
+*waiting for its link*, *playing · SBC 48 kHz*, *lost: why*, *not connected* — and nothing is
+retried on its own: a speaker lost is tapped again. A Bluetooth speaker's row has its link,
+volume, codec picker (the link renegotiates on a change, the output is lost a moment and plays
+again) and *Details* as an input's has. *This browser* on has its volume and, folded, a
+*Spectrum* of what it hears with the time buffered (opened once, the browser's audio goes through
+Web Audio for the rest of the page's life). Under the outputs, folded, *This
 board's player*: what a car or speaker the board plays to sees over AVRCP (its track, play state
 and the adapters it is offered on), its controls, *Offer it* (on or off), and folded, its library
 and now-playing list; read while the fold is open.
@@ -177,14 +176,9 @@ year), an album opens with its cover, artist, year, genre, track count and lengt
 a track without a cover of its own shows its album's in Now playing. Covers load from the server
 itself, so a browser on another network than the server shows the plain icons.
 
-*Up next*: the phone's now-playing list (read again when its shuffle changes or the phone says the
-list changed), or the board's queue with each track's artist and length and **×** to take a track
-out; shuffled, it is in the order it plays; a click plays that track.
-
-On a wide screen (from 1400 px) Now playing stays on the left and Route, Library or Up next is
-beside it (Library until one is picked), so Now playing has no view button there, and its *Play
-to* buttons step aside while Route shows the outputs. On a narrow one a bar at the bottom of Route,
-Library and Up next keeps the track playing, play/pause and next in reach.
+On a wide screen (from 1400 px) Now playing stays on the left and Route or Library is beside it
+(Library until one is picked), so Now playing has no view button there. On a narrow one a bar at
+the bottom of Route and Library keeps the track playing, play/pause and next in reach.
 
 *LE Audio*: Auracast both ways, on the adapter that can (a picker when two can; the bar says
 whether it broadcasts, receives or both). *Broadcast from the board* starts a broadcast: the
@@ -194,7 +188,7 @@ Broadcast Code to encrypt it (empty: anyone listens), the presentation delay und
 board sends one broadcast at a time: *Start broadcast* is off while there is one. Each BIS is a row: BIG and BIS, *on air*, *silent* (it transmits only while
 something plays into it) or *ending…*, its codec, SDU, bitrate, retransmissions, latency and PHY, what plays into it,
 and *Stop broadcast*. A broadcast started is one of the route's outputs at once (what the board plays
-goes on air), and one taken off them ends: *Stop broadcast* (or turning it off in Route or *Play to*)
+goes on air), and one taken off them ends: *Stop broadcast* (or turning it off in Route)
 stops anything else playing into it and the daemon clears it once PipeWire let it go off air, a
 few seconds later. So does one left from before that is not an output and plays nothing. The board's broadcast carries no Broadcast Name, so receivers list it by address.
 *Broadcasts in range* scans (LE, 30 s) and shows each broadcaster as a card: its name (the

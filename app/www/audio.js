@@ -8,8 +8,8 @@
 // daemon's route (/api/audio/route, audio/route.h), the same for every browser; the board's
 // playlist lives there too, so closing the page does not stop the music.
 //
-// One tab, four views: Now playing and Up next (here), Route (route.js: the inputs and the
-// outputs, each with its link, codec and volume), Library (library.js). LE Audio (leaudio.js) and
+// One tab, three views: Now playing with what plays next (here), Route (route.js: the inputs and
+// the outputs, each with its link, codec and volume), Library (library.js). LE Audio (leaudio.js) and
 // PipeWire (pipewire.js) are tabs of their own in the same area. This file holds what they share:
 // the state, what plays, the outputs and how a switch of one is followed, hearing it here, and the
 // device helpers the rest of the console uses too (devName, the codec picker, the link words).
@@ -380,7 +380,7 @@ function renderNowPlaying() {
     (c.kind === 'phone' && !c.p.input ? modeButtons('np-btn', btRepeat(c.p.repeat), c.p.shuffle == null ? null : c.p.shuffle !== 'off')
       : c.kind === 'board' && isUrl(c.s) && (c.s.source.playlist || []).length > 1 ? modeButtons('np-btn', boardRepeat(c.s.source.repeat), !!c.s.source.shuffle) : '') +
     (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : '') + '</div>');
-  // The bar under Route, Library and Up next: the track, and play/pause and next, to skip without
+  // The bar under Route and Library: the track, and play/pause and next, to skip without
   // leaving the list.
   $('np-mini').hidden = c.kind === 'none';
   setText($('np-mini-title'), title);
@@ -691,7 +691,7 @@ function renderQueue(c) {
     note = c.p.browsable || c.p.input ? '' : 'This player does not share its list';
   }
   setText($('np-q-note'), note);
-  $('np-q-head').hidden = !note;
+  $('np-q-card').hidden = c.kind === 'none';
   const waiting = c.kind === 'phone' && c.p.browsable && au.queueBusy && !au.queueItems.length;
   setHTML($('np-queue'), rows || (waiting ? '<div class="empty-line loading-line"><span class="dots"></span>Getting the phone’s list…</div>'
     : `<div class="empty-line">${c.kind === 'none' ? 'Nothing playing: pick an input in Route, or something in Library.' : 'Nothing queued.'}</div>`));
@@ -750,8 +750,6 @@ function outName(v) {
   const bt = /bluez_output\.([0-9A-F]{2}(?:_[0-9A-F]{2}){5})/i.exec(v);
   return bt ? devName(bt[1].replace(/_/g, ':')) : v.slice(v.indexOf(':') + 1);
 }
-// An output's name after the start of a sentence ("Playing on the board’s sound card").
-const outInSentence = (v) => outName(v).replace(/^The /, 'the ');
 // The board's transport that carries a Bluetooth output's audio: its "Audio Source" side (a device
 // can have one each way, see volumeTarget).
 function outTransport(v) {
@@ -789,7 +787,7 @@ function outBlocked(e, input) {
 // earbuds (a coordinated set as one: PipeWire's node of the set, its members' own nodes left out),
 // then the board's Auracast broadcast (one to start when there is none). The loopback card is left
 // out: nobody hears it. An output the input rules out is shown off and cannot be tapped
-// (outBlocked). Now playing shows them as buttons, Route as rows.
+// (outBlocked). Route shows them as rows.
 function outOptions() {
   const ep = au.endpoints;
   const opts = [{value: 'browser', name: 'This browser', sub: 'listen here', icon: PL_SVG.browser, rank: 0}];
@@ -845,9 +843,9 @@ function sinkState(b, v) {
   return linkLate(b, v, link) ? 'bad' : link && link !== 'active' ? 'busy' : 'on';
 }
 
-// An output's button, from the real state: lit only once it plays — while it opens and its link
+// An output's state, for its row in Route: lit only once it plays — while it opens and its link
 // starts it shows the dots, and one that failed is not lit (tapping it again is the retry). With
-// nothing playing (`b` null) an output on is only chosen, and is lit. The switch `sw` this view
+// nothing playing (`b` null) an output on is only chosen, and is lit. The switch `sw` this browser
 // asked for shows the dots until the board answered it.
 function outState(v, cur, b, sw) {
   if (sw && sw.value === v && sw.phase === 'failed') return 'bad';
@@ -860,21 +858,6 @@ function outState(v, cur, b, sw) {
   return st.includes('bad') ? 'bad' : st.includes('busy') ? 'busy' : 'on';
 }
 
-// The buttons for outputs `cur` on, of stream `b` (null: nothing plays), with the switch `sw`
-// under way: each one on or off by itself; one on that is not there any more (a speaker gone)
-// stays, greyed.
-function outButtonsHTML(opts, cur, sw, b = null) {
-  cur.forEach(v => { if (!opts.some(x => x.value === v)) opts.push({value: v, name: outName(v), sub: 'not connected', icon: PL_SVG.bt, gone: true}); });
-  return opts.map(x => {
-    const st = x.off ? '' : outState(x.value, cur, b, sw);
-    const busy = st === 'busy', bad = st === 'bad', on = st === 'on';
-    const cls = 'np-o' + (on ? ' on' : '') + (busy ? ' busy' : '') + (bad ? ' bad' : '') + (x.gone ? ' gone' : '');
-    const sub = x.off || x.sub;
-    return `<button class="${cls}" data-out="${esc(x.value)}" aria-pressed="${on}"${x.off ? ' disabled' : ''}>` +
-      (busy ? '<span class="dots"></span>' : svg(x.icon)) + `<b>${esc(x.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
-  }).join('');
-}
-
 // The outputs on: the route's, and this browser when it listens.
 const isBcastOut = v => { const e = outEndpoint(v); return !!e && isBcast(e); };
 const curOuts = () => {
@@ -882,106 +865,36 @@ const curOuts = () => {
   return vs.filter(v => !isBcastOut(v)).concat(vs.some(isBcastOut) ? [BCAST] : [], au.listen ? ['browser'] : []);
 };
 
+// The switch under way followed (swAdvance), and the outputs drawn again (Route's rows).
 function renderOuts() {
   const b = outStream();
   swAdvance(au.sw, b);
   // A switch that failed is over once its output plays after all (put back by another browser,
   // or by the board when the device came again).
   if (au.sw && au.sw.phase === 'failed' && b && curOuts().includes(au.sw.value) && outState(au.sw.value, curOuts(), b, null) === 'on') au.sw = null;
-  // One this view turned on that failed is taken off the outputs again: not lit is off, and the
+  // One this browser turned on that failed is taken off the outputs again: not lit is off, and the
   // next tap is the retry.
   const sw = au.sw;
   if (sw && sw.phase === 'failed' && sw.add && !sw.dropped && sw.value !== BCAST && routeOuts().includes(sw.value)) {
     sw.dropped = true;
     put('/audio/route', {outputs: outSinks(routeOuts().filter(x => x !== sw.value))}).then(setRoute).catch(() => refreshRoute());
   }
-  // Not before the board's outputs and the route are known: the buttons would show nothing lit.
-  if ((au.endpoints || au.endpointsFailed) && au.route) setHTML($('np-outs'), outButtonsHTML(outOptions(), curOuts(), au.sw, b));
-  // A good line (everything plays where it should) is said for a few seconds and then cleared:
-  // the lit buttons say it from there. Anything else stays, and a change says it again.
-  const st = outStatus(b), key = st.cls + st.html;
-  if (key !== au.statusKey) {
-    au.statusKey = key;
-    au.statusAt = Date.now();
-    if (st.cls === 'good') setTimeout(renderOuts, OUT_STATUS_MS + 100);
-  }
-  const quiet = st.cls === 'good' && Date.now() - au.statusAt > OUT_STATUS_MS;
-  outStatusHTML($('np-out-status'), quiet ? {cls: '', html: ''} : st);
-  $('np-out-status').classList.toggle('quiet', quiet);
-}
-const OUT_STATUS_MS = 5000;
-
-// A status line ({cls, html}) into its element: a dot in the state's colour, or a spinner.
-function outStatusHTML(el, st) {
-  setClass(el, el.className.replace(/\s*\b(good|warn|bad|busy)\b/g, '') + (st.cls ? ' ' + st.cls : ''));
-  setHTML(el, (st.cls === 'busy' ? '<span class="dots"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
+  if (currentTab === 'audio' && panes.audio === 'route' && !holding()) renderRouteOutputs();
 }
 
-const andList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
-
-// One of a stream's outputs in words, from its sink status `k`: {cls, html, short}, and for one
-// that plays `what` (its name and codec), which outLine says of all of them at once. `short` is
-// the same without the output's name, for its own row in Route.
+// One of a stream's outputs in words, from its sink status `k`, for its row in Route: {cls, text}.
 function sinkLine(k, b) {
-  const v = sinkOut(k), name = `<b>${esc(outName(v))}</b>`, mid = `<b>${esc(outInSentence(v))}</b>`;
-  if (k.state === 'starting') return {cls: 'busy', html: `Opening ${mid}…`, short: 'opening…'};
-  if (k.state === 'failed') return {cls: 'bad', html: `Lost ${mid}: ${esc(outReason(k.error))}.`, short: 'lost: ' + outReason(k.error)};
+  const v = sinkOut(k);
+  if (k.state === 'starting') return {cls: 'busy', text: 'opening…'};
+  if (k.state === 'failed') return {cls: 'bad', text: 'lost: ' + outReason(k.error)};
   const t = outTransport(v);
-  if (k.state === 'stalled') {
-    return {cls: 'bad', html: `${name} takes no audio` + (t ? ` (its Bluetooth link is ${esc(t.state)})` : '') + '.',
-      short: 'takes no audio' + (t ? `, link ${t.state}` : '')};
-  }
+  if (k.state === 'stalled') return {cls: 'bad', text: 'takes no audio' + (t ? `, link ${t.state}` : '')};
   if (t && t.state !== 'active') {
-    return b && linkLate(b, v, t.state)
-      ? {cls: 'bad', html: `${name}’s Bluetooth link did not start streaming (it is ${esc(t.state)}): tap it to try again.`,
-        short: `link did not stream (${t.state}): tap to retry`}
-      : {cls: 'warn', html: `${name} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.`,
-        short: `waiting for its link (${t.state})`};
+    return b && linkLate(b, v, t.state) ? {cls: 'bad', text: `link did not stream (${t.state}): tap to retry`}
+      : {cls: 'warn', text: `waiting for its link (${t.state})`};
   }
   const codec = t && t.codec ? `${t.codec.name}${t.codec.rate ? ' ' + t.codec.rate / 1000 + ' kHz' : ''}` : '';
-  return {cls: 'good', what: mid + (codec ? ' · ' + esc(codec) : ''), short: 'playing' + (codec ? ' · ' + codec : '')};
-}
-
-// What the board is doing about a stream's outputs, in words: the switch `sw` under way (or how it
-// failed), else what its sinks' statuses say — the ones playing in one sentence, then each of the
-// others; null when it has no output and lost none. outStatus adds what this browser does.
-function outLine(b, sw) {
-  const name = v => `<b>${esc(outInSentence(v))}</b>`;
-  if (sw && sw.phase === 'failed') return {cls: 'bad', html: `Could not play on ${name(sw.value)}: ${esc(outReason(sw.error))}.`};
-  if (sw && sw.phase !== 'done') {
-    return {cls: 'busy', html: {broadcast: 'Starting an Auracast broadcast…', asking: sw.add ? `Asking the board to play on ${name(sw.value)}…` : `Taking ${name(sw.value)} off…`,
-      removing: `Taking ${name(sw.value)} off…`, starting: `Opening ${name(sw.value)}…`,
-      linking: `<b>${esc(outName(sw.value))}</b> takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase]};
-  }
-  if (!b) return null;
-  const lines = (b.sinks_status || []).map(k => sinkLine(k, b));
-  if (!lines.length) return null;
-  const good = lines.filter(l => l.cls === 'good'), rest = lines.filter(l => l.cls !== 'good');
-  const worst = ['bad', 'busy', 'warn'].find(c => rest.some(l => l.cls === c));
-  return {cls: !worst ? 'good' : worst === 'bad' && good.length ? 'warn' : worst,
-    html: [good.length ? `Playing on ${andList(good.map(l => l.what))}.` : ''].concat(rest.map(l => l.html)).filter(Boolean).join(' ')};
-}
-
-// What the board is doing about its outputs, in words (under Now playing's buttons): outLine, and
-// this browser.
-function outStatus(b) {
-  const sw = au.sw;
-  const here = b && au.hearId === b.id;
-  const connecting = here && (npAudio.paused || npAudio.readyState < 3);
-  const browser = here ? (connecting ? ' This browser is connecting…' : ' Also in this browser.') : '';
-  if (sw && sw.phase === 'failed') return {cls: 'bad', html: outLine(b, sw).html + (here ? ' Still playing in this browser.' : '')};
-  if (sw && sw.phase !== 'done') return outLine(b, sw);
-  if (!au.route) return {cls: '', html: ''};
-  if (!b) {
-    const to = routeOuts().map(v => `<b>${esc(outInSentence(v))}</b>`).concat(au.listen ? ['this browser'] : []);
-    return {cls: '', html: to.length ? `What plays goes to ${andList(to)}.` : 'Nothing is on: turn on where the board plays.'};
-  }
-  const line = outLine(b, null);
-  if (line) return line.cls === 'good' || line.cls === 'warn' ? {cls: line.cls, html: line.html + browser} : line;
-  if (here) return {cls: connecting ? 'busy' : 'good', html: connecting ? 'Connecting this browser…' : 'Playing in this browser.'};
-  const others = b.listeners;
-  return {cls: '', html: others ? `Playing to ${others} other browser${others > 1 ? 's' : ''} only.`
-    : 'Playing, to no output: turn one on.'};
+  return {cls: 'good', text: 'playing' + (codec ? ' · ' + codec : '')};
 }
 
 // PipeWire's words for an output that is not there.
@@ -1366,10 +1279,6 @@ function setupAudio() {
     clearTimeout(au.volT);
     // A slider sends many values a second: at most one request each 150 ms.
     au.volT = setTimeout(() => setVolume(parseInt(e.target.value, 10)), 150);
-  };
-  $('np-outs').onclick = e => {
-    const b = e.target.closest('[data-out]');
-    if (b) pickOut(b.dataset.out);
   };
   $('np-queue').onclick = e => {
     const c = current();
