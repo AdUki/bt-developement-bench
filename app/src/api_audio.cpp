@@ -1,7 +1,8 @@
 // /api/audio/*: the audio streams (play a test signal, a radio or UPnP URL, or a device's audio
 // into a speaker; listen to any of them in the browser), the endpoints they play to and capture
-// from, UPnP media servers, and the radio station list. The stack's status and restart
-// (/api/audio) are a target script and live with the others in api_system.cpp.
+// from, the codec picker, the PipeWire view's graph and controls (/api/audio/pipewire/*), UPnP
+// media servers, and the radio station list. The stack's status and restart (/api/audio) are a
+// target script, and pw-top's timing (/api/audio/pipewire) a monitor: both live in api_system.cpp.
 #include "audio/engine.h"
 #include "http_util.h"
 #include "util/log.h"
@@ -135,6 +136,53 @@ void install_audio_routes(httplib::Server& svr, Deps& d) {
     int status = 400;
     if (!a.set_profile(id, j["profile"], &out, &err, &status)) return send_error(res, status, err);
     send_json(res, out);
+  }));
+
+  // ---- the PipeWire view: the graph, the defaults, node volumes, the clock -------------------------
+
+  svr.Get("/api/audio/pipewire/graph", [&a](const httplib::Request& req, httplib::Response& res) {
+    send_json(res, a.graph(query(req, "fresh") == "1"));
+  });
+
+  // Each answers with the graph as it is after the change.
+  auto answer = [](httplib::Response& res, bool ok, const json& out, const std::string& err, int status) {
+    if (!ok) return send_error(res, status, err);
+    send_json(res, out);
+  };
+  svr.Put("/api/audio/pipewire/default", json_route([&a, answer](const json& j, const httplib::Request&, httplib::Response& res) {
+    if (!j.contains("node") || !j["node"].is_number_integer() || j["node"].get<long long>() <= 0 ||
+        j["node"].get<long long>() > 1000000)
+      return send_error(res, 400, "body must be {\"node\": id}");
+    json out;
+    std::string err;
+    int status = 400;
+    const bool ok = a.set_default_node(j["node"].get<int>(), &out, &err, &status);
+    answer(res, ok, out, err, status);
+  }));
+  svr.Put(R"(/api/audio/pipewire/nodes/(\d+)/volume)", json_route([&a, answer](const json& j, const httplib::Request& req, httplib::Response& res) {
+    int id = 0;
+    if (!stream_id(req, &id)) return send_error(res, 404, "no such node");
+    json out;
+    std::string err;
+    int status = 400;
+    const bool ok = a.set_node_volume(id, j, &out, &err, &status);
+    answer(res, ok, out, err, status);
+  }));
+  svr.Put(R"(/api/audio/pipewire/nodes/(\d+)/mute)", json_route([&a, answer](const json& j, const httplib::Request& req, httplib::Response& res) {
+    int id = 0;
+    if (!stream_id(req, &id)) return send_error(res, 404, "no such node");
+    json out;
+    std::string err;
+    int status = 400;
+    const bool ok = a.set_node_mute(id, j, &out, &err, &status);
+    answer(res, ok, out, err, status);
+  }));
+  svr.Put("/api/audio/pipewire/clock", json_route([&a, answer](const json& j, const httplib::Request&, httplib::Response& res) {
+    json out;
+    std::string err;
+    int status = 400;
+    const bool ok = a.set_clock(j, &out, &err, &status);
+    answer(res, ok, out, err, status);
   }));
 
   // ---- UPnP media servers -----------------------------------------------------------------------

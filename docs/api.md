@@ -752,11 +752,11 @@ from:
             "profile": "a2dp-sink", "codec": "sbc", "serial": "120", "state": "running",
             "default": true, "rate": null, "channels": null}],
  "sources": [ ...the same shape... ],
- "tools": {"pw-cat": true, "pw-dump": true, "aplay": true, "arecord": true, "mpg123": true, "ffmpeg": false, "curl": true}}
+ "tools": {"pw-cat": true, "pw-dump": true, "wpctl": true, "pw-metadata": true, "aplay": true, "arecord": true, "mpg123": true, "ffmpeg": false, "curl": true}}
 ```
 
-With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`), Bluetooth
-first. A pw-dump that does not answer within 5 s (a Pi Zero W at full load) leaves them unknown:
+With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`, the one the
+PipeWire view and the codec picker read too), Bluetooth first. A pw-dump that does not answer within 5 s (a Pi Zero W at full load) leaves them unknown:
 `backend` `pipewire`, no endpoints, `error` "pw-dump took over 5 s: the board is busy". Without
 PipeWire (`alsa`: stopped, or failing) they are the loopback card's two sides when snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to capture), and nothing
 (`none`) otherwise. `kind`: `bluetooth`, `loopback`, `hardware`, `virtual`. An LE Audio broadcast's
@@ -805,7 +805,8 @@ has opened its stream to the board, the send ones once the board's A2DP source i
 it (`wpctl set-profile`) and answers with the device once the link has renegotiated (a few
 seconds; it waits up to about ten); `switch_error` says so when it has not by then. With PipeWire
 stopped, or a pw-dump that took over 5 s, the list is empty and `error` says why, and a switch
-answers 503 with it.
+answers 503 with it. The console shows these cards on each Bluetooth row of the Route view and in
+the PipeWire view.
 
 ### UPnP media servers
 
@@ -897,11 +898,102 @@ The `/api/hci` routes answer 503 with the reason when the monitor socket cannot 
 monitor from a capture instead (`make run HCI=replay:FILE`) and records what it replays into the
 capture directory as a ring file, so the packet list follows the replay too.
 
-### PipeWire's graph
+## PipeWire
+
+The audio server's graph as the console's PipeWire view shows it: its nodes and links from
+`pw-dump`, its timing from `pw-top`, and the controls `wpctl` and `pw-metadata` have. The graph,
+the endpoints and the codec picker read one `pw-dump`, kept for 2 s.
+
+### Graph (pw-dump)
+
+`GET /api/audio/pipewire/graph` (`?fresh=1`: a dump made after the request):
+
+```json
+{"backend": "pipewire", "error": "", "age_ms": 120, "tools": {"wpctl": true, "pw-metadata": true},
+ "clock": {"rate": 48000, "allowed_rates": [44100, 48000], "quantum": 1024, "min_quantum": 32,
+           "max_quantum": 2048, "force_rate": 0, "force_quantum": 0},
+ "defaults": {"sink": "bluez_output.F8_DF_15_0A_11_3C.1", "source": null,
+              "configured_sink": "bluez_output.F8_DF_15_0A_11_3C.1", "configured_source": null},
+ "nodes": [{"id": 53, "serial": 120, "name": "bluez_output.F8_DF_15_0A_11_3C.1", "nick": "JBL Flip 5",
+            "description": "JBL Flip 5", "media_class": "Audio/Sink", "kind": "sink", "internal": false,
+            "state": "running", "error": null,
+            "format": {"type": "raw", "format": "S16LE", "rate": 48000, "channels": 2, "position": ["FL", "FR"]},
+            "latency": null, "latency_ms": null, "driver": true, "driver_id": 53, "driving": true,
+            "priority": {"driver": 1010, "session": 900}, "group": null, "link_group": null,
+            "media_role": null, "autoconnect": false, "always_process": null,
+            "application": {"name": "WirePlumber", "binary": "wireplumber", "pid": 412}, "client_id": 34,
+            "device": {"id": 52, "name": "bluez_card.F8_DF_15_0A_11_3C", "api": "bluez5", "description": "JBL Flip 5"},
+            "bluetooth": {"address": "F8:DF:15:0A:11:3C", "profile": "a2dp-sink", "codec": "sbc",
+                          "adapter": "hci0", "transport": null},
+            "ports": {"in": 2, "out": 2},
+            "volume": {"volume": 0.8, "channels": [0.8, 0.8], "channel_map": ["FL", "FR"], "mute": false},
+            "default": true, "configured": true, "can_default": true, "props": {...pw-dump's props...}}],
+ "links": [{"output_node": 61, "input_node": 53, "state": "active", "passive": false,
+            "ports": [{"id": 70, "output": "output_FL", "input": "playback_FL", "channel": "FL",
+                       "state": "active", "error": null}, ...]}]}
+```
+
+Every node of the dump, by `kind`: `sink`, `source`, `duplex`, `stream_out` (an application's
+output, a Bluetooth device's audio coming in), `stream_in` (a recording, the board's audio to an
+HFP gateway), `driver` (no media class: PipeWire's own Dummy and Freewheel drivers), `other`; in
+that order, then by id. `format` is the format the node runs at (its negotiated `Format`), else
+what its props say (`audio.format`, `audio.rate`, `audio.channels`), `null` when neither is known.
+`latency` is `node.latency` as PipeWire has it (`"1024/48000"`), `latency_ms` the same in
+milliseconds. `driver` says the node can drive the graph; `driver_id` is the driver it runs with
+(`null` on a PipeWire that does not publish `node.driver-id`), `driving` that it is its own.
+`volume` is on wpctl's scale, the cube root of PipeWire's channel volumes (0.5 is 1/8 of the
+amplitude, about -18 dB), `null` for a node without volume. `default` marks the default sink or
+source in use; `configured` the one chosen, which WirePlumber keeps when that node is gone (it
+then uses another, and moves back when it returns). `can_default` is what `wpctl set-default`
+takes: an `Audio/Sink` or `Audio/Source`, not an `…/Internal` one (a coordinated set's member).
+`props` is the node's own props, raw. A link entry is one pair of nodes, its port links under it
+(a stereo stream into a sink is two): `state` is `error` when one failed, `active` when all are,
+else the first that is not; `passive` when every one is. Links to a node not in the dump are left
+out. `clock` is PipeWire's `settings` metadata (`null` without it), what was asked: the rate and
+quantum the graph actually runs at are pw-top's (below). `backend` and `error` as with the
+endpoints: `none` and why without PipeWire, empty lists with `error` "pw-dump took over 5 s" when
+the board was too busy.
+
+### Default, volume and mute
+
+Each answers with the graph as it is after the change (one `wpctl`, then a fresh dump):
+
+- `PUT /api/audio/pipewire/default` `{"node": 53}` — the default sink or source
+  (`wpctl set-default`): WirePlumber keeps it across restarts, in its state under
+  `/data/btbench/wireplumber/`. Streams the board plays name their outputs, so this decides only
+  where an application that names none plays.
+- `PUT /api/audio/pipewire/nodes/{id}/volume` `{"volume": 0.75}` — 0 to 1.5 on wpctl's scale
+  (above 1 amplifies), every channel (`wpctl set-volume`).
+- `PUT /api/audio/pipewire/nodes/{id}/mute` `{"mute": true}` — `false`, or `"toggle"`.
+
+Errors: 400 for a bad body, a node wpctl refuses ("is not a device node", "does not support
+volume"); 404 for a node that is not there (ids are PipeWire's, reused after a node goes); 503
+without wpctl or PipeWire; 504 when wpctl did not answer in 5 s; 502 otherwise, with wpctl's
+reason.
+
+### Clock
+
+`PUT /api/audio/pipewire/clock` with exactly one of these (`pw-metadata -n settings`), answered
+with the graph:
+
+| key | metadata | values |
+|---|---|---|
+| `force_quantum` | `clock.force-quantum` | 4..8192: the quantum every cycle runs at |
+| `quantum`, `min_quantum`, `max_quantum` | `clock.quantum`, `clock.min-quantum`, `clock.max-quantum` | 4..8192 |
+| `force_rate` | `clock.force-rate` | 8000..768000: the rate the graph runs at |
+| `rate` | `clock.rate` | 8000..768000 |
+| `allowed_rates` | `clock.allowed-rates` | 1 to 32 rates; must include `clock.rate` (PipeWire would drop the list without a word) |
+
+`null` (or 0) puts a setting back to PipeWire's configured value: the key is deleted, except
+`allowed_rates`, which is set to `[ ]` (deleting that key crashes PipeWire). These are PipeWire's
+runtime settings: a restart of the audio stack forgets them, and the daemon keeps them nowhere.
+400 for a bad body, 503 without pw-metadata.
+
+### Timing (pw-top)
 
 `GET /api/audio/pipewire`: the last table of `pw-top -b` (PipeWire's profiler), while someone
 follows the `pipewire` topic; `{"running": false, "error": ...}` otherwise. pw-top is a process of
-its own, so it runs only while watched (the Graphs tab, Audio → PipeWire).
+its own, so it runs only while watched (the Graphs tab, the PipeWire view).
 
 ```json
 {"running": true, "ts": 1791620110152, "xruns": 0,

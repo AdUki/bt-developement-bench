@@ -3,7 +3,8 @@
 // Where a stream can play to and capture from (GET /api/audio/endpoints), from whichever stack
 // owns the audio: PipeWire's nodes (pw-dump), or, with PipeWire stopped or not answering, the plain
 // ALSA devices — just the snd-aloop loopback card, since no other ALSA device on the bench speaks
-// Bluetooth. Pure functions of their inputs, unit-tested; audio/engine.cpp runs the tools.
+// Bluetooth. Also the codec picker's cards and the PipeWire view's graph, from the same dump.
+// Pure functions of their inputs, unit-tested; audio/engine.cpp runs the tools.
 
 #include <nlohmann/json.hpp>
 #include <string>
@@ -46,6 +47,16 @@ nlohmann::json endpoints_from_alsa(bool loopback);
 // be its HFP gateway), "headset" (HFP/HSP as the head unit), "bap" (LE Audio), "off", "other".
 // codec is the profile's codec as PipeWire names it in the description ("SBC-XQ"), "" for none.
 nlohmann::json cards_from_pw_dump(const nlohmann::json& dump);
+// The PipeWire view (GET /api/audio/pipewire/graph): every node of the dump with its state,
+// format, latency, volume and raw props, and the links between nodes (one entry a pair of nodes,
+// its port links under it), as {clock, defaults, nodes, links}; docs/api.md "Graph (pw-dump)".
+// A node's volume is on wpctl's scale, the cube root of PipeWire's channelVolumes, so that what is
+// read back is what wpctl set-volume was given.
+nlohmann::json graph_from_pw_dump(const nlohmann::json& dump);
+// The "settings" metadata's clock keys, {rate, allowed_rates, quantum, min_quantum, max_quantum,
+// force_rate, force_quantum}, each an integer (allowed_rates a list) or null; null without the
+// metadata. What was asked of PipeWire: what its graph runs at is pw-top's.
+nlohmann::json clock_from_pw_dump(const nlohmann::json& dump);
 // "High Fidelity Playback (A2DP Sink, codec SBC-XQ)" → "SBC-XQ".
 std::string profile_codec(const std::string& description);
 std::string profile_kind(const std::string& name);

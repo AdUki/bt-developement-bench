@@ -164,6 +164,11 @@ failure. btbenchd and `bench` call them; they must not need a terminal.
 - PipeWire's timing (`/api/audio/pipewire`, the `pipewire` topic) runs `pw-top -b`
   (pipewire-tools), through `stdbuf -oL` (coreutils) when it is there so its table is not held in
   a pipe buffer; only while someone subscribes.
+- PipeWire's graph and controls (`/api/audio/pipewire/graph`, `…/default`, `…/nodes/{id}/volume`,
+  `…/mute`, `…/clock`) read the same cached `pw-dump` as the endpoints and the codec picker, and
+  run `wpctl set-default|set-volume|set-mute` and `pw-metadata -n settings` (pipewire-tools,
+  wireplumber). The defaults and volumes are kept by WirePlumber (`/data/btbench/wireplumber/`);
+  the clock settings are PipeWire's runtime ones, kept nowhere.
 
 ### HCI monitor API (HCI monitor area; btbenchd wires it in)
 

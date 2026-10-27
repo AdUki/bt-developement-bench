@@ -1021,6 +1021,145 @@ void test_endpoint_sets() {
   }
 }
 
+
+// The PipeWire view: every node with what the view shows of it, the links between nodes as one
+// entry a pair, the defaults and the clock settings.
+void test_graph() {
+  const json dump = json::parse(R"J([
+    {"id": 29, "type": "PipeWire:Interface:Node", "info": {"state": "suspended", "n-input-ports": 0, "n-output-ports": 0,
+      "props": {"node.name": "Dummy-Driver", "node.driver": true, "priority.driver": 20000, "node.group": "pipewire.dummy"}}},
+    {"id": 33, "type": "PipeWire:Interface:Node", "info": {"state": "running", "n-input-ports": 2, "n-output-ports": 2,
+      "props": {"node.name": "alsa_output.card", "node.description": "Card", "media.class": "Audio/Sink",
+                "node.driver": true, "object.serial": 33, "client.id": 32},
+      "params": {"Format": [{"mediaType": "audio", "mediaSubtype": "raw", "format": "S16LE", "rate": 48000, "channels": 2, "position": ["FL", "FR"]}],
+                 "Props": [{"volume": 1.0, "mute": true, "channelVolumes": [0.125, 0.125], "channelMap": ["FL", "FR"]}]}}},
+    {"id": 44, "type": "PipeWire:Interface:Node", "info": {"state": "running", "n-input-ports": 0, "n-output-ports": 2,
+      "props": {"node.name": "btbench-stream-1", "media.class": "Stream/Output/Audio", "node.latency": "1024/48000",
+                "client.id": 43, "node.driver-id": 33, "node.autoconnect": "false"}}},
+    {"id": 50, "type": "PipeWire:Interface:Node", "info": {"state": "idle",
+      "props": {"node.name": "bluez_output.AA_BB_CC_DD_EE_FF.1", "media.class": "Audio/Sink/Internal", "device.api": "bluez5",
+                "device.id": 60, "api.bluez5.profile": "a2dp-sink", "api.bluez5.codec": "sbc"}}},
+    {"id": 60, "type": "PipeWire:Interface:Device", "info": {"props": {"device.name": "bluez_card.AA_BB_CC_DD_EE_FF",
+      "device.api": "bluez5", "device.description": "Speaker", "api.bluez5.path": "/org/bluez/hci1/dev_AA_BB_CC_DD_EE_FF"}}},
+    {"id": 43, "type": "PipeWire:Interface:Client", "info": {"props": {"application.name": "btbenchd",
+      "application.process.binary": "pw-cat", "application.process.id": 1234}}},
+    {"id": 45, "type": "PipeWire:Interface:Port", "info": {"direction": "output", "props": {"node.id": 44, "port.name": "output_FL", "audio.channel": "FL"}}},
+    {"id": 46, "type": "PipeWire:Interface:Port", "info": {"direction": "output", "props": {"node.id": 44, "port.name": "output_FR", "audio.channel": "FR"}}},
+    {"id": 39, "type": "PipeWire:Interface:Port", "info": {"direction": "input", "props": {"node.id": 33, "port.name": "playback_FL", "audio.channel": "FL"}}},
+    {"id": 40, "type": "PipeWire:Interface:Port", "info": {"direction": "input", "props": {"node.id": 33, "port.name": "playback_FR", "audio.channel": "FR"}}},
+    {"id": 70, "type": "PipeWire:Interface:Link", "info": {"output-node-id": 44, "output-port-id": 45, "input-node-id": 33,
+      "input-port-id": 39, "state": "active", "error": null}},
+    {"id": 71, "type": "PipeWire:Interface:Link", "info": {"output-port-id": 46, "input-port-id": 40, "state": "paused", "error": null}},
+    {"id": 72, "type": "PipeWire:Interface:Link", "info": {"output-node-id": 44, "input-node-id": 99, "state": "active"}},
+    {"id": 36, "type": "PipeWire:Interface:Metadata", "props": {"metadata.name": "default"}, "metadata": [
+      {"subject": 0, "key": "default.audio.sink", "type": "Spa:String:JSON", "value": {"name": "alsa_output.card"}},
+      {"subject": 0, "key": "default.configured.audio.sink", "type": "Spa:String:JSON", "value": "{\"name\": \"bluez_output.gone\"}"}]},
+    {"id": 31, "type": "PipeWire:Interface:Metadata", "props": {"metadata.name": "settings"}, "metadata": [
+      {"subject": 0, "key": "clock.rate", "value": 48000},
+      {"subject": 0, "key": "clock.quantum", "value": "1024"},
+      {"subject": 0, "key": "clock.allowed-rates", "value": "[ 44100, 48000 ]"},
+      {"subject": 0, "key": "clock.force-quantum", "value": 0}]}
+  ])J");
+  const json g = graph_from_pw_dump(dump);
+  const json& n = g["nodes"];
+  CHECK_EQ(n.size(), size_t(4));
+  // Sinks first (the card, then the Bluetooth one), streams, the driver last.
+  CHECK_EQ(n[0]["id"].get<int>(), 33);
+  CHECK_EQ(n[1]["id"].get<int>(), 50);
+  CHECK_EQ(n[2]["kind"].get<std::string>(), std::string("stream_out"));
+  CHECK_EQ(n[3]["kind"].get<std::string>(), std::string("driver"));
+  // wpctl's scale: the cube root of what PipeWire keeps.
+  CHECK_EQ(n[0]["volume"]["volume"].get<double>(), 0.5);
+  CHECK(n[0]["volume"]["mute"].get<bool>());
+  CHECK_EQ(n[0]["format"]["format"].get<std::string>(), std::string("S16LE"));
+  CHECK_EQ(n[0]["format"]["rate"].get<int>(), 48000);
+  CHECK(n[0]["default"].get<bool>());
+  CHECK(!n[0]["configured"].get<bool>());
+  CHECK(n[0]["can_default"].get<bool>());
+  CHECK(!n[1]["can_default"].get<bool>());  // Internal: wpctl refuses it
+  CHECK(n[1]["internal"].get<bool>());
+  CHECK_EQ(n[1]["bluetooth"]["adapter"].get<std::string>(), std::string("hci1"));
+  CHECK_EQ(n[1]["bluetooth"]["address"].get<std::string>(), std::string("AA:BB:CC:DD:EE:FF"));
+  CHECK_EQ(n[1]["device"]["description"].get<std::string>(), std::string("Speaker"));
+  CHECK(n[1]["volume"].is_null());
+  CHECK(std::fabs(n[2]["latency_ms"].get<double>() - 21.333) < 0.001);
+  CHECK_EQ(n[2]["driver_id"].get<int>(), 33);
+  CHECK(!n[2]["driving"].get<bool>());
+  CHECK(!n[2]["can_default"].get<bool>());
+  CHECK_EQ(n[2]["autoconnect"], json(false));
+  CHECK_EQ(n[2]["application"]["name"].get<std::string>(), std::string("btbenchd"));
+  CHECK_EQ(n[2]["application"]["pid"].get<int>(), 1234);
+  CHECK_EQ(n[3]["priority"]["driver"].get<int>(), 20000);
+  CHECK(n[3]["format"].is_null());
+  // Two port links of one pair (one found by its ports alone) are one entry; one to a node not in
+  // the dump is dropped.
+  CHECK_EQ(g["links"].size(), size_t(1));
+  const json& l = g["links"][0];
+  CHECK_EQ(l["output_node"].get<int>(), 44);
+  CHECK_EQ(l["input_node"].get<int>(), 33);
+  CHECK_EQ(l["ports"].size(), size_t(2));
+  CHECK_EQ(l["ports"][1]["channel"].get<std::string>(), std::string("FR"));
+  CHECK_EQ(l["ports"][1]["input"].get<std::string>(), std::string("playback_FR"));
+  CHECK_EQ(l["state"].get<std::string>(), std::string("paused"));
+  CHECK_EQ(g["defaults"]["sink"].get<std::string>(), std::string("alsa_output.card"));
+  CHECK_EQ(g["defaults"]["configured_sink"].get<std::string>(), std::string("bluez_output.gone"));
+  CHECK(g["defaults"]["source"].is_null());
+  const json& c = g["clock"];
+  CHECK_EQ(c["rate"].get<int>(), 48000);
+  CHECK_EQ(c["quantum"].get<int>(), 1024);
+  CHECK_EQ(c["allowed_rates"], json::parse("[44100, 48000]"));
+  CHECK_EQ(c["force_quantum"].get<int>(), 0);
+  CHECK(c["force_rate"].is_null());
+  // No dump, and a dump without settings.
+  const json e = graph_from_pw_dump(json::object());
+  CHECK(e["nodes"].empty() && e["links"].empty() && e["clock"].is_null());
+  CHECK(clock_from_pw_dump(json::array()).is_null());
+}
+
+std::string joined(const std::vector<std::string>& a) {
+  std::string s;
+  for (const std::string& x : a) s += (s.empty() ? "" : " ") + x;
+  return s;
+}
+
+// What the PipeWire view's PUTs run.
+void test_control_argv() {
+  Tools t;
+  t.wpctl = "/usr/bin/wpctl";
+  t.pw_metadata = "/usr/bin/pw-metadata";
+  std::vector<std::string> a;
+  std::string err;
+  CHECK(volume_argv(33, json{{"volume", 0.75}}, t, &a, &err));
+  CHECK_EQ(joined(a), std::string("/usr/bin/wpctl set-volume 33 0.750"));
+  CHECK(!volume_argv(33, json{{"volume", -0.1}}, t, &a, &err));
+  CHECK(!volume_argv(33, json{{"volume", 1.6}}, t, &a, &err));
+  CHECK(!volume_argv(33, json{{"volume", "50%"}}, t, &a, &err));
+  CHECK(!volume_argv(33, json::object(), t, &a, &err));
+  CHECK(mute_argv(33, json{{"mute", true}}, t, &a, &err));
+  CHECK_EQ(a.back(), std::string("1"));
+  CHECK(mute_argv(33, json{{"mute", "toggle"}}, t, &a, &err));
+  CHECK_EQ(a.back(), std::string("toggle"));
+  CHECK(!mute_argv(33, json{{"mute", "yes"}}, t, &a, &err));
+  const json clock{{"rate", 48000}};
+  CHECK(clock_argv(json{{"force_quantum", 256}}, clock, t, &a, &err));
+  CHECK_EQ(joined(a), std::string("/usr/bin/pw-metadata -n settings 0 clock.force-quantum 256"));
+  CHECK(clock_argv(json{{"force_quantum", nullptr}}, clock, t, &a, &err));
+  CHECK_EQ(joined(a), std::string("/usr/bin/pw-metadata -n settings -d 0 clock.force-quantum"));
+  CHECK(clock_argv(json{{"allowed_rates", {48000, 44100, 48000}}}, clock, t, &a, &err));
+  CHECK_EQ(a.back(), std::string("[ 44100, 48000 ]"));
+  // Default for the rates is the empty list, never a delete (which crashes PipeWire).
+  CHECK(clock_argv(json{{"allowed_rates", nullptr}}, clock, t, &a, &err));
+  CHECK_EQ(a.back(), std::string("[ ]"));
+  CHECK(std::find(a.begin(), a.end(), "-d") == a.end());
+  CHECK(!clock_argv(json{{"allowed_rates", {44100}}}, clock, t, &a, &err));  // without the clock's rate
+  CHECK(clock_argv(json{{"allowed_rates", {44100}}}, json(nullptr), t, &a, &err));
+  CHECK(!clock_argv(json{{"quantum", 3}}, clock, t, &a, &err));
+  CHECK(!clock_argv(json{{"force_rate", 1000}}, clock, t, &a, &err));
+  CHECK(!clock_argv(json{{"quantum", 256}, {"rate", 48000}}, clock, t, &a, &err));
+  CHECK(!clock_argv(json{{"latency", 1}}, clock, t, &a, &err));
+  t.pw_metadata.clear();
+  CHECK(!clock_argv(json{{"quantum", 256}}, clock, t, &a, &err));
+}
 }  // namespace
 
 int main() {
@@ -1040,5 +1179,7 @@ int main() {
   test_upnp();
   test_engine_sinks();
   test_endpoint_sets();
+  test_graph();
+  test_control_argv();
   return report("test_audio");
 }

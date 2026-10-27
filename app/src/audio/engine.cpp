@@ -142,7 +142,7 @@ Tools Tools::find() {
 
 json Tools::to_json() const {
   return nlohmann::json{{"pw-cat", !pw_cat.empty()},   {"pw-dump", !pw_dump.empty()},
-                        {"wpctl", !wpctl.empty()},
+                        {"wpctl", !wpctl.empty()},     {"pw-metadata", !pw_metadata.empty()},
                         {"aplay", !aplay.empty()},     {"arecord", !arecord.empty()},
                         {"mpg123", !mpg123.empty()},   {"ffmpeg", !ffmpeg.empty()},
                         {"curl", !curl.empty()}};
@@ -601,6 +601,112 @@ bool sink_argv(const SinkSpec& s, int rate, int channels, int latency_ms,
   argv->push_back("-");
   (void)rate;
   (void)channels;
+  return true;
+}
+
+// ---- PipeWire's controls ------------------------------------------------------------------------
+
+bool volume_argv(int node, const json& body, const Tools& t, std::vector<std::string>* argv, std::string* err) {
+  if (t.wpctl.empty()) {
+    *err = "wpctl is not installed";
+    return false;
+  }
+  const json v = body.is_object() && body.contains("volume") ? body["volume"] : json(nullptr);
+  // wpctl's own scale (the cube root of PipeWire's), as the graph reports it; above 1 amplifies,
+  // which wpctl allows up to 1.5.
+  if (!v.is_number() || v.get<double>() < 0 || v.get<double>() > 1.5) {
+    *err = "volume must be a number from 0 to 1.5";
+    return false;
+  }
+  char buf[16];
+  std::snprintf(buf, sizeof buf, "%.3f", v.get<double>());
+  *argv = {t.wpctl, "set-volume", std::to_string(node), buf};
+  return true;
+}
+
+bool mute_argv(int node, const json& body, const Tools& t, std::vector<std::string>* argv, std::string* err) {
+  if (t.wpctl.empty()) {
+    *err = "wpctl is not installed";
+    return false;
+  }
+  const json v = body.is_object() && body.contains("mute") ? body["mute"] : json(nullptr);
+  if (!v.is_boolean() && v != "toggle") {
+    *err = "mute must be true, false or \"toggle\"";
+    return false;
+  }
+  *argv = {t.wpctl, "set-mute", std::to_string(node), v.is_boolean() ? (v.get<bool>() ? "1" : "0") : "toggle"};
+  return true;
+}
+
+bool clock_argv(const json& body, const json& clock, const Tools& t, std::vector<std::string>* argv, std::string* err) {
+  if (t.pw_metadata.empty()) {
+    *err = "pw-metadata is not installed";
+    return false;
+  }
+  struct Key {
+    const char* body;
+    const char* meta;
+    long long lo, hi;
+  };
+  static const Key keys[] = {{"force_quantum", "clock.force-quantum", 4, 8192}, {"quantum", "clock.quantum", 4, 8192},
+                             {"min_quantum", "clock.min-quantum", 4, 8192},     {"max_quantum", "clock.max-quantum", 4, 8192},
+                             {"force_rate", "clock.force-rate", 8000, 768000},  {"rate", "clock.rate", 8000, 768000},
+                             {"allowed_rates", "clock.allowed-rates", 8000, 768000}};
+  if (!body.is_object() || body.size() != 1) {
+    *err = "give exactly one clock setting";
+    return false;
+  }
+  const Key* k = nullptr;
+  for (const Key& x : keys)
+    if (body.contains(x.body)) k = &x;
+  if (!k) {
+    *err = "no such clock setting";
+    return false;
+  }
+  const json& v = body[k->body];
+  const std::vector<std::string> set = {t.pw_metadata, "-n", "settings", "0", k->meta};
+  if (std::string(k->body) == "allowed_rates") {
+    // Default is the empty list, which PipeWire takes as the one in its configuration. Deleting the
+    // key instead crashes PipeWire: its settings handler parses the deleted (null) value as text.
+    if (v.is_null()) {
+      *argv = set;
+      argv->push_back("[ ]");
+      return true;
+    }
+    std::vector<long long> rates;
+    if (v.is_array() && !v.empty() && v.size() <= 32)
+      for (const json& r : v)
+        if (r.is_number_integer() && r.get<long long>() >= k->lo && r.get<long long>() <= k->hi) rates.push_back(r.get<long long>());
+    if (rates.empty() || rates.size() != v.size()) {
+      *err = "allowed_rates must be 1 to 32 rates from 8000 to 768000";
+      return false;
+    }
+    std::sort(rates.begin(), rates.end());
+    rates.erase(std::unique(rates.begin(), rates.end()), rates.end());
+    // PipeWire drops a list without the rate the graph is set to, silently: refused here instead.
+    const json cur = clock.is_object() && clock.contains("rate") ? clock["rate"] : json(nullptr);
+    if (cur.is_number_integer() && cur.get<long long>() > 0 &&
+        std::find(rates.begin(), rates.end(), cur.get<long long>()) == rates.end()) {
+      *err = "allowed_rates must include the clock rate, " + std::to_string(cur.get<long long>());
+      return false;
+    }
+    std::string list = "[ ";
+    for (size_t i = 0; i < rates.size(); ++i) list += (i ? ", " : "") + std::to_string(rates[i]);
+    *argv = set;
+    argv->push_back(list + " ]");
+    return true;
+  }
+  // 0 is PipeWire's own "not forced": both it and null put the setting back to the configured one.
+  if (v.is_null() || v == 0) {
+    *argv = {t.pw_metadata, "-n", "settings", "-d", "0", k->meta};
+    return true;
+  }
+  if (!v.is_number_integer() || v.get<long long>() < k->lo || v.get<long long>() > k->hi) {
+    *err = std::string(k->body) + " must be from " + std::to_string(k->lo) + " to " + std::to_string(k->hi);
+    return false;
+  }
+  *argv = set;
+  argv->push_back(std::to_string(v.get<long long>()));
   return true;
 }
 
@@ -1925,76 +2031,79 @@ namespace {
 const char* const kDumpBusy = "pw-dump took over 5 s: the board is busy";
 }  // namespace
 
-json AudioEngine::endpoints(bool fresh) {
-  std::lock_guard<std::mutex> lk(ep_m_);
-  const int64_t now = mono_ms();
-  if (!fresh && !ep_cache_.is_null() && now - ep_at_ms_ < 2000) return ep_cache_;
-  json out;
-  std::string error;
-  bool have_pw = false;
-  if (!tools_.pw_dump.empty()) {
+std::shared_ptr<const AudioEngine::PwDump> AudioEngine::pw_dump(bool fresh) {
+  const int64_t asked = mono_ms();
+  std::lock_guard<std::mutex> lk(dump_m_);
+  // A dump that began after the question is as fresh as one more: a setter's answer and a request
+  // right behind it share one.
+  if (dump_ && (fresh ? dump_->started_ms >= asked : mono_ms() - dump_->at_ms < 2000)) return dump_;
+  auto d = std::make_shared<PwDump>();
+  d->started_ms = mono_ms();
+  if (tools_.pw_dump.empty()) {
+    d->error = "PipeWire is not installed";
+  } else {
     // pw-dumps run below the audio (util/prio.h): one costs a Zero W about a second, and the
-    // console asks for this on every visit to the player.
+    // console asks on every visit to the player.
     const ExecResult r = run_cmd({"nice", "-n", std::to_string(kBackgroundNice), tools_.pw_dump}, 5000, 8 << 20);
     if (r.ok()) {
+      d->running = true;
       try {
-        out = endpoints_from_pw_dump(parse_pw_dump(r.out));
-        have_pw = true;
+        d->objects = parse_pw_dump(r.out);
       } catch (const std::exception& e) {
-        error = std::string("pw-dump: ") + e.what();
+        d->error = std::string("pw-dump: ") + e.what();
       }
     } else if (r.timed_out) {
       // PipeWire runs, its dump only came too late (a Zero W at full load): not taken for PipeWire
-      // gone, which would offer the loopback card alone. The endpoints are unknown, not none.
-      out = json{{"sinks", json::array()}, {"sources", json::array()}};
-      have_pw = true;
-      error = kDumpBusy;
+      // gone, which would offer the loopback card alone. The graph is unknown, not empty.
+      d->running = true;
+      d->error = kDumpBusy;
     } else {
-      error = "PipeWire is not running (" + r.reason() + ")";
+      d->error = "PipeWire is not running (" + r.reason() + ")";
     }
   }
-  if (!have_pw) out = endpoints_from_alsa(file_exists("/proc/asound/Loopback"));
-  out["backend"] = have_pw ? "pipewire" : (out["sinks"].empty() && out["sources"].empty() ? "none" : "alsa");
-  out["error"] = error;
-  out["tools"] = tools_.to_json();
-  ep_cache_ = out;
   // As old as it is when it is ready: a busy Zero W takes seconds for a pw-dump, which would have
   // made every answer stale on arrival and every request another dump.
-  ep_at_ms_ = mono_ms();
+  d->at_ms = mono_ms();
+  dump_ = d;
+  return dump_;
+}
+
+json AudioEngine::endpoints(bool fresh) {
+  const std::shared_ptr<const PwDump> d = pw_dump(fresh);
+  std::lock_guard<std::mutex> lk(ep_m_);
+  if (ep_from_ == d) return ep_json_;
+  json out;
+  if (d->running && d->error.empty()) out = endpoints_from_pw_dump(d->objects);
+  else if (d->running) out = json{{"sinks", json::array()}, {"sources", json::array()}};
+  else out = endpoints_from_alsa(file_exists("/proc/asound/Loopback"));
+  out["backend"] = d->running ? "pipewire" : (out["sinks"].empty() && out["sources"].empty() ? "none" : "alsa");
+  out["error"] = tools_.pw_dump.empty() ? std::string{} : d->error;
+  out["tools"] = tools_.to_json();
+  ep_from_ = d;
+  ep_json_ = out;
   return out;
 }
 
 // ---- codec picker -------------------------------------------------------------------------------
 
 json AudioEngine::devices() {
-  // One pw-dump at a time, and its answer reused for two seconds: every console on the Audio tab
-  // asks on each media update, and on a Zero W a pw-dump per request piles up to the HTTP pool's
-  // size in concurrent ones (seen: load 30, the board unreachable).
-  std::lock_guard<std::mutex> lk(dev_m_);
-  const int64_t now = mono_ms();
-  if (!dev_cache_.is_null() && now - dev_at_ms_ < 2000) return dev_cache_;
-  dev_cache_ = devices_uncached();
-  dev_at_ms_ = mono_ms();
-  return dev_cache_;
+  // From the shared pw-dump: every console on the Audio tab asks on each media update, and on a
+  // Zero W a pw-dump per request piles up to the HTTP pool's size in concurrent ones (seen: load
+  // 30, the board unreachable).
+  return devices_from(*pw_dump(false));
 }
 
-json AudioEngine::devices_uncached() {
+json AudioEngine::devices_from(const PwDump& d) const {
   if (tools_.pw_dump.empty())
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "codecs are picked through PipeWire, which is not installed"}};
-  const ExecResult r = run_cmd({"nice", "-n", std::to_string(kBackgroundNice), tools_.pw_dump}, 5000, 8 << 20);
-  if (r.timed_out) return json{{"backend", "pipewire"}, {"devices", json::array()}, {"error", kDumpBusy}};
-  if (!r.ok())
-    return json{{"backend", "none"}, {"devices", json::array()},
-                {"error", "PipeWire is not running (" + r.reason() + "): codecs are picked in pipewire mode"}};
-  try {
-    json out = cards_from_pw_dump(parse_pw_dump(r.out));
-    out["backend"] = "pipewire";
-    out["error"] = "";
-    return out;
-  } catch (const std::exception& e) {
-    return json{{"backend", "pipewire"}, {"devices", json::array()}, {"error", std::string("pw-dump: ") + e.what()}};
-  }
+  if (!d.running)
+    return json{{"backend", "none"}, {"devices", json::array()}, {"error", d.error + ": codecs are picked in pipewire mode"}};
+  if (!d.error.empty()) return json{{"backend", "pipewire"}, {"devices", json::array()}, {"error", d.error}};
+  json out = cards_from_pw_dump(d.objects);
+  out["backend"] = "pipewire";
+  out["error"] = "";
+  return out;
 }
 
 bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std::string* err,
@@ -2004,12 +2113,7 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
     *err = "wpctl is not installed";
     return false;
   }
-  json all;
-  {
-    std::lock_guard<std::mutex> lk(dev_m_);
-    all = dev_cache_ = devices_uncached();
-    dev_at_ms_ = mono_ms();
-  }
+  const json all = devices_from(*pw_dump(true));
   const json* dev = nullptr;
   for (const json& d : all["devices"])
     if (d["id"] == device_id) dev = &d;
@@ -2038,10 +2142,6 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
   }
   LOG_INFO("audio: device {} ({}) → profile {}", device_id, (*dev)["label"].get<std::string>(),
            (*pick)["name"].get<std::string>());
-  {
-    std::lock_guard<std::mutex> lk(ep_m_);
-    ep_cache_ = nullptr;  // the endpoints change with the profile
-  }
   // The switch renegotiates the stream with the device (an AVDTP reconfiguration: a second or two
   // on a Zero W, six seen with a desktop as the peer). The answer is the device once its active
   // profile is the new one, or as it is after ~10 s when it never gets there (the device refused;
@@ -2050,13 +2150,9 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
   // Twenty tries: each pw-dump itself takes a third of a second on the board.
   for (int i = 0; i < 20; ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    // Held by name: a range-for over devices()["devices"] would walk a destroyed temporary.
-    json now;
-    {
-      std::lock_guard<std::mutex> lk(dev_m_);
-      now = dev_cache_ = devices_uncached();
-      dev_at_ms_ = mono_ms();
-    }
+    // Held by name: a range-for over devices()["devices"] would walk a destroyed temporary. Each
+    // look is a new dump, which the endpoints then follow too.
+    const json now = devices_from(*pw_dump(true));
     for (const json& d : now["devices"])
       if (d["id"] == device_id) *out = d;
     if (out->is_object() && (*out)["active"].is_object() && (*out)["active"]["name"] == want) return true;
@@ -2077,6 +2173,84 @@ void AudioEngine::forget_device(const std::string& address) {
   const ExecResult r = run_cmd({tools_.pw_metadata, "-n", "default-profile", "-d", "0", card}, 5000);
   if (r.ok()) LOG_INFO("audio: WirePlumber forgets the profile picked for {}", address);
   else LOG_WARN("audio: WirePlumber's profile for {} stays: pw-metadata: {}", address, r.reason());
+}
+
+// ---- the PipeWire view --------------------------------------------------------------------------
+
+json AudioEngine::graph(bool fresh) {
+  const std::shared_ptr<const PwDump> d = pw_dump(fresh);
+  json out = graph_from_pw_dump(d->error.empty() ? d->objects : json::array());
+  out["backend"] = d->running ? "pipewire" : "none";
+  out["error"] = d->error;
+  out["age_ms"] = mono_ms() - d->at_ms;
+  out["tools"] = json{{"wpctl", !tools_.wpctl.empty()}, {"pw-metadata", !tools_.pw_metadata.empty()}};
+  return out;
+}
+
+namespace {
+// A wpctl or pw-metadata that failed, as an HTTP status: its stderr says whose fault it was.
+int control_status(const ExecResult& r) {
+  const std::string e = r.err + r.out;
+  if (!r.started || e.find("Could not connect") != std::string::npos) return 503;
+  if (r.timed_out) return 504;
+  if (e.find("not found") != std::string::npos) return 404;
+  if (e.find("is not a device node") != std::string::npos || e.find("does not support") != std::string::npos) return 400;
+  return 502;
+}
+}  // namespace
+
+bool AudioEngine::control(const std::vector<std::string>& argv, const std::string& what, json* out,
+                          std::string* err, int* status) {
+  const ExecResult r = run_cmd(argv, 5000);
+  if (!r.ok()) {
+    *status = control_status(r);
+    *err = what + ": " + r.reason();
+    return false;
+  }
+  std::string args;
+  for (size_t i = 1; i < argv.size(); ++i) args += " " + argv[i];
+  LOG_INFO("audio: {}{}", what, args);
+  *out = graph(true);
+  return true;
+}
+
+bool AudioEngine::set_default_node(int node, json* out, std::string* err, int* status) {
+  if (tools_.wpctl.empty()) {
+    *status = 503;
+    *err = "wpctl is not installed";
+    return false;
+  }
+  return control({tools_.wpctl, "set-default", std::to_string(node)}, "wpctl", out, err, status);
+}
+
+bool AudioEngine::set_node_volume(int node, const json& body, json* out, std::string* err, int* status) {
+  std::vector<std::string> argv;
+  if (!volume_argv(node, body, tools_, &argv, err)) {
+    *status = tools_.wpctl.empty() ? 503 : 400;
+    return false;
+  }
+  return control(argv, "wpctl", out, err, status);
+}
+
+bool AudioEngine::set_node_mute(int node, const json& body, json* out, std::string* err, int* status) {
+  std::vector<std::string> argv;
+  if (!mute_argv(node, body, tools_, &argv, err)) {
+    *status = tools_.wpctl.empty() ? 503 : 400;
+    return false;
+  }
+  return control(argv, "wpctl", out, err, status);
+}
+
+bool AudioEngine::set_clock(const json& body, json* out, std::string* err, int* status) {
+  // Only a new list of rates needs the settings as they are (it must keep the clock's rate).
+  const json clock = body.is_object() && body.contains("allowed_rates") && !body["allowed_rates"].is_null()
+                         ? clock_from_pw_dump(pw_dump(false)->objects) : json(nullptr);
+  std::vector<std::string> argv;
+  if (!clock_argv(body, clock, tools_, &argv, err)) {
+    *status = tools_.pw_metadata.empty() ? 503 : 400;
+    return false;
+  }
+  return control(argv, "pw-metadata", out, err, status);
 }
 
 // ---- radio stations -----------------------------------------------------------------------------

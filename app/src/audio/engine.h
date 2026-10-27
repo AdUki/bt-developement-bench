@@ -168,6 +168,17 @@ bool sink_argv(const SinkSpec& s, int rate, int channels, int latency_ms,
                const std::string& node_name, const std::string& description, const Tools& t,
                std::vector<std::string>* argv, std::string* err);
 
+// PipeWire's controls (the PipeWire view): the one command each PUT runs, or false with the reason
+// for a 400. volume_argv: {"volume": 0..1.5} on wpctl's scale; mute_argv: {"mute": true|false|
+// "toggle"}; clock_argv: exactly one of the clock keys (docs/api.md "Clock"), null for Default,
+// with `clock` the settings as they are (clock_from_pw_dump), which allowed_rates is checked against.
+bool volume_argv(int node, const nlohmann::json& body, const Tools& t, std::vector<std::string>* argv,
+                 std::string* err);
+bool mute_argv(int node, const nlohmann::json& body, const Tools& t, std::vector<std::string>* argv,
+               std::string* err);
+bool clock_argv(const nlohmann::json& body, const nlohmann::json& clock, const Tools& t,
+                std::vector<std::string>* argv, std::string* err);
+
 class AudioEngine {
  public:
   using Publish = std::function<void(const std::string& topic, const nlohmann::json& data)>;
@@ -234,6 +245,15 @@ class AudioEngine {
   // plays to them stops).
   void forget_device(const std::string& address);
 
+  // The PipeWire view (GET /api/audio/pipewire/graph): graph_from_pw_dump with {backend, error,
+  // age_ms, tools}. The setters each run one wpctl or pw-metadata — wpctl itself says whether the
+  // node takes it — and answer with the graph as it is after.
+  nlohmann::json graph(bool fresh);
+  bool set_default_node(int node, nlohmann::json* out, std::string* err, int* status);
+  bool set_node_volume(int node, const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
+  bool set_node_mute(int node, const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
+  bool set_clock(const nlohmann::json& body, nlohmann::json* out, std::string* err, int* status);
+
   // A sink a stream lost: its process ended (a speaker gone, its node made anew for another
   // codec). Called from the stream's thread, without the engine's locks. Set before the first
   // stream is made.
@@ -264,13 +284,26 @@ class AudioEngine {
   std::map<int, std::shared_ptr<Stream>> streams_;
   int next_id_ = 1;
 
+  // One pw-dump for everything that reads PipeWire's graph (the endpoints, the codec picker, the
+  // PipeWire view): under nice, one at a time, its answer reused for two seconds. A Zero W takes
+  // seconds for one, and each console view asks on every media update.
+  struct PwDump {
+    nlohmann::json objects = nlohmann::json::array();  // parse_pw_dump's
+    std::string error;     // "" when objects is the graph
+    bool running = false;  // PipeWire answered, or was only too slow to (kDumpBusy)
+    int64_t started_ms = 0, at_ms = 0;
+  };
+  // `fresh`: one started after this call, not a cached one.
+  std::shared_ptr<const PwDump> pw_dump(bool fresh);
+  std::mutex dump_m_;
+  std::shared_ptr<const PwDump> dump_;
+  // endpoints() of the dump it was made from: the route and the board's player ask for it often.
   std::mutex ep_m_;
-  nlohmann::json ep_cache_;
-  int64_t ep_at_ms_ = 0;
-  nlohmann::json devices_uncached();
-  std::mutex dev_m_;
-  nlohmann::json dev_cache_;
-  int64_t dev_at_ms_ = 0;
+  std::shared_ptr<const PwDump> ep_from_;
+  nlohmann::json ep_json_;
+  nlohmann::json devices_from(const PwDump& d) const;
+  bool control(const std::vector<std::string>& argv, const std::string& what, nlohmann::json* out,
+               std::string* err, int* status);
 
   std::atomic<bool> running_{true};
   std::mutex pub_m_;
