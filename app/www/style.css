@@ -738,6 +738,7 @@ td.acts > * { margin-right: 0.25rem; }
 .np-main { min-width: 0; }
 .np-src { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
 .np-src:empty { display: none; }
+.np-src select { max-width: 100%; }
 .chip { display: inline-flex; align-items: center; gap: 0.35rem; border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.8rem; }
 .chip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }

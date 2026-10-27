@@ -8,7 +8,7 @@
 // daemon's route (/api/audio/route, audio/route.h), the same for every browser; the board's
 // playlist lives there too, so closing the page does not stop the music.
 //
-// One tab, three views: Now playing with what plays next (here), Route (route.js: the inputs and
+// One tab, three views: Players, what plays and what next (here), Route (route.js: the inputs and
 // the outputs, each with its link, codec and volume), Library (library.js). LE Audio (leaudio.js) and
 // PipeWire (pipewire.js) are tabs of their own in the same area. This file holds what they share:
 // the state, what plays, the outputs and how a switch of one is followed, hearing it here, and the
@@ -21,7 +21,9 @@ const au = {
   endpoints: null,     // the board's outputs
   endpointsFailed: false,
   route: null,         // GET /api/audio/route, the "audio.route" topic: the input and the outputs
-  players: {},         // a device's address → the player of it picked (it has several)
+  players: {},         // a device's key (playerKey) → the player of it picked (it has several)
+  view: null,          // the device Players shows: a playerKey, 'board', or null for the input's
+  viewIn: null,        // the input it was picked under: a new input is shown again
   boardId: null,       // the stream this view started last
   lib: lsGet('btbench.pl.lib') || '',  // phone | radio | upnp | signals; '' = the first
   libPath: [],         // the library's breadcrumbs: [{id, title}] (UPnP), or folders (phone)
@@ -229,21 +231,41 @@ function btInputs() {
 const isRouted = r => au.route && au.route.input.type === 'bluetooth' &&
   au.route.input.devices.some(d => sameAddr(d.address, r.address) && (!d.kind || d.kind === r.kind));
 
-// The source on screen: the route's input. A device with several players (Spotify and the phone's
-// own music app) shows the one picked, else the one playing.
+// A device's key: its address, for a member of a coordinated set the set's first member's, so a
+// pair of earbuds is one device with the players of both.
+const playerKey = a => { const m = inputSet(a); return (m ? m[0] : a).toUpperCase(); };
+const keyPlayers = key => phones().filter(p => playerKey(p.address) === key);
+// A device's player shown: the one picked, else the one playing.
+const keyPlayer = (key, ps) => ps.find(x => x.path === au.players[key]) || ps.find(x => x.status === 'playing') || ps[0];
+function inputKey() {
+  const i = au.route ? au.route.input : null;
+  return !i ? null : i.type === 'local' ? 'board' : i.type === 'bluetooth' && i.devices.length ? playerKey(i.devices[0].address) : null;
+}
+
+// The source on screen: the device picked in Players (`aside`: not the route's input), else the
+// route's input. A device with several players (Spotify and the phone's own music app) shows the
+// one picked, else the one playing.
 function current() {
   const r = au.route;
   if (!r) return {kind: 'none'};
+  if (au.view && au.viewIn !== inputKey()) au.view = null;
+  const v = au.view;
+  if (v && v !== inputKey()) {
+    const s = v === 'board' && loadedStream(), ps = v === 'board' ? [] : keyPlayers(v);
+    if (s) return {kind: 'board', s, dev: v, aside: true};
+    if (ps.length) return {kind: 'phone', p: keyPlayer(v, ps), players: ps, dev: v, aside: true};
+  }
+  const dev = inputKey();
   if (r.input.type === 'local') {
     const s = routeStream();
-    return s ? {kind: 'board', s} : {kind: 'none'};
+    return s ? {kind: 'board', s, dev} : {kind: 'none'};
   }
   if (r.input.type !== 'bluetooth' || !r.input.devices.length) return {kind: 'none'};
   const d = r.input.devices[0];
   if (d.kind !== 'broadcast' && d.kind !== 'hfp') {
-    const ps = phones().filter(p => sameAddr(p.address, d.address) || (inputSet(d.address) || []).some(m => sameAddr(m, p.address)));
-    const p = ps.find(x => x.path === au.players[d.address.toUpperCase()]) || ps.find(x => x.status === 'playing') || ps[0];
-    if (p) return {kind: 'phone', p, players: ps};
+    const ps = keyPlayers(dev);
+    const p = ps.length && keyPlayer(dev, ps);
+    if (p) return {kind: 'phone', p, players: ps, dev};
   }
   const x = inputs().find(i => sameAddr(i.address, d.address) && (d.kind !== 'broadcast' || i.broadcast)) ||
     {path: 'in:' + d.address, input: true, broadcast: d.kind === 'broadcast', address: d.address, name: '', transports: [], track: {}};
@@ -251,7 +273,45 @@ function current() {
   if (!x.transports.length) inputStatus(x);
   x.hfp = d.kind === 'hfp';
   if (r.input.devices.length > 1) x.also = r.input.devices.slice(1).map(o => o.address);
-  return {kind: 'phone', p: x, players: []};
+  return {kind: 'phone', p: x, players: [], dev};
+}
+
+// Every player there is, for the picker: the board's own stream (the input, or loaded while a
+// device is), then each device, the input's first; a device with several players has each of them
+// under it, and the device itself then shows the one playing.
+function playerChoices() {
+  const out = [], key = inputKey(), mark = k => k === key ? ' · input' : '';
+  if (key === 'board' ? routeStream() : loadedStream()) out.push({value: 'dev:board', label: 'This board' + mark('board')});
+  const keys = [];
+  if (key && key !== 'board') keys.push(key);
+  phones().forEach(p => { const k = playerKey(p.address); if (!keys.includes(k)) keys.push(k); });
+  const pname = p => p.name || (isMcp(p) ? 'Media control' : 'Player');
+  for (const k of keys) {
+    const ps = keyPlayers(k), d = k === key && au.route.input.devices[0];
+    out.push({value: 'dev:' + k, label: (d && d.kind === 'broadcast' ? 'Auracast · ' : '') + devName(k) + mark(k)});
+    // Two of one name (a board's AVRCP player and its LE Audio media control are both "btbench")
+    // say which they are.
+    const twice = p => ps.filter(x => pname(x) === pname(p)).length > 1;
+    if (ps.length > 1) ps.forEach(p => out.push({value: 'pl:' + p.path,
+      label: '\u2003' + pname(p) + (twice(p) ? (isMcp(p) ? ' · LE Audio' : ' · AVRCP') : '')}));
+  }
+  return out;
+}
+function pickPlayer(value) {
+  const [t, v] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)];
+  if (t === 'dev') {
+    au.view = v === inputKey() ? null : v;
+    delete au.players[v];
+  } else {
+    const p = phones().find(x => x.path === v);
+    if (!p) return;
+    const k = playerKey(p.address);
+    au.view = k === inputKey() ? null : k;
+    au.players[k] = p.path;
+  }
+  au.viewIn = inputKey();
+  au.queueKey = '';
+  renderNowPlaying();
 }
 function inputSet(address) {
   const e = au.endpoints && au.endpoints.sources.find(s => s.set_leader && (s.members || []).some(m => sameAddr(m, address)));
@@ -267,17 +327,12 @@ const outStream = () => routeStream();
 
 function renderNowPlaying() {
   const c = current();
-  // The input is picked in Route; here, a device with several players (Spotify and the
-  // phone's own music app, an LE Audio device's media control) has a chip each, named after the
-  // player.
-  // Two of one name (a board's AVRCP player and its LE Audio media control are both "btbench") say
-  // which they are.
-  const pname = p => p.name || (isMcp(p) ? 'Media control' : 'Player');
-  const twice = p => (c.players || []).filter(x => pname(x) === pname(p)).length > 1;
-  const chips = (c.players || []).length > 1 ? c.players.map(p => ({key: p.path, label: pname(p) + (twice(p) ? (isMcp(p) ? ' · LE Audio' : ' · AVRCP') : ''),
-    icon: isMcp(p) ? PL_SVG.bt : PL_SVG.phone, on: c.p.path === p.path})) : [];
-  setHTML($('np-src'), chips.map(x =>
-    `<button class="chip${x.on ? ' on' : ''}" data-src="${esc(x.key)}">${svg(x.icon)}${esc(x.label)}</button>`).join(''));
+  // The picker: the input is picked in Route, the player shown here (a device's, or one of a
+  // device's several) in this.
+  const ch = playerChoices();
+  const sel = c.dev && c.players && c.players.length > 1 && au.players[c.dev] === c.p.path ? 'pl:' + c.p.path : 'dev:' + c.dev;
+  if (!holding()) setHTML($('np-src'), ch.length > 1 ? '<select id="np-pick" aria-label="Player">' + ch.map(x =>
+    `<option value="${esc(x.value)}"${x.value === sel ? ' selected' : ''}>${esc(x.label)}</option>`).join('') + '</select>' : '');
 
   let artSrc = '', artLoading = false, ph = PL_SVG.note;
   let art = svg(ph, 'ph'), title = 'Nothing playing', sub = '', sub2 = '', playing = false, pos = 0, dur = 0;
@@ -404,6 +459,9 @@ function npFrom(c) {
   const flow = parts => `<span class="np-flow">${parts.map(esc).join(svg(PL_SVG.arrow))}</span>`;
   const lower = n => n.replace(/^The /, 'the ');
   const outs = s => (s ? streamOuts(s).map(v => lower(outName(v))) : []).concat(s && au.hearId === s.id ? ['this browser'] : []);
+  // A player that is not the input: what it plays goes nowhere through the board until it is.
+  if (c.aside) return tag(c.kind === 'board' ? PL_SVG.outof : PL_SVG.phone, c.kind === 'board' ? 'local' : 'bt', 'Not the input') +
+    '<button class="small-btn" data-np-input>Make it the input</button>';
   if (c.kind === 'phone') {
     const ts = c.p.input ? c.p.transports : (au.media ? au.media.transports : []).filter(t => t.address === c.p.address && /^(110b|2bc9)$/i.test(t.uuid));
     const on = ts.some(t => t.state === 'active' || t.state === 'broadcasting');
@@ -503,6 +561,7 @@ function npAction(a) {
   if (c.kind === 'phone') return playerAction(c.p.path, a);
   if (c.kind !== 'board') return;
   const s = c.s;
+  if (c.aside && a === 'play') return npMakeInput(c);
   if (a === 'stop') {
     if (au.hearId === s.id) hearStop();
     return del(`/audio/streams/${s.id}`).then(refreshPlayerStreams).catch(fail);
@@ -516,6 +575,12 @@ function npAction(a) {
     if (a === 'play') hearConnect();
   }
   put(`/audio/streams/${s.id}`, body).catch(fail);
+}
+
+// The player shown made the route's input.
+function npMakeInput(c) {
+  if (c.kind === 'board') return pickInput({type: 'local'});
+  return pickInput({type: 'bluetooth', devices: [{address: c.p.address, kind: isMcp(c.p) ? 'bap' : 'a2dp'}]});
 }
 
 // A device in words: its name, and for a broadcast what it is.
@@ -1267,13 +1332,13 @@ function setupAudio() {
     const b = e.target.closest('[data-np]');
     if (b && !b.disabled) npAction(b.dataset.np);
   };
-  $('np-src').onclick = e => {
-    const b = e.target.closest('[data-src]');
-    if (!b) return;
-    const p = phones().find(x => x.path === b.dataset.src);
-    if (p) au.players[p.address.toUpperCase()] = p.path;
-    au.queueKey = '';
-    renderNowPlaying();
+  $('np-from').onclick = e => {
+    if (e.target.closest('[data-np-input]')) npMakeInput(current());
+  };
+  $('np-src').onchange = e => {
+    if (e.target.id !== 'np-pick') return;
+    e.target.blur();
+    pickPlayer(e.target.value);
   };
   $('np-vol').oninput = e => {
     clearTimeout(au.volT);

@@ -491,7 +491,7 @@ plays nothing itself, it tells remotes about the route's input when that is the 
 `mirror` is that stream's id, `track` its title — a radio's ICY title (split into `Artist` and
 `Title` at its " - ") with the station as `Album`; a playlist's item with the `Artist`, `Album` and
 `Duration` its playlist entry carries, and `Number`/`NumberOfTracks`; a test signal by name — and
-`status` playing or paused. A remote's buttons then act on that stream as the console's Now playing does: pause and
+`status` playing or paused. A remote's buttons then act on that stream as the console's Players does: pause and
 play pause it in place (a station, a playlist, a test signal), stop ends it and the player then
 plays nothing (no track, `stopped`), next and previous move through
 its playlist, and repeat and shuffle are the stream's own (`source.repeat`, `source.shuffle`).
@@ -686,8 +686,8 @@ to the last.
 
 ### The route
 
-What the board plays: one **input** on a set of **outputs** (the console's Audio → Route and Now
-playing). The input is
+What the board plays: one **input** on a set of **outputs** (the console's Audio → Route and
+Players). The input is
 the board's own (a test signal, a station, a media server's tracks: one local stream) or what one
 Bluetooth device sends it; the outputs are the sinks it plays on, any number up to 4, and they
 stay when the input changes. Devices that are not the input play nowhere (WirePlumber links no
@@ -712,7 +712,7 @@ has not started sending, waited for 15 s; or it stopped sending, `error` "… st
 waited for as long as BlueZ has a transport of it, so its play button brings the audio back),
 `playing`, `failed` (`error` says why: nothing came within 15 s, it disconnected while stopped, a broadcast ended, two
 broadcasts that are not a left and a right one). A failed input is not retried: the same input put
-again is the retry. The capture stopped by hand (`DELETE /api/audio/streams/{stream}`, or Now playing's Stop) ends
+again is the retry. The capture stopped by hand (`DELETE /api/audio/streams/{stream}`, or Players' Stop) ends
 the input: the route has none (`none`, `idle`) and does not record the device again. `stream` is the stream playing the input (a
 capture the route made of the device, or the local stream), `null` without; `local` the board's own
 stream loaded, playing or paused while a device is the input.

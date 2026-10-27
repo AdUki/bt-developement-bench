@@ -203,10 +203,10 @@ const NAV = [
   {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [
     {tab: 'devices', label: 'Devices'},
     {tab: 'hid', label: 'Input devices'}]},
-  // The board as a player and the audio bench in one: what plays and what next (Now playing),
+  // The board as a player and the audio bench in one: what plays and what next (Players),
   // where from and where to (Route), what to play (Library), then Auracast and the audio server.
   {id: 'audio', label: 'Audio', icon: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z', views: [
-    {tab: 'audio', pane: 'now', label: 'Now playing'},
+    {tab: 'audio', pane: 'now', label: 'Players'},
     {tab: 'audio', pane: 'route', label: 'Route'},
     {tab: 'audio', pane: 'library', label: 'Library'},
     {tab: 'leaudio', label: 'LE Audio'},
@@ -286,7 +286,7 @@ function renderNav() {
 }
 
 // Views that moved, so their old links (and an area's remembered view) land: Listen and Audio's
-// views are one area now, its device cards and streams in Route, its players in Now playing.
+// views are one area now, its device cards and streams in Route, its players in Players.
 const MOVED = {'system/logs': 'logs', 'player': 'audio', 'player/now': 'audio/now', 'player/inputs': 'audio/route',
   'player/library': 'audio/library', 'player/queue': 'audio/now', 'audio/queue': 'audio/now', 'audio/bt': 'audio/route',
   'audio/players': 'audio/now', 'audio/streams': 'audio/route', 'audio/stack': 'pipewire'};

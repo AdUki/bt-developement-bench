@@ -130,7 +130,7 @@ function renderInputs() {
     // The other channel of the broadcast picked: one of the opposite side.
     const pair = pairing && !on && r.kind === 'broadcast' && r.side && pairing.side && r.side === -pairing.side
       ? `<button class="small-btn" data-in-pair="${i}" title="Play it as the ${r.side < 0 ? 'left' : 'right'} channel of the input">+ as ${r.side < 0 ? 'left' : 'right'}</button>` : '';
-    // The input's player is Now playing's; another phone's keys are here, so it can be started
+    // The input's player is in Players; another phone's keys are here, so it can be started
     // or stopped without making it the input.
     const p = !on && r.players.length ? r.players.find(x => x.status === 'playing') || r.players[0] : null;
     const keys = p ? `<div class="row small rt-player"><span class="muted grow">${esc(p.name || 'Player')} · ${esc(p.status || 'unknown')}${p.track && p.track.title ? ' · ' + esc(p.track.title) : ''}</span>

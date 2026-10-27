@@ -437,7 +437,8 @@ function libClick(i, add) {
         // Played on the phone, the phone is what the board plays.
         const p = phones().find(x => x.path === it.player);
         if (add || !p) return;
-        au.players[p.address.toUpperCase()] = p.path;
+        au.players[playerKey(p.address)] = p.path;
+        au.view = null;
         if (!isRouted({address: p.address, kind: 'a2dp'})) pickInput({type: 'bluetooth', devices: [{address: p.address, kind: isMcp(p) ? 'bap' : 'a2dp'}]});
       }).catch(fail);
   }

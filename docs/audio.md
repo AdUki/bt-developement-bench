@@ -193,7 +193,7 @@ in `wpctl status` and `pw-top`, a second sink's as `btbench-stream-<id>-2`.
   node of a stream a peer started looks the same as a microphone the board would open itself, and
   run, every connected earbud's microphone would hold a CIS (which also left a BE200 with no room
   to accept another one as peripheral).
-- **The route** (`/api/audio/route`, the console's Audio → Route and Now playing): one input at a time — the board's own stream, or a
+- **The route** (`/api/audio/route`, the console's Audio → Route and Players): one input at a time — the board's own stream, or a
   capture the route makes of the device picked, waited for up to 15 s until its node appears — on
   the outputs picked, which are that stream's sinks. Changing the input moves no output; changing
   an output touches only that sink. Two single-channel broadcasts, a left and a right one, are one
@@ -383,13 +383,13 @@ has a play state and nothing else.
   *Radio*: the stations of the console's Library (`/data/btbench/radio.json`, read at start).
 - **Playing.** Playing an entry makes it the board's input (the route, "The route" above): it
   takes the place of whatever the board played, and plays on the route's outputs (Audio → Route,
-  or Now playing's buttons), and on none while none is on: nothing is turned on for it. Play with nothing chosen (the
+  or Players' buttons), and on none while none is on: nothing is turned on for it. Play with nothing chosen (the
   remote's, or another board's that picked this one as its input) plays nothing: the board never
   puts something of its own choosing in place of its input. The folder the entry is in (or the folder played) becomes the now playing list; next and
   previous go round it, and a track that ends (the sweep, a station that drops) is followed by
   the next (repeat one: by itself; repeat all: round again). Shuffle puts the list itself in a
   random order, the track playing first (off: back as listed), so the now playing list a remote
-  browses is the order it plays in; repeating all, each round is a new order. Its buttons do what Now playing's do on the board's stream: pause holds the stream where it is (a station, a test signal) and play plays it on, stop ends it and leaves nothing playing (no track, no now playing list), whoever stopped it: the remote, or the console. A station's ICY title
+  browses is the order it plays in; repeating all, each round is a new order. Its buttons do what Players' do on the board's stream: pause holds the stream where it is (a station, a test signal) and play plays it on, stop ends it and leaves nothing playing (no track, no now playing list), whoever stopped it: the remote, or the console. A station's ICY title
   becomes the track's title (its "Artist - " part the artist), the station its album.
 - **Other streams.** Playing nothing itself, the player tells the remote about the board's input
   wherever it plays. The board's own input (a station, a media server's folder, a test signal
@@ -398,7 +398,7 @@ has a play state and nothing else.
   buttons act on that stream the same way. A device the board relays (a phone, a broadcast) is told
   as that device's own player tells it, title, artist, position and cover (the board opens the
   device's BIP channel, and its cover art responder hands on the image it pulls from there), and
-  the remote's buttons go to that player, as Now playing's do. One with no player (a broadcast from a device with no AVRCP link to
+  the remote's buttons go to that player, as Players' do. One with no player (a broadcast from a device with no AVRCP link to
   the board) is told by its name, playing while the board records it, and the buttons leave it
   alone: play never starts the library in its place. A
   URL stream's playlist is then the now playing list the remote browses (items

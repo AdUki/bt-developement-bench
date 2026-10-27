@@ -15,7 +15,7 @@ paths, capability hex) behind *Details* or in a tooltip.
 
 On a desktop the page scrolls only where it has to. A view built around one long list — *Packets*,
 *D-Bus*, *Logs*, an open capture — fills the window and only the list scrolls; *Audio* on a wide
-screen (from 1400 px) shows Now playing and the route or the library side by side, each column scrolling on its
+screen (from 1400 px) shows Players and the route or the library side by side, each column scrolling on its
 own. The cards worth reading big (the library, the packet tables, the D-Bus and log views, a
 link's graphs, each chart in *Graphs*) have a full-screen button; Esc puts them back. On a very
 wide screen (1700 px) the pages are allowed wider.
@@ -87,14 +87,19 @@ connected phone's player, as with a speaker.
 
 **Audio** — the board as a player and as the audio bench, in five views. The board plays one
 **input** at a time on any **outputs** picked: the route (`/api/audio/route`), the same for every
-browser and kept by the board with the page closed. *Now playing* is what plays and what next,
+browser and kept by the board with the page closed. *Players* is what plays and what next,
 *Route* where it comes from and where it goes, *Library* what to play; *LE Audio* is Auracast and
 *PipeWire* the audio server.
 
-*Now playing* shows the input: a connected phone (its AVRCP player — track, cover art, progress,
+*Players* shows the input, or another player picked in its picker: the board's own stream (while it
+is the input or loaded), then each device with a player, the input first and marked *input*; a
+device with several players (Spotify and the phone's own music app, an LE Audio device's media
+control) has each of them under it, and the device itself shows the one playing. A player that is
+not the input says *Not the input*, its keys act on the phone, and *Make it the input* (or ▶ on the
+board's loaded stream) makes it the route's input; a new input in Route shows that one again.
+What it shows: a connected phone (its AVRCP player — track, cover art, progress,
 previous / play / pause / next / stop, repeat and shuffle when the player has them, the link's
-volume; a device with several players, Spotify and the phone's own music app or an LE Audio
-device's media control, has a chip each to pick which one is shown), a stream the board plays
+volume), a stream the board plays
 itself (a radio station, with the cover or logo it sends and its description; tracks from a UPnP
 media server with their artist, album and length, and repeat and shuffle for a playlist; a test
 signal, with its level, which only stops), or Bluetooth audio with no player to show (an Auracast
@@ -173,11 +178,11 @@ mpg123, ffmpeg); a URL plays at 44.1 kHz, as nearly every stream is (decoding to
 makes the decoder resample, at three times the CPU on a Zero W). Media servers show their covers: a folder of albums is a grid of them (title, artist,
 year), an album opens with its cover, artist, year, genre, track count and length, *Play all*,
 *Play next* and *Add all*, and its tracks by number with their format (`FLAC 24/96`, `MP3 44.1 kHz`);
-a track without a cover of its own shows its album's in Now playing. Covers load from the server
+a track without a cover of its own shows its album's in Players. Covers load from the server
 itself, so a browser on another network than the server shows the plain icons.
 
-On a wide screen (from 1400 px) Now playing stays on the left and Route or Library is beside it
-(Library until one is picked), so Now playing has no view button there. On a narrow one a bar at
+On a wide screen (from 1400 px) Players stays on the left and Route or Library is beside it
+(Library until one is picked), so Players has no view button there. On a narrow one a bar at
 the bottom of Route and Library keeps the track playing, play/pause and next in reach.
 
 *LE Audio*: Auracast both ways, on the adapter that can (a picker when two can; the bar says
