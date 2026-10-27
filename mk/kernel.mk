@@ -186,7 +186,8 @@ linux-test: linux-deploy ## Deploy, boot the test kernel once, wait for the boar
 	probe="ssh $(SSH_OPTS) -o ControlPath=none -o ConnectTimeout=3 -o BatchMode=yes $(TARGET)"; \
 	before=$$($(SSH) $(TARGET) cat /proc/sys/kernel/random/boot_id); \
 	echo -e "$(BOLD)Trial boot$(OFF) of the test kernel (once; any failure falls back to the good kernel)"; \
-	$(SSH) $(TARGET) btbench-kernel try || true; \
+	rc=0; $(SSH) $(TARGET) btbench-kernel try || rc=$$?; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 255 ]; then echo "btbench-kernel try failed ($$rc, not the reboot dropping ssh): no trial boot."; exit 1; fi; \
 	$(SSH) -O exit $(TARGET) >/dev/null 2>&1 || true; \
 	printf "waiting for the board"; t0=$$(date +%s); \
 	while :; do \
