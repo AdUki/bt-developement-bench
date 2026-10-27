@@ -138,8 +138,19 @@ cmd_try() {
 	case $TRY_METHOD in
 	uboot-oneshot)
 		command -v fw_setenv >/dev/null || die "fw_setenv missing (libubootenv-bin)"
-		# U-Boot creates uboot.env on the first boot through it (boot.scr's saveenv).
-		[ -f "$BOOT/uboot.env" ] || die "no $BOOT/uboot.env yet: boot once through U-Boot first"
+		# boot.scr's saveenv creates uboot.env on the first boot through U-Boot, but a U-Boot that
+		# can also keep its environment nowhere (CONFIG_ENV_IS_NOWHERE, as images from before
+		# 2026-10-27 have on the VIM3L) takes nowhere as its home when the file is missing, and
+		# its saveenv then never writes it. A file of the configured size with no valid
+		# environment in it makes fw_setenv start from U-Boot's own defaults: what U-Boot would
+		# have saved. U-Boot loads it from then on, and saves to it.
+		if [ ! -f "$BOOT/uboot.env" ]; then
+			[ -f /etc/u-boot-initial-env ] || die "no $BOOT/uboot.env and no /etc/u-boot-initial-env to make it from"
+			size=$(awk -v f="$BOOT/uboot.env" '$1 == f { print $3 }' /etc/fw_env.config)
+			[ -n "$size" ] || die "$BOOT/uboot.env is not in /etc/fw_env.config"
+			head -c $((size)) /dev/zero > "$BOOT/uboot.env" || die "cannot create $BOOT/uboot.env"
+			echo "btbench-kernel: made $BOOT/uboot.env from U-Boot's default environment" >&2
+		fi
 		fw_setenv bench_try 1 || die "fw_setenv bench_try 1 failed"
 		[ "$(fw_printenv -n bench_try 2>/dev/null)" = 1 ] || die "bench_try did not stick in uboot.env"
 		;;

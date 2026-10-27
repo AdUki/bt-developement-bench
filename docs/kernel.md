@@ -295,9 +295,12 @@ eMMC (Khadas' OOWOW menu, or `kbi bootmode w emmc` in Khadas' U-Boot) and erase 
 loader (`dd if=/dev/zero of=/dev/mmcblkN bs=1M count=4` from a running system, N being the eMMC).
 
 **Kernel trials** work as on the Raspberry Pis (`TRY_METHOD=uboot-oneshot`): the bench's U-Boot
-config keeps the environment in `/boot/uboot.env` (`dynamic-layers/meson/recipes-bsp/u-boot/`;
-U-Boot numbers the SD card mmc 1), and `boot.scr` clears `bench_try` before it boots the test
-slot. Two differences:
+config keeps the environment in `/boot/uboot.env` on the disk it booted from
+(`dynamic-layers/meson/recipes-bsp/u-boot/`), and `boot.scr` clears `bench_try` before it boots
+the test slot. U-Boot from images before 2026-10-27 also kept its environment "nowhere", which
+became its home while `uboot.env` was missing, so it never wrote the file. `btbench-kernel try`
+makes it from U-Boot's default environment (`/etc/u-boot-initial-env`) when it is not there. Two
+differences:
 
 - **No watchdog in U-Boot.** It has no driver for the SoC's watchdog, so a test kernel that hangs
   before the kernel's own driver and systemd take the watchdog over is not reset: power-cycle the
