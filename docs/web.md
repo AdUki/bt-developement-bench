@@ -77,8 +77,7 @@ own HFP does not go through BlueZ); for a connected device its live link (RSSI a
 power per transport, read from the controller every two seconds); class, appearance, advertised TX
 power, services by name, manufacturer and service data, advertising flags; trust and remove (click twice); connect or
 disconnect one profile by UUID, and pair with a PIN for legacy devices; and shortcuts that open
-the GATT explorer, a file session or the AVDTP probe on that device. Under the list the *AVDTP probe*: any device's own DISCOVER / GET_ALL_CAPABILITIES
-answer, connected or not, every stream endpoint with its role, codec and other capabilities. *Input devices*: the
+the GATT explorer or a file session on that device. *Input devices*: the
 Bluetooth keyboards, remotes, mice and game pads connected to the board (BlueZ makes each a kernel
 input device): their report maps read out (Consumer Control, Keyboard, Mouse, … and the reports'
 sizes; the raw map under a disclosure), the last key pressed and a live log of presses, and

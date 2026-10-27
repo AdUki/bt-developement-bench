@@ -1206,7 +1206,6 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 .rt-board { margin: 0.4rem 0 0; }
 .rt-board .player { margin-top: 0.5rem; }
 .rt-spec-fold canvas { width: 100%; margin-top: 0.3rem; }
-.av-probe { margin-top: 1rem; }
 @media (max-width: 640px) {
   .rt-more { padding-left: 0.4rem; }
   .ad-link { grid-template-columns: minmax(0, 1fr) auto; }
