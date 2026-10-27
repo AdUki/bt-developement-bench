@@ -1916,6 +1916,11 @@ bool AudioEngine::take(Listener& l, std::string* out, int timeout_ms) {
   return !(l.closed && out->empty());
 }
 
+namespace {
+// What a pw-dump killed at its deadline says: PipeWire is there, the board too busy to list it.
+const char* const kDumpBusy = "pw-dump took over 5 s: the board is busy";
+}  // namespace
+
 json AudioEngine::endpoints(bool fresh) {
   std::lock_guard<std::mutex> lk(ep_m_);
   const int64_t now = mono_ms();
@@ -1934,13 +1939,19 @@ json AudioEngine::endpoints(bool fresh) {
       } catch (const std::exception& e) {
         error = std::string("pw-dump: ") + e.what();
       }
+    } else if (r.timed_out) {
+      // PipeWire runs, its dump only came too late (a Zero W at full load): not taken for PipeWire
+      // gone, which would offer the loopback card alone. The endpoints are unknown, not none.
+      out = json{{"sinks", json::array()}, {"sources", json::array()}};
+      have_pw = true;
+      error = kDumpBusy;
     } else {
       error = "PipeWire is not running (" + r.reason() + ")";
     }
   }
   if (!have_pw) out = endpoints_from_alsa(file_exists("/proc/asound/Loopback"));
   out["backend"] = have_pw ? "pipewire" : (out["sinks"].empty() && out["sources"].empty() ? "none" : "alsa");
-  out["error"] = have_pw ? "" : error;
+  out["error"] = error;
   out["tools"] = tools_.to_json();
   ep_cache_ = out;
   // As old as it is when it is ready: a busy Zero W takes seconds for a pw-dump, which would have
@@ -1968,6 +1979,7 @@ json AudioEngine::devices_uncached() {
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "codecs are picked through PipeWire, which is not installed"}};
   const ExecResult r = run_cmd({"nice", "-n", std::to_string(kBackgroundNice), tools_.pw_dump}, 5000, 8 << 20);
+  if (r.timed_out) return json{{"backend", "pipewire"}, {"devices", json::array()}, {"error", kDumpBusy}};
   if (!r.ok())
     return json{{"backend", "none"}, {"devices", json::array()},
                 {"error", "PipeWire is not running (" + r.reason() + "): codecs are picked in pipewire mode"}};
@@ -1998,7 +2010,7 @@ bool AudioEngine::set_profile(int device_id, const json& profile, json* out, std
   for (const json& d : all["devices"])
     if (d["id"] == device_id) dev = &d;
   if (!dev) {
-    *status = 404;
+    *status = all["error"].get<std::string>().empty() ? 404 : 503;
     *err = all["error"].get<std::string>().empty() ? "no such Bluetooth device" : all["error"].get<std::string>();
     return false;
   }

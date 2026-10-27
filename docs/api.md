@@ -754,8 +754,9 @@ from:
 ```
 
 With PipeWire running (`backend` `pipewire`) they are its audio nodes (`pw-dump`), Bluetooth
-first. Without it (`alsa`: PipeWire stopped or not answering) they are the loopback card's two sides when
-snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to capture), and nothing
+first. A pw-dump that does not answer within 5 s (a Pi Zero W at full load) leaves them unknown:
+`backend` `pipewire`, no endpoints, `error` "pw-dump took over 5 s: the board is busy". Without
+PipeWire (`alsa`: stopped, or failing) they are the loopback card's two sides when snd-aloop is loaded (`hw:Loopback,0,0` to play into, `hw:Loopback,1,0` to capture), and nothing
 (`none`) otherwise. `kind`: `bluetooth`, `loopback`, `hardware`, `virtual`. An LE Audio broadcast's
 node (PipeWire makes one per BIS) has its BlueZ transport as `transport` (`null` on the others) and
 says what it is: `Auracast broadcast` (the board's own, `address` null) or `Auracast from
@@ -799,8 +800,9 @@ has opened its stream to the board, the send ones once the board's A2DP source i
 
 `PUT /api/audio/devices/{id}/profile` `{"profile": "a2dp-sink-sbc_xq"}` (or the index) switches
 it (`wpctl set-profile`) and answers with the device once the link has renegotiated (a few
-seconds; it waits up to about ten); `switch_error` says so when it has not by then. With PipeWire stopped the list is
-empty and says why.
+seconds; it waits up to about ten); `switch_error` says so when it has not by then. With PipeWire
+stopped, or a pw-dump that took over 5 s, the list is empty and `error` says why, and a switch
+answers 503 with it.
 
 ### UPnP media servers
 
