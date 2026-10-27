@@ -17,7 +17,9 @@ if test -z "${devtype}"; then setenv devtype mmc; fi
 if test -z "${devnum}"; then setenv devnum 1; fi
 if test -z "${distro_bootpart}"; then setenv distro_bootpart 1; fi
 setenv bench_dev "${devnum}:${distro_bootpart}"
-setenv bench_args "@@CMDLINE@@"
+# btbench.boot says which device U-Boot came from (sd, emmc, usb): the board has no serial console
+# to show it, and the SD card and the eMMC can both hold a boot loader.
+setenv bench_args "@@CMDLINE@@ btbench.boot=${boot_source}"
 
 if test "${bench_try}" = "1"; then
 	setenv bench_try 0

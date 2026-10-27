@@ -260,7 +260,7 @@ Or reflash the image (`make flash`).
 ## Khadas VIM3L (`BOARD=vim3l`)
 
 A second SoC family: Amlogic S905D3 (four Cortex-A55, arm64, 2 GB), on meta-meson's
-`khadas-vim3l` machine. Only `KERNEL=next`. It has not been booted by the bench yet.
+`khadas-vim3l` machine. Only `KERNEL=next`. The bench's VIM3L boots the image from its eMMC.
 
 | | |
 |---|---|
@@ -286,13 +286,17 @@ line, so the script (`dynamic-layers/meson/recipes-bsp/btbench-boot-scr/files/bo
 (`BTBENCH_CMDLINE`). U-Boot writes the board's serial number (from the eFuse MAC) into the tree it
 boots.
 
-**Booting from the SD card.** The ROM tries the SPI flash (when the board's MCU says to), then
-the eMMC, and only then the SD card. A VIM3L that has a boot loader in either runs that one first,
-and it has to find the card's `boot.scr` by itself, and then kernel trials do not work (its
-environment is not the card's `uboot.env`). The serial console says which one runs: the bench's
-announces `U-Boot 2024.01 ... khadas-vim3l`. To have the ROM reach the card, set the boot mode to
-eMMC (Khadas' OOWOW menu, or `kbi bootmode w emmc` in Khadas' U-Boot) and erase the eMMC's boot
-loader (`dd if=/dev/zero of=/dev/mmcblkN bs=1M count=4` from a running system, N being the eMMC).
+**Which disk boots.** The ROM tries the SPI flash (when the board's MCU says to), then the eMMC
+(14.6 GB on the bench's board), and only then the SD card, and runs the first boot loader it finds.
+The image is the same on both (`make flash` writes either; Khadas' USB-C flashing or a `dd` from a
+running board reaches the eMMC), and `boot.scr` adds `btbench.boot=emmc|sd` to the command line.
+Only one disk may carry it: the disk identifier is fixed (root `PARTUUID=b7be4c4e-02`) and the
+partitions are mounted by label, so a second copy makes the root and `/boot` ambiguous. The bench's
+board runs from the eMMC, with the card's partition table cleared (its boot loader is still there,
+unused). To boot a card instead, clear the eMMC's partition table (bytes 446-511 of its first
+sector) or its whole first 4 MB, which also removes its boot loader. A board as Khadas ships it has
+Khadas' U-Boot on the eMMC: set the boot mode to eMMC (Khadas' OOWOW menu, or `kbi bootmode w emmc`
+in that U-Boot) and then replace it with the image.
 
 **Kernel trials** work as on the Raspberry Pis (`TRY_METHOD=uboot-oneshot`): the bench's U-Boot
 config keeps the environment in `/boot/uboot.env` on the disk it booted from
