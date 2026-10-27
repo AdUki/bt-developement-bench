@@ -167,7 +167,10 @@ environment (`fw_setenv`, `/boot/uboot.env`) and reboots. `boot.scr` then:
    in the env variable `bench_bootargs` (`fw_setenv bench_bootargs "dyndbg=..."`).
 3. Loads `bench/test/zImage`. It loads `bench/test/board.dtb` if there is one; otherwise it uses
    the firmware's device tree. It copies the board serial (`serial-number`, which the bench's
-   Bluetooth address is derived from) into the test device tree.
+   Bluetooth address is derived from) into the test device tree, and the addresses the firmware
+   wrote into its own tree: the Ethernet and Wi-Fi MACs and the onboard Bluetooth address, in
+   the nodes the aliases `ethernet0`, `wifi0` and `bluetooth` name. Without them a test kernel
+   made up a random Ethernet MAC on every trial (on the Pi 5: a new DHCP address each time).
 4. Arms the SoC watchdog (`wdt start 15000`) and boots.
 
 **Every way out leads to the good kernel.**

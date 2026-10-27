@@ -64,6 +64,26 @@ if test "${bench_try}" = "1"; then
 					if test -n "${bench_serial}"; then
 						fdt set / serial-number "${bench_serial}"
 					fi
+					# The board's addresses, which the firmware wrote into its own tree only: the
+					# Ethernet and Wi-Fi MACs and the Bluetooth address, in the nodes the aliases
+					# name (rpi5-btbench.dtsi). The test slot's tree has them as zeros, and Linux
+					# makes up a random MAC for those, a new one (and a new DHCP address) on every
+					# trial. Copied byte for byte (fdt get value cannot print a 6-byte value) into
+					# the 6 bytes the test slot's tree holds for each.
+					for bench_alias in ethernet0 wifi0 bluetooth; do
+						setenv bench_prop local-mac-address
+						if test "${bench_alias}" = "bluetooth"; then
+							setenv bench_prop local-bd-address
+						fi
+						fdt addr ${fdt_addr}
+						if fdt get addr bench_src ${bench_alias} ${bench_prop}; then
+							fdt addr ${bench_fdt_addr}
+							if fdt get addr bench_dst ${bench_alias} ${bench_prop}; then
+								cp.b ${bench_src} ${bench_dst} 6
+							fi
+						fi
+					done
+					fdt addr ${bench_fdt_addr}
 				fi
 			fi
 
