@@ -431,12 +431,7 @@ canvas.graph.short { height: 110px; }
 .meter.clip i { background: var(--bad); }
 .meter b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--fg); }
 .meter span { position: absolute; right: 4px; top: -1px; font-size: 10.5px; color: var(--fg); }
-.stream .head, .player .head { display: flex; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-.stream .head .acts { display: flex; gap: 0.35rem; }
-.stream .st-meta { color: var(--muted); margin: 0.2rem 0; }
-.stream .row label.row { gap: 0.3rem; }
-.stream input[type=range] { min-width: 120px; }
-.stream .st-gain-v { white-space: nowrap; min-width: 4.5em; }
+.player .head { display: flex; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 
 /* A player is laid out like a now-playing screen: the cover, the track, the transport. */
 .player { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 0 1rem; }
@@ -789,8 +784,6 @@ td.acts > * { margin-right: 0.25rem; }
 .np-out-head { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
 .np-out-label { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.72rem; }
 .np-outs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.st-outs { margin-top: 0.5rem; }
-.st-play-to { display: grid; gap: 0.4rem; margin-bottom: 0.6rem; }
 .np-o {
   display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.7rem; border-radius: 8px;
   border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-size: 0.82rem; text-align: left; min-width: 0; max-width: 100%;
@@ -815,10 +808,10 @@ td.acts > * { margin-right: 0.25rem; }
 .np-out-status.bad { color: var(--bad); }
 .np-out-status.bad .dot { background: var(--bad); }
 .np-out-status .dots { margin: 0.55em 0 0; }
-/* Inputs, Library and Up next: the list grows with the page instead of scrolling in a box, and
+/* Route, Library and Up next: the list grows with the page instead of scrolling in a box, and
    the bar with what plays stays at the bottom of the screen (not under Now playing, which is it). */
 .np-libcard .tracklist { max-height: none; }
-#player:has(> .pane[data-pane="now"]:not([hidden])) > #np-mini { display: none; }
+#audio:has(> .pane[data-pane="now"]:not([hidden])) > #np-mini { display: none; }
 .np-libcard .card-head { justify-content: flex-start; }
 .np-mini { position: sticky; bottom: 0.6rem; z-index: 5; display: flex; align-items: center; gap: 0.8rem; padding: 0.55rem 0.7rem; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18); }
 .np-mini-t { flex: 1; min-width: 0; display: flex; flex-direction: column; color: inherit; text-decoration: none; }
@@ -1003,13 +996,26 @@ span.ld:empty::before { display: inline-block; margin: 0 1.15em 0 0; vertical-al
   }
 }
 
-/* Audio → PipeWire: PipeWire's graph (pw-top). */
+/* Audio → PipeWire: the timing table (pw-top), the clock, the nodes. */
 .pw-tbl td { vertical-align: middle; }
 .pw-fol td:nth-child(2) { padding-left: 0.8rem; }
 .pw-load { display: inline-block; width: 3.5rem; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; vertical-align: middle; }
 .pw-load i { display: block; height: 100%; background: var(--good); }
 .pw-load.warn i { background: var(--warn); }
 .pw-load.bad i { background: var(--bad); }
+.pw-clock input[type=number] { min-width: 0; }
+.pw-run { margin-bottom: 0.5rem; }
+.pw-node { padding: 0.55rem 0; border-top: 1px solid var(--line-soft); }
+.pw-node.idle .pw-node-head b { color: var(--muted); }
+.pw-node-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; }
+.pw-node .more-fields { margin-top: 0.3rem; }
+.pw-vol { gap: 0.5rem; margin-top: 0.3rem; align-items: center; }
+.pw-vol .small-btn.on { color: var(--bad); border-color: var(--bad); }
+.pw-vol-v { min-width: 3.2em; text-align: right; }
+.pw-link { font-size: 0.82rem; padding-left: 0.8rem; }
+.pw-card { gap: 0.4rem 0.8rem; align-items: center; padding: 0.45rem 0; border-top: 1px solid var(--line-soft); }
+.pw-card:first-child { border-top: 0; }
+.pw-card select { min-width: 14rem; }
 
 /* Traffic → Logs: one line a row, coloured by priority; the filter's hits marked. */
 .lg-bar { margin: 0.5rem 0 0.3rem; gap: 0.4rem 0.6rem; }
@@ -1065,6 +1071,9 @@ span.ld:empty::before { display: inline-block; margin: 0 1.15em 0 0; vertical-al
 .tr-n.tr-art { width: 2.6rem; height: 2.6rem; border-radius: 5px; background: var(--well); position: relative; overflow: hidden; align-items: center; }
 .tr-art img, .lib-cover img, .lib-tile-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .tr-fmt { flex: none; font-size: 0.72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3rem; white-space: nowrap; }
+.tr-fmt.good-text { color: var(--good); }
+.tr-fmt.warn-text { color: var(--warn); }
+.tr-fmt.bad-text { color: var(--bad); }
 .lib-head { display: flex; gap: 0.9rem; align-items: flex-end; padding: 0.4rem 0.4rem 0.8rem; }
 .lib-head-t { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .lib-head-t b { font-size: 1.15rem; overflow-wrap: anywhere; }
@@ -1150,29 +1159,31 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 .gr-chart > h4:first-child { margin-top: 0; }
 #gr-charts > .gr-chart.is-full { margin: 0; }
 
-/* Listen on a wide screen (app.js updateFit): Now playing always on the left, and Inputs, Library
+/* Audio on a wide screen (app.js updateFit): Now playing always on the left, and Route, Library
    or Up next beside it (Library while Now playing is the one picked), each column scrolling on its
    own and the page not at all. */
 @media (min-width: 1400px) and (min-height: 560px) {
-  body.fit-player { overflow: hidden; }
-  html:has(body.fit-player) { scrollbar-gutter: auto; }
-  body.fit-player #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
-  body.fit-player main { flex: 1; min-height: 0; max-width: none; display: flex; padding-bottom: 0; }
+  body.fit-audio { overflow: hidden; }
+  html:has(body.fit-audio) { scrollbar-gutter: auto; }
+  body.fit-audio #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
+  body.fit-audio main { flex: 1; min-height: 0; max-width: none; display: flex; padding-bottom: 0; }
   /* Now playing is always on screen: its button would choose nothing. */
-  body.fit-player #views .view[data-view="player/now"] { display: none; }
-  body.fit-player #views:has(.view.active[data-view="player/now"]) .view[data-view="player/library"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 550; }
-  #player.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 560px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0 1rem; }
-  #player > .pane { grid-row: 1; grid-column: 2; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
-  #player > .pane[data-pane="now"], #player > .pane[data-pane="now"][hidden] { display: block !important; grid-column: 1; }
-  #player:has(> .pane[data-pane="now"]:not([hidden])) > .pane[data-pane="library"] { display: block !important; }
-  #player #np-mini { display: none !important; }
-  #player .tracklist { max-height: none; }
+  body.fit-audio #views .view[data-view="audio/now"] { display: none; }
+  body.fit-audio #views:has(.view.active[data-view="audio/now"]) .view[data-view="audio/library"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 550; }
+  #audio.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 560px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0 1rem; }
+  #audio > .pane { grid-row: 1; grid-column: 2; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
+  #audio > .pane[data-pane="now"], #audio > .pane[data-pane="now"][hidden] { display: block !important; grid-column: 1; }
+  #audio:has(> .pane[data-pane="now"]:not([hidden])) > .pane[data-pane="library"] { display: block !important; }
+  #audio #np-mini { display: none !important; }
+  /* Route beside Now playing shows the outputs in full: the buttons would say it twice. */
+  #audio:has(> .pane[data-pane="route"]:not([hidden])) #np-out-row { display: none; }
+  #audio .tracklist { max-height: none; }
   /* The playing column is narrow: the cover over the title and controls, as a player's is. */
-  #player > .pane { overflow-x: hidden; }
-  #player .np { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; }
-  #player .np-art { width: min(100%, 300px); height: auto; aspect-ratio: 1; }
-  #player .np-main { width: 100%; }
-  #player .np-src, #player .np-ctl, #player .np-row, #player .np-from, #player .np-flow { justify-content: center; }
+  #audio > .pane { overflow-x: hidden; }
+  #audio .np { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; }
+  #audio .np-art { width: min(100%, 300px); height: auto; aspect-ratio: 1; }
+  #audio .np-main { width: 100%; }
+  #audio .np-src, #audio .np-ctl, #audio .np-row, #audio .np-from, #audio .np-flow { justify-content: center; }
 }
 /* A very wide screen: the pages may use more of it. */
 @media (min-width: 1700px) { main { max-width: 1560px; } }
@@ -1188,13 +1199,47 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
 /* The GATT server's JSON grows with what is in it on a desktop rather than scrolling in the page. */
 @media (min-width: 901px) and (min-height: 560px) { #gs-json { overflow: hidden; resize: none; } }
 
-/* Audio → Bluetooth: a device's links, one a row — which way, the codec, the state, listening. */
+/* Audio → Route: a Bluetooth row's links, one a row — the kind, the codec, the state, the volume. */
 .ad-link { display: grid; grid-template-columns: minmax(10rem, auto) minmax(0, 1fr) auto auto; gap: 0.3rem 0.8rem; align-items: center; padding: 0.5rem 0; border-top: 1px solid var(--line-soft); }
 .ad-card .card-head + .ad-link { border-top: 0; }
 .ad-link .ad-vol { grid-column: 1 / -1; margin: 0; }
 .ad-profile { margin: 0.6rem 0 0.2rem; gap: 0.4rem 0.8rem; align-items: center; }
 .ad-profile select { min-width: 14rem; }
+/* Audio → Route: Inputs and Outputs side by side when there is room, one under the other on a
+   phone. A row is the line that picks or switches, and under it what the device has: its links,
+   its codec picker, the stream's meters. */
+.route-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 0 0.8rem; align-items: start; }
+.rt-item + .rt-item { border-top: 1px solid var(--line-soft); }
+.rt-more { padding: 0 0.4rem 0.5rem calc(2.6rem + 1.1rem); }
+.rt-more .ad-link:first-child { border-top: 0; }
+.rt-more .ad-link { grid-template-columns: minmax(6rem, auto) minmax(0, 1fr) auto; padding: 0.3rem 0; }
+.rt-more .ad-profile { margin: 0.3rem 0 0; }
+.rt-more details.more-fields { margin-top: 0.3rem; }
+.rt-item .tr-fmt { white-space: normal; max-width: 45%; }
+.rt-player { gap: 0.3rem; align-items: center; padding: 0.2rem 0; }
+.rt-player .np-btn { width: 2rem; height: 2rem; }
+.rt-ctl { gap: 0.4rem 1rem; align-items: center; margin-top: 0.2rem; }
+.rt-ctl input[type=range] { min-width: 120px; }
+.rt-ctl input[type=number] { width: 5.5rem; }
+.rt-gain-v { white-space: nowrap; min-width: 4.5em; }
+.rt-out.bad { color: var(--bad); }
+.rt-out.busy { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+.rt-out.now { box-shadow: inset 3px 0 0 var(--accent); background: var(--well); }
+.rt-out.now .tr-n svg { fill: none; stroke: currentColor; }
+.rt-out.gone { opacity: 0.6; }
+.rt-out.off { opacity: 0.5; cursor: not-allowed; }
+.rt-out .tr-n .dots { margin: 0; }
+/* The switch at the end of an output's row: on or off, as chosen; the row's light says whether it plays. */
+.rt-sw { flex: none; width: 2rem; height: 1.1rem; border-radius: 1rem; background: var(--line); position: relative; }
+.rt-sw i { position: absolute; top: 2px; left: 2px; width: calc(1.1rem - 4px); height: calc(1.1rem - 4px); border-radius: 50%; background: var(--panel); transition: left 0.15s; }
+.rt-sw.on { background: var(--accent); }
+.rt-sw.on i { left: calc(2rem - 1.1rem + 2px); }
+.rt-board { margin: 0.4rem 0 0; }
+.rt-board .player { margin-top: 0.5rem; }
+.rt-spec-fold canvas { width: 100%; margin-top: 0.3rem; }
+.av-probe { margin-top: 1rem; }
 @media (max-width: 640px) {
+  .rt-more { padding-left: 0.4rem; }
   .ad-link { grid-template-columns: minmax(0, 1fr) auto; }
   .ad-link .ad-codec { grid-column: 1 / -1; grid-row: 2; }
   .ad-link .ad-acts { grid-column: 1 / -1; }

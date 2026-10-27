@@ -491,7 +491,7 @@ plays nothing itself, it tells remotes about the route's input when that is the 
 `mirror` is that stream's id, `track` its title — a radio's ICY title (split into `Artist` and
 `Title` at its " - ") with the station as `Album`; a playlist's item with the `Artist`, `Album` and
 `Duration` its playlist entry carries, and `Number`/`NumberOfTracks`; a test signal by name — and
-`status` playing or paused. A remote's buttons then act on that stream as Listen's do: pause and
+`status` playing or paused. A remote's buttons then act on that stream as the console's Now playing does: pause and
 play pause it in place (a station, a playlist, a test signal), stop ends it and the player then
 plays nothing (no track, `stopped`), next and previous move through
 its playlist, and repeat and shuffle are the stream's own (`source.repeat`, `source.shuffle`).
@@ -592,7 +592,7 @@ as the loopback card; `mpg123` or `ffmpeg` for URLs). With PipeWire stopped only
 are there to play into or capture from. At most 4 run at once.
 
 One **local** stream plays to an output at a time: a test signal or a URL (what the board plays of
-its own). Listen starts them through the route (`POST /api/audio/route/play`, below), which keeps
+its own). The console starts them through the route (`POST /api/audio/route/play`, below), which keeps
 to one. A new one takes the place of those playing to any of its sinks, and of those with no sink
 (only browsers hear them), which are stopped and forgotten as `DELETE` would; it does not inherit
 their sinks, the request names them. Local streams on other outputs play on beside it (a broadcast's
@@ -686,7 +686,8 @@ to the last.
 
 ### The route
 
-What the board plays: one **input** on a set of **outputs** (Listen in the console). The input is
+What the board plays: one **input** on a set of **outputs** (the console's Audio → Route and Now
+playing). The input is
 the board's own (a test signal, a station, a media server's tracks: one local stream) or what one
 Bluetooth device sends it; the outputs are the sinks it plays on, any number up to 4, and they
 stay when the input changes. Devices that are not the input play nowhere (WirePlumber links no
@@ -711,7 +712,7 @@ has not started sending, waited for 15 s; or it stopped sending, `error` "… st
 waited for as long as BlueZ has a transport of it, so its play button brings the audio back),
 `playing`, `failed` (`error` says why: nothing came within 15 s, it disconnected while stopped, a broadcast ended, two
 broadcasts that are not a left and a right one). A failed input is not retried: the same input put
-again is the retry. The capture stopped by hand (`DELETE /api/audio/streams/{stream}`, Audio → Streams' Stop) ends
+again is the retry. The capture stopped by hand (`DELETE /api/audio/streams/{stream}`, or Now playing's Stop) ends
 the input: the route has none (`none`, `idle`) and does not record the device again. `stream` is the stream playing the input (a
 capture the route made of the device, or the local stream), `null` without; `local` the board's own
 stream loaded, playing or paused while a device is the input.
@@ -963,7 +964,9 @@ Each answers with the graph as it is after the change (one `wpctl`, then a fresh
   `/data/btbench/wireplumber/`. Streams the board plays name their outputs, so this decides only
   where an application that names none plays.
 - `PUT /api/audio/pipewire/nodes/{id}/volume` `{"volume": 0.75}` — 0 to 1.5 on wpctl's scale
-  (above 1 amplifies), every channel (`wpctl set-volume`).
+  (above 1 amplifies), every channel (`wpctl set-volume`). WirePlumber keeps a stream's volume and
+  mute by its name and gives them to the next stream of that name: one set on `btbench-stream-1`
+  holds for every later stream 1 until it is set back.
 - `PUT /api/audio/pipewire/nodes/{id}/mute` `{"mute": true}` — `false`, or `"toggle"`.
 
 Errors: 400 for a bad body, a node wpctl refuses ("is not a device node", "does not support

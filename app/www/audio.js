@@ -1,527 +1,1157 @@
 'use strict';
-// Audio, four views. Bluetooth: each connected audio device — which way audio goes on it and in
-// what codec (BlueZ's transports), the PipeWire profile that is its codec choice, its stream
-// endpoints and the AVDTP probe. Players: AVRCP — the phones' players (controls, metadata,
-// browsing) and the board's own player. Streams: what the board plays itself — a test signal, a
-// device's audio, a radio or URL — into an output and/or listened to here. PipeWire: the services
-// and the graph.
+// Audio: the board as a player and a bench at once. The board plays one input at a time — its own
+// music (internet radio, tracks from a UPnP media server as a playlist the board plays to the end,
+// a test signal) or what one Bluetooth device sends it (a phone's A2DP and its AVRCP player; an LE
+// Audio source; an Auracast broadcast, or a left and a right one as one stereo input; a call's
+// audio over HFP) — on any number of outputs at once: the board's sound card, Bluetooth speakers
+// and earbuds, its Auracast broadcasts, and this browser. The input and the outputs are the
+// daemon's route (/api/audio/route, audio/route.h), the same for every browser; the board's
+// playlist lives there too, so closing the page does not stop the music.
 //
-// Listening is plain fetch() of the stream's endless WAV, scheduled into Web Audio: no media
-// element (which buffers seconds and cannot say how much), and the AudioContext is made in the
-// click that asked for it, so autoplay rules let it play.
+// One tab, four views: Now playing and Up next (here), Route (route.js: the inputs and the
+// outputs, each with its link, codec and volume), Library (library.js). LE Audio (leaudio.js) and
+// PipeWire (pipewire.js) are tabs of their own in the same area. This file holds what they share:
+// the state, what plays, the outputs and how a switch of one is followed, hearing it here, and the
+// device helpers the rest of the console uses too (devName, the codec picker, the link words).
 
-const au = {adOpen: {}, browse: {}, cover: {}, endpoints: null, media: null, streams: [], cards: {}, listeners: {}, playerClock: {}, sw: {},
-  tick: null, radio: []};
+const au = {
+  media: null,         // the "media" topic: players, transports
+  mediaFailed: false,  // its first read failed: nothing is on the way any more
+  streams: [],         // the "audio.streams" topic
+  endpoints: null,     // the board's outputs
+  endpointsFailed: false,
+  route: null,         // GET /api/audio/route, the "audio.route" topic: the input and the outputs
+  players: {},         // a device's address → the player of it picked (it has several)
+  boardId: null,       // the stream this view started last
+  lib: lsGet('btbench.pl.lib') || '',  // phone | radio | upnp | signals; '' = the first
+  libPath: [],         // the library's breadcrumbs: [{id, title}] (UPnP), or folders (phone)
+  libItems: [],
+  upnpServer: null,
+  queueItems: [],      // the phone's now-playing list
+  queueAt: 0,          // when it was read
+  libMore: null,       // the UPnP folder's pages still to load (upnpPage)
+  libView: null,       // how the library is drawn, for the pages appended to it
+  libSeq: 0,           // the library's latest request, and the phone folder it is loading
+  libLoading: '',
+  tick: null,
+  ticks: 0,
+  artDone: {},   // cover URL → true (shown) / false (failed)
+  artTries: {},  // a phone's cover URL → how many times it was asked for again
+  artWait: {},   // player|track → when its cover handle was first waited for
+  cover: {},     // a player's cover-art (BIP) channel: {state, at}, see coverConnect
+  playerClock: {},  // a player's position as last heard: {pos, at, status}
+  devices: null, // GET /api/audio/devices: PipeWire's Bluetooth cards, the codec picker's
+  local: null,   // GET /api/media/local-player: the board's own player
+  art: {},       // a track's URL → what the library said of it (cover, length), see decorate
+};
 
-function renderAudio(s) {
-  loaded($('au-card'));
-  setHTML($('au-services'), Object.entries(s.services || {}).map(([k, v]) =>
-    pill(k.replace(/\.service$/, ''), v === 'active' ? 'good' : v === 'failed' ? 'bad' : '')).join(' '));
-  const on = s.enabled !== false;
-  if (idle($('au-on'))) $('au-on').checked = on;
-  $('au-off-hint').hidden = on;
-  $('au-restart').disabled = !on;
+const PL_SVG = {
+  previous: 'M18 6l-8.5 6L18 18zM6 6h2v12H6z', next: 'M6 6l8.5 6L6 18zM16 6h2v12h-2z',
+  play: 'M8 5v14l11-7z', pause: 'M7 5h4v14H7zM13 5h4v14h-4z', stop: 'M6 6h12v12H6z',
+  vol: 'M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12',
+  note: 'M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z',
+  radio: 'M4 10h16v10H4zM7 10l10-5M8 15h.01M12 15h5',
+  bt: 'M7 7l10 10-5 5V2l5 5L7 17',
+  speaker: 'M6 3h12v18H6zM12 17.5a3 3 0 100-6 3 3 0 000 6zM12 7h.01',
+  off: 'M4 4l16 16M9 9v6h4l5 4V14M13 5L11 7',
+  server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
+  phone: 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2',
+  folder: 'M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2z',
+  plus: 'M12 5v14M5 12h14',
+  remove: 'M6 6l12 12M18 6L6 18',
+  playnext: 'M4 6h12M4 11h12M4 16h6M14 14v6l5-3z',  // into the queue, right after what plays
+  wave: 'M2 12h3l3-7 4 14 4-10 3 3h3',
+  mic: 'M12 3a3 3 0 013 3v6a3 3 0 01-6 0V6a3 3 0 013-3zM5 11a7 7 0 0014 0M12 18v3',
+  into: 'M12 3v11M7 9l5 5 5-5M4 15v4h16v-4',     // music coming into the board
+  outof: 'M12 15V4M7 9l5-5 5 5M4 15v4h16v-4',    // the board playing it out
+  arrow: 'M4 12h15M14 7l5 5-5 5',
+  browser: 'M3 5h18v12H3zM8 21h8M12 17v4',
+};
+// A cover image's outcome, by URL: the art box stops showing it is loading, and a failed image
+// leaves the placeholder.
+// A phone's cover that failed is asked for again a few times, a little later each time: the first
+// one of a connection is often asked for while the phone's image channel is still opening.
+function npArtDone(img, ok) {
+  const src = img.getAttribute('src');
+  au.artDone[src] = ok;
+  img.hidden = !ok;
+  img.parentNode.classList.remove('loading');
+  const base = src.replace(/&r=\d+$/, '');
+  const n = (au.artTries[base] || 0) + 1;
+  if (!ok && base.startsWith('/api/media/players/cover') && n <= 4) {
+    au.artTries[base] = n;
+    setTimeout(renderNowPlaying, 1500 * n);
+  }
 }
 
-function refreshAudio() {
-  return api('/audio').then(s => { renderAudio(s); setText($('au-msg'), ''); }).catch(e => {
-    loaded($('au-card'));
-    loaded($('au-services'));
-    $('au-restart').disabled = e.status === 503;
-    // On a PC the target scripts are not installed; say so plainly rather than as an error.
-    setText($('au-msg'), e.status === 503 ? 'Restarting PipeWire works on the board only (btbench-audio is not installed on this machine).' : e.message);
+const svg = (d, cls) => `<svg viewBox="0 0 24 24" class="${cls || ''}" aria-hidden="true"><path d="${d}"/></svg>`;
+
+// ---------------------------------------------------------------- what plays
+
+const live = s => s.state === 'running' || s.state === 'starting';
+const isUrl = s => s.source.type === 'url';
+const TEST_SIGNALS = ['tone', 'sweep', 'noise', 'silence'];
+
+// The route (GET /api/audio/route, the "audio.route" topic): the one input the board plays and the
+// outputs it plays on, the same for every browser. The stream it plays: the board's own (a
+// station, tracks, a test signal) or the capture the board made of the device picked.
+const routeStream = () => au.route && au.route.stream ? au.streams.find(s => s.id === au.route.stream) || null : null;
+// The board's own stream that is loaded, playing or paused while a device is the input.
+const loadedStream = () => au.route && au.route.local ? au.streams.find(s => s.id === au.route.local) || null : null;
+const routeOuts = () => (au.route ? au.route.outputs : []).map(sinkOut);
+
+// What a board stream is, for the inputs and above the title.
+function streamKind(s) {
+  const t = s.source.type, list = s.source.playlist || [];
+  if (t === 'url') {
+    const item = list[s.track] || {};
+    return list.length > 1 || item.duration_ms || item.duration_s ? {what: 'Media server', icon: PL_SVG.server}
+      : {what: 'Internet radio', icon: PL_SVG.radio};
+  }
+  if (TEST_SIGNALS.includes(t)) return {what: 'Test signal', icon: PL_SVG.wave};
+  return {what: s.source.monitor ? 'What an output plays' : 'Audio input', icon: PL_SVG.mic};
+}
+// A test signal in words: "Tone 1000 Hz" and its level.
+function signalTitle(src) {
+  const hz = f => f >= 1000 && f % 100 === 0 ? `${f / 1000} kHz` : `${f} Hz`;
+  if (src.type === 'tone') return 'Tone ' + hz(src.freq) + (src.freq_right && src.freq_right !== src.freq ? ` left, ${hz(src.freq_right)} right` : '');
+  if (src.type === 'sweep') return `Sweep ${hz(src.from)} – ${hz(src.to)}`;
+  if (src.type === 'noise') return `${(src.color || 'pink').replace(/^./, c => c.toUpperCase())} noise`;
+  return 'Silence';
+}
+const streamTitle = s => TEST_SIGNALS.includes(s.source.type) ? signalTitle(s.source)
+  : s.meta.title || s.source.title || (s.source.type === 'url' ? 'Internet radio' : s.label);
+// The players worth showing: BlueZ also makes an empty one for a phone's LE Audio media control
+// service (mcp_gmcs: no name, never a track), which would be a second, dead one for the phone. An
+// AVRCP player is always one: right after pairing, before the phone has played anything, it has no
+// name and no track yet, and its play button is how the music gets started from here.
+const phones = () => (au.media ? au.media.players : []).filter(p => p.name || p.browsable || (p.track && p.track.title) ||
+  /\/avrcp\//.test(p.path));
+const isMcp = p => /\/mcp_/.test(p.path);  // BlueZ's mcp_gmcs/playerN, mcp_mcs/playerN
+
+// Bluetooth audio coming into the board with no player of the device's to show for it, each
+// shown the way a phone's is (`input` set): an Auracast broadcast in range — every one BlueZ has
+// read, received or not, so one can be picked and play and stop receive it — and a device that
+// streams to the board with no media control (an LE Audio source). A broadcaster's BISes are one.
+const sameAddr = (a, b) => !!a && !!b && a.toUpperCase() === b.toUpperCase();
+function inputs() {
+  const ts = au.media ? au.media.transports : [], ps = phones();
+  const out = [];
+  for (const t of ts) {
+    const bcast = /^1851$/i.test(t.uuid);
+    if (!bcast && !(/^(110b|2bc9)$/i.test(t.uuid) && t.state !== 'idle' && !ps.some(p => sameAddr(p.address, t.address)))) continue;
+    const key = 'in:' + (bcast ? t.device : t.path);
+    let x = out.find(o => o.path === key);
+    if (!x) {
+      x = {path: key, input: true, broadcast: bcast, address: t.address, device_name: t.device_name, name: '', transports: [], track: {}};
+      out.push(x);
+    }
+    x.transports.push(t);
+  }
+  out.forEach(inputStatus);
+  return out;
+}
+function inputStatus(x) {
+  const st = x.transports.map(t => t.state);
+  x.receiving = st.some(v => v === 'active' || v === 'broadcasting');
+  x.status = x.receiving ? 'playing' : st.includes('pending') ? 'syncing' : x.broadcast ? 'not received' : 'stopped';
+  x.transport = x.transports.length ? x.transports[0].path : '';
+  x.track = {title: x.transports.map(t => t.program_info).find(Boolean) || ''};
+}
+
+// What a source node the board records from is, in the route's words (route.cpp route_kind).
+function routeKind(e) {
+  if (e.kind !== 'bluetooth') return '';
+  if (e.transport) return 'broadcast';
+  const p = e.profile || '';
+  if (/^a2dp/.test(p)) return 'a2dp';
+  if (/^bap/.test(p)) return 'bap';
+  if (/^(headset|audio-gateway|hfp|hsp)/.test(p)) return 'hfp';
+  return e.codec === 'lc3' ? 'bap' : /^(cvsd|msbc|lc3_swb)$/.test(e.codec) ? 'hfp' : 'a2dp';
+}
+const KIND_WORDS = {a2dp: 'A2DP', bap: 'LE Audio', broadcast: 'Auracast', hfp: 'Call audio (HFP)'};
+// LE Audio's audio locations: a part is the left or the right channel with front left or front
+// right and not both.
+const sideOf = loc => loc == null ? 0 : (loc & 1) && !(loc & 2) ? -1 : (loc & 2) && !(loc & 1) ? 1 : 0;
+
+// Every Bluetooth input there is, one row a device and a kind of audio (a phone's music and its
+// call audio are two): the players (AVRCP, MCP), what the board receives (A2DP and LE Audio
+// transports, broadcasts in range) and the nodes it can record (HFP has no transport of BlueZ's).
+// A coordinated set (a pair of earbuds) is one row, for PipeWire's node of the set.
+function btInputs() {
+  const rows = [];
+  const row = (address, kind) => {
+    let r = rows.find(y => sameAddr(y.address, address) && y.kind === kind);
+    if (!r) rows.push(r = {address, kind, players: [], transports: [], source: null, members: null});
+    return r;
+  };
+  const ts = au.media ? au.media.transports : [];
+  const srcs = au.endpoints ? au.endpoints.sources.filter(e => e.kind === 'bluetooth') : [];
+  const sets = srcs.filter(e => e.set_leader && e.members && e.members.length);
+  const inSet = a => sets.find(e => e.members.some(m => sameAddr(m, a)));
+  const addrOf = a => { const s = inSet(a); return s ? s.members[0] : a; };
+  phones().forEach(p => row(addrOf(p.address), isMcp(p) ? 'bap' : 'a2dp').players.push(p));
+  ts.forEach(t => {
+    if (/^1851$/i.test(t.uuid)) row(t.address, 'broadcast').transports.push(t);
+    else if (/^110b$/i.test(t.uuid)) row(t.address, 'a2dp').transports.push(t);
+    else if (/^2bc9$/i.test(t.uuid)) row(addrOf(t.address), 'bap').transports.push(t);
   });
-}
-
-// ---------------------------------------------------------------- endpoints
-
-const epLabel = e => `${e.label}${e.codec ? ' · ' + e.codec : ''}${e.default ? ' (default)' : ''}`;
-
-
-function renderEndpoints(ep) {
-  au.endpoints = ep;
-  const t = ep.tools || {};
-  const missing = ['pw-cat', 'mpg123', 'ffmpeg'].filter(k => !t[k]);
-  // Without PipeWire the only endpoints are the loopback card's, played to with aplay.
-  setText($('st-backend'), `${ep.backend === 'pipewire' ? 'PipeWire' : ep.backend === 'alsa' ? 'ALSA (loopback card only)' : 'PipeWire is not running'}` +
-    `${ep.error ? ' · ' + ep.error : ''}${missing.length ? ' · not installed: ' + missing.join(', ') : ''}`);
-  // With nothing chosen before, the first connected speaker or car is where things play, else
-  // the board's sound card (the loopback card).
-  if (!au.outs) {
-    const first = ep.sinks.find(e => e.kind === 'bluetooth' && !(e.set && !e.set_leader)) || ep.sinks[0];
-    au.outs = first ? [`${ep.backend === 'alsa' ? 'alsa' : 'pipewire'}:${first.id}`] : [];
-  }
-  renderNewOuts();
-  const caps = ep.sources.map(e => ({value: `${e.backend}:${e.id}`, label: epLabel(e)}));
-  if (ep.backend === 'pipewire') caps.unshift({value: 'pipewire:', label: 'the default source'});
-  fillSelect($('st-capture'), caps);
-  fillSelect($('st-monitor'), ep.backend === 'pipewire' ? ep.sinks.map(e => ({value: e.id, label: epLabel(e)})) : []);
-  au.streams.forEach(upsertStream);  // each running stream's own output picker
-}
-
-// The outputs new streams start on, as Listen's values (player.js outSink): from before there
-// were several, the one select's value ("" nowhere; "pipewire:", the default output that is no
-// longer offered, nowhere too). Null until
-// the endpoints are known, when the first Bluetooth sink is taken.
-au.outs = (() => {
-  try {
-    const v = JSON.parse(lsGet('btbench.au.outs') || 'null');
-    if (Array.isArray(v)) return v.filter(x => x !== 'default' && x !== 'none');
-  } catch (e) { /* the old choice */ }
-  const one = lsGet('btbench.au.sink');
-  return one == null ? null : one === '' || one === 'pipewire:' ? [] : [one];
-})();
-
-// The form's outputs: Listen's buttons, each one on or off by itself.
-function renderNewOuts() {
-  setHTML($('st-sinks'), outButtonsHTML(outOptions(false, au), au.outs || [], null, au));
-  renderOutCodec();
-}
-
-function pickNewOut(v) {
-  const next = nextOuts(au.outs || [], v);
-  if (next.length > MAX_OUTS) { toast(`A stream plays to at most ${MAX_OUTS} outputs.`); return; }
-  au.outs = next;
-  lsSet('btbench.au.outs', JSON.stringify(next));
-  renderNewOuts();
-}
-
-// An output tapped in a stream's card: added to it or taken off it at once, the switch followed as
-// Listen follows its own (au.sw by stream, player.js swAdvance) until the output takes the audio
-// or fails.
-function pickStreamOut(id, v) {
-  const s = au.streams.find(x => x.id === id);
-  if (!s) return;
-  const next = nextOuts(streamOuts(s), v);
-  if (next.length > MAX_OUTS) { toast(`A stream plays to at most ${MAX_OUTS} outputs.`); return; }
-  const add = next.includes(v);
-  const sw = {value: v, add, phase: 'asking', at: Date.now(), seq: null};
-  au.sw[id] = sw;
-  const redraw = () => { const x = au.streams.find(y => y.id === id); if (x) upsertStream(x); };
-  redraw();
-  put(`/audio/streams/${id}`, {sinks: outSinks(next)}).then(r => {
-    if (au.sw[id] !== sw) return;
-    sw.seq = r.sink_req;
-    sw.phase = add ? 'starting' : 'removing';
-    upsertStream(r);
-  }).catch(e => {
-    if (au.sw[id] !== sw) return;
-    sw.phase = 'failed';
-    sw.error = e.message;
-    redraw();
+  srcs.forEach(e => {
+    if (e.set && !e.set_leader) return;
+    const k = routeKind(e);
+    const r = row(e.set_leader ? e.members[0] : e.address, k);
+    r.source = r.source || e;
+    if (e.set_leader) r.members = e.members;
   });
-  // The result comes with the streams topic; asked too, in case it is slow.
-  [400, 1200, 2500, 5000, 9000].forEach(t => setTimeout(() => { if (au.sw[id] === sw && sw.phase !== 'done') refreshStreams(); }, t));
-}
-
-function refreshEndpoints(fresh) {
-  return api('/audio/endpoints' + (fresh ? '?fresh=1' : '')).then(renderEndpoints)
-    .catch(e => { ldFail(e, $('st-sinks')); setText($('st-backend'), e.message); });
-}
-
-// The codecs of the chosen outputs that are Bluetooth devices: the same picker as in Players, so
-// trying a codec does not mean leaving what plays.
-function renderOutCodec() {
-  const ep = au.endpoints;
-  const ds = (au.outs || []).map(v => ep && ep.sinks.find(k => v.endsWith(':' + k.id)))
-    .map(e => e && e.address && au.devices && au.devices.devices.find(x => x.address === e.address)).filter(Boolean);
-  $('st-codec-l').hidden = !ds.length;
-  const ae = document.activeElement;
-  if (ae && $('st-codec').contains(ae)) return;
-  setHTML($('st-codec'), ds.map(d => `<span class="row">${ds.length > 1 ? esc(devName(d.address)) + ' ' : ''}${codecSelect(d)}</span>`).join(''));
-}
-
-// The sinks chosen in the form, as a stream's: [] (listen only), or [{type, target}, ...].
-const chosenSinks = () => outSinks(au.outs || []);
-
-// ---------------------------------------------------------------- streams
-
-function sourceFromForm() {
-  const type = $('st-src').value;
-  const num = id => parseFloat($(id).value);
-  switch (type) {
-    case 'tone': {
-      const r = $('st-freq-r').value.trim();
-      return {type, freq: num('st-freq'), freq_right: r ? parseFloat(r) : null, level_db: num('st-level')};
+  rows.forEach(r => {
+    const s = inSet(r.address);
+    if (s && r.kind === 'bap') { r.members = s.members; r.source = r.source || s; }
+    r.name = r.members ? r.members.map(devName).filter((v, i, a) => a.indexOf(v) === i).join(' + ') : devName(r.address);
+    if (r.kind === 'broadcast') {
+      const x = {transports: r.transports, broadcast: true};
+      inputStatus(x);
+      r.state = x.status === 'playing' ? 'receiving' : x.status === 'syncing' ? 'syncing' : 'in range';
+      r.title = x.track.title;
+      const locs = r.transports.map(t => t.location).filter(v => v != null);
+      // One channel of a stereo pair: it can be the other half of an input.
+      r.side = locs.length === 1 ? sideOf(locs[0]) : 0;
+    } else {
+      const on = r.transports.some(t => t.state === 'active');
+      r.state = on ? 'streaming' : r.source && r.kind === 'hfp' ? 'connected' : r.transports.length || r.source ? 'connected, not streaming'
+        : 'remote control only';
+      const t = r.transports.find(x => x.codec) || null;
+      r.codec = t && t.codec ? t.codec.name : r.source && r.source.codec ? r.source.codec.toUpperCase() : '';
     }
-    case 'sweep':
-      return {type, from: num('st-from'), to: num('st-to'), seconds: num('st-secs'), log: $('st-log').checked,
-        repeat: $('st-repeat').checked, level_db: num('st-level')};
-    case 'noise': return {type, color: $('st-color').value, level_db: num('st-level')};
-    case 'capture': {
-      const v = $('st-capture').value, i = v.indexOf(':');
-      return {type, backend: v.slice(0, i) || 'pipewire', target: v.slice(i + 1),
-        title: $('st-capture').selectedOptions[0] ? $('st-capture').selectedOptions[0].textContent : ''};
-    }
-    case 'monitor':
-      return {type: 'capture', backend: 'pipewire', target: $('st-monitor').value, monitor: true,
-        title: 'what ' + ($('st-monitor').selectedOptions[0] ? $('st-monitor').selectedOptions[0].textContent : 'it') + ' plays'};
-    default: return {type};
-  }
-}
-
-function startStream(source, sinks, listen, extra, ctxGiven) {
-  const body = Object.assign({source, sinks: sinks || [], rate: parseInt($('st-rate').value, 10),
-    channels: parseInt($('st-ch').value, 10), gain_db: parseFloat($('st-gain').value) || 0}, extra || {});
-  // The AudioContext must come from the click itself, before any await (a caller that waits
-  // first makes it in its click and passes it).
-  const ctx = listen ? (ctxGiven || newAudioContext()) : null;
-  setText($('st-msg'), 'starting…');
-  return post('/audio/streams', body).then(s => {
-    setText($('st-msg'), '');
-    upsertStream(s);
-    if (listen) startListening(s.id, ctx);
-    return s;
-  }).catch(e => {
-    if (ctx) ctx.close();
-    setText($('st-msg'), e.message);
-    if (source.type === 'url') toast(e.message);  // played from a station or a server, far from st-msg
-    throw e;
   });
+  // The board's own broadcasts are outputs, not inputs.
+  return rows.filter(r => r.address);
 }
+const isRouted = r => au.route && au.route.input.type === 'bluetooth' &&
+  au.route.input.devices.some(d => sameAddr(d.address, r.address) && (!d.kind || d.kind === r.kind));
 
-const STATE_CLS = {running: 'good', starting: 'warn', failed: 'bad', ended: '', stopped: ''};
-
-// A level bar from -60 dBFS (empty) to 0 (full); the peak is the thin mark.
-function meterHTML(lv, ch) {
-  const n = Math.max(1, (lv && lv.rms_db.length) || ch || 1);
-  let h = '';
-  for (let c = 0; c < n; c++) {
-    const rms = lv && lv.rms_db[c] != null ? lv.rms_db[c] : -120;
-    const pk = lv && lv.peak_db[c] != null ? lv.peak_db[c] : -120;
-    const w = v => Math.max(0, Math.min(100, (v + 60) / 60 * 100)).toFixed(1);
-    h += `<div class="meter${pk > -1 ? ' clip' : pk > -6 ? ' hot' : ''}"><i style="width:${w(rms)}%"></i><b style="left:${w(pk)}%"></b>` +
-      `<span>${n > 1 ? (c ? 'R ' : 'L ') : ''}${pk > -119 ? pk.toFixed(1) : '—'} dB</span></div>`;
+// The source on screen: the route's input. A device with several players (Spotify and the phone's
+// own music app) shows the one picked, else the one playing.
+function current() {
+  const r = au.route;
+  if (!r) return {kind: 'none'};
+  if (r.input.type === 'local') {
+    const s = routeStream();
+    return s ? {kind: 'board', s} : {kind: 'none'};
   }
-  return h;
-}
-
-function streamCard(s) {
-  const el = document.createElement('div');
-  el.className = 'card dev stream';
-  el.dataset.id = s.id;
-  el.innerHTML = `<div class="head"><span><b class="st-label"></b> <span class="pill st-state"></span></span>
-      <span class="acts">${s.source.type === 'url' ? `<button class="small-btn st-prev" hidden>Previous</button><button class="small-btn st-pause">Pause</button><button class="small-btn st-next" hidden>Next</button>` : ''}<button class="small-btn st-listen">Listen</button><button class="small-btn danger st-stop">Stop</button></span></div>
-    <div class="small st-meta"></div>
-    <div class="st-meters"></div>
-    <div class="row wrap small">
-      <label class="row">gain <input type="range" class="st-gain grow" min="-60" max="20" step="0.5"> <span class="mono st-gain-v"></span></label>
-      ${s.source.type === 'tone' ? `<label class="row">Hz <input type="number" class="st-freq narrow" min="1"></label>` : ''}
-      ${s.source.type === 'tone' || s.source.type === 'noise' ? `<label class="row">level <input type="number" class="st-level narrow" min="-96" max="0"> dB</label>` : ''}
-    </div>
-    <div class="np-outs st-outs" role="group" aria-label="Where this stream plays"></div>
-    <div class="np-out-status st-out-status small" role="status" aria-live="polite"></div>
-    <div class="st-listening small" hidden>
-      <div class="row wrap"><span class="st-buf mono"></span>
-        <label class="row">volume <input type="range" class="st-vol" min="0" max="1" step="0.01" value="1"></label></div>
-      <canvas class="graph short st-spec"></canvas>
-    </div>
-    <div class="small bad-text st-err"></div>`;
-  return el;
-}
-
-function upsertStream(s) {
-  const at = au.streams.findIndex(x => x.id === s.id);
-  if (at >= 0) au.streams[at] = s;  // a PUT's answer: Pause must know it paused
-  let el = au.cards[s.id];
-  if (!el) {
-    el = au.cards[s.id] = streamCard(s);
-    $('st-list').prepend(el);
-    $('st-empty').hidden = true;
+  if (r.input.type !== 'bluetooth' || !r.input.devices.length) return {kind: 'none'};
+  const d = r.input.devices[0];
+  if (d.kind !== 'broadcast' && d.kind !== 'hfp') {
+    const ps = phones().filter(p => sameAddr(p.address, d.address) || (inputSet(d.address) || []).some(m => sameAddr(m, p.address)));
+    const p = ps.find(x => x.path === au.players[d.address.toUpperCase()]) || ps.find(x => x.status === 'playing') || ps[0];
+    if (p) return {kind: 'phone', p, players: ps};
   }
-  const q = c => el.querySelector(c);
-  setText(q('.st-label'), s.label);
-  setText(q('.st-state'), s.state);
-  setClass(q('.st-state'), 'pill st-state ' + (STATE_CLS[s.state] || ''));
-  const meta = [];
-  if (s.meta.title) meta.push('♪ ' + s.meta.title);
-  if (s.meta.name) meta.push(s.meta.name);
-  meta.push(`${s.rate} Hz · ${s.channels === 1 ? 'mono' : 'stereo'} · ${fmtMs(s.seconds * 1000)}`);
-  if (s.listeners) meta.push(`${s.listeners} listening`);
-  (s.sinks_status || []).forEach(k => { if (k.state !== 'playing') meta.push(`${outName(sinkOut(k), au)} ${k.state}`); });
-  setText(q('.st-meta'), meta.join(' · '));
-  setHTML(q('.st-meters'), s.state === 'running' ? meterHTML(s.level, s.channels) : '');
-  setText(q('.st-err'), s.error || '');
-  const g = q('.st-gain');
-  if (idle(g)) g.value = s.gain_db;
-  setText(q('.st-gain-v'), `${(+s.gain_db).toFixed(1)} dB`);
-  const f = q('.st-freq');
-  if (f && idle(f)) f.value = s.source.freq;
-  const lv = q('.st-level');
-  if (lv && idle(lv)) lv.value = s.source.level_db;
-  const live = s.state === 'running' || s.state === 'starting';
-  // Its own outputs, Listen's buttons: each added or taken off at once (the source and the others
-  // carry on). One not there any more (a speaker gone) stays, greyed, until taken off.
-  // What the board does about them, in Listen's words (player.js outLine): a switch tapped
-  // followed until the output takes the audio (and a Bluetooth link streams), or why not.
-  const sw = au.sw[s.id];
-  swAdvance(sw, s, au);
-  q('.st-outs').hidden = !live;
-  if (live) setHTML(q('.st-outs'), outButtonsHTML(outOptions(false, au), streamOuts(s), sw, au, s));
-  const line = outLine(s, sw && sw.phase !== 'done' ? sw : null, au) || {cls: s.listeners ? 'good' : '',
-    html: s.listeners ? `No board output: ${s.listeners} browser${s.listeners > 1 ? 's' : ''} listening.`
-      : 'No board output and nobody listening: it plays on until stopped.'};
-  q('.st-out-status').hidden = !live;
-  if (live) outStatusHTML(q('.st-out-status'), line);
-  q('.st-listen').hidden = !live;
-  if (q('.st-pause')) {
-    const n = (s.source.playlist || []).length;
-    q('.st-pause').hidden = !live;
-    setText(q('.st-pause'), s.paused ? 'Resume' : 'Pause');
-    q('.st-prev').hidden = q('.st-next').hidden = !live || n < 2;
-    q('.st-prev').disabled = s.track <= 0;
-    q('.st-next').disabled = s.track >= n - 1;
-    if (n > 1) meta.unshift(`track ${s.track + 1} of ${n}`), setText(q('.st-meta'), meta.join(' · '));
-  }
-  setText(q('.st-listen'), au.listeners[s.id] ? 'Mute here' : 'Listen');
-  setText(q('.st-stop'), live ? 'Stop' : 'Remove');
-  if (!live && au.listeners[s.id]) stopListening(s.id);
+  const x = inputs().find(i => sameAddr(i.address, d.address) && (d.kind !== 'broadcast' || i.broadcast)) ||
+    {path: 'in:' + d.address, input: true, broadcast: d.kind === 'broadcast', address: d.address, name: '', transports: [], track: {}};
+  if (!x.transports) x.transports = [];
+  if (!x.transports.length) inputStatus(x);
+  x.hfp = d.kind === 'hfp';
+  if (r.input.devices.length > 1) x.also = r.input.devices.slice(1).map(o => o.address);
+  return {kind: 'phone', p: x, players: []};
+}
+function inputSet(address) {
+  const e = au.endpoints && au.endpoints.sources.find(s => s.set_leader && (s.members || []).some(m => sameAddr(m, address)));
+  return e ? e.members : null;
 }
 
-function renderStreams(list) {
-  au.streams = list.streams;
-  const ids = new Set(list.streams.map(s => String(s.id)));
-  for (const id of Object.keys(au.cards)) {
-    if (!ids.has(id)) {
-      au.cards[id].remove();
-      delete au.cards[id];
-      delete au.sw[id];
-      stopListening(id);
+// The stream the output row acts on: the route's.
+const outStream = () => routeStream();
+
+
+
+// ---------------------------------------------------------------- now playing
+
+function renderNowPlaying() {
+  const c = current();
+  // The input is picked in Route; here, a device with several players (Spotify and the
+  // phone's own music app, an LE Audio device's media control) has a chip each, named after the
+  // player.
+  // Two of one name (a board's AVRCP player and its LE Audio media control are both "btbench") say
+  // which they are.
+  const pname = p => p.name || (isMcp(p) ? 'Media control' : 'Player');
+  const twice = p => (c.players || []).filter(x => pname(x) === pname(p)).length > 1;
+  const chips = (c.players || []).length > 1 ? c.players.map(p => ({key: p.path, label: pname(p) + (twice(p) ? (isMcp(p) ? ' · LE Audio' : ' · AVRCP') : ''),
+    icon: isMcp(p) ? PL_SVG.bt : PL_SVG.phone, on: c.p.path === p.path})) : [];
+  setHTML($('np-src'), chips.map(x =>
+    `<button class="chip${x.on ? ' on' : ''}" data-src="${esc(x.key)}">${svg(x.icon)}${esc(x.label)}</button>`).join(''));
+
+  let artSrc = '', artLoading = false, ph = PL_SVG.note;
+  let art = svg(ph, 'ph'), title = 'Nothing playing', sub = '', sub2 = '', playing = false, pos = 0, dur = 0;
+  let can = {prev: false, next: false, play: false, stop: false};
+  if (c.kind === 'phone' && c.p.input) {
+    // A broadcast or an LE Audio source: what the broadcaster says it plays (its Program_Info), the
+    // codec, and play/stop to receive it or stop (nothing to control on the device).
+    const p = c.p, t0 = p.transports[0] || {};
+    playing = p.receiving || (p.hfp && !!routeStream());
+    title = p.track.title || inputLabel(p);
+    sub = p.track.title ? inputLabel(p) : p.hfp ? 'Call audio (HFP)' : '';
+    sub2 = [t0.codec ? t0.codec.summary : '', p.also ? 'with ' + p.also.map(devName).join(', ') + ' as the other channel' : ''].filter(Boolean).join(' · ');
+    ph = PL_SVG.bt;
+    art = svg(ph, 'ph');
+    can = {prev: false, next: false, play: p.broadcast, stop: p.broadcast && p.status !== 'not received'};
+  } else if (c.kind === 'phone') {
+    const p = c.p, t = p.track || {};
+    playing = p.status === 'playing';
+    title = t.title || 'Nothing playing';
+    sub = [t.artist, t.album].filter(Boolean).join(' — ');
+    sub2 = p.name ? `in ${p.name}` : '';
+    pos = playerPosition(p);
+    dur = t.duration_ms || 0;
+    if (p.obex_port != null && t.img_handle) {
+      // The track in the address too: a phone hands out the same handles again on its next
+      // connection, for other images.
+      const base = `/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${encodeURIComponent(t.img_handle)}` +
+        `&t=${encodeURIComponent([t.title, t.album].join('|'))}`;
+      artSrc = base + (au.artTries[base] ? '&r=' + au.artTries[base] : '');
+    } else if (p.obex_port != null) {
+      coverConnect(p, renderNowPlaying);
+      // A cover's handle comes with the track info once the image channel is open. Loading while
+      // it opens, and for a few seconds after for a track that came before it (a phone sends the
+      // handle a little later); a track that came while it was open and has none has no cover,
+      // and neither has any while it cannot be opened.
+      const k = p.path + '|' + (t.title || '');
+      if (!au.artWait[k]) au.artWait[k] = Date.now();
+      const ch = au.cover[p.path] || {state: 'asking'};
+      artLoading = ch.state === 'asking' ? Date.now() - au.artWait[k] < 12000
+        : ch.state === 'open' && au.artWait[k] < ch.at && Date.now() - ch.at < 5000;
+      if (artLoading && !au.artTimer) au.artTimer = setTimeout(() => { au.artTimer = null; renderNowPlaying(); }, 1000);
     }
+    can = {prev: true, next: true, play: true, stop: true};
+  } else if (c.kind === 'board' && isUrl(c.s)) {
+    const s = c.s, list = s.source.playlist || [];
+    const item = list[s.track] || {};
+    playing = !s.paused && s.state === 'running';
+    title = s.meta.title || item.title || s.source.title || 'Internet radio';
+    sub = list.length > 1 ? [item.artist, item.album, `track ${s.track + 1} of ${list.length}`].filter(Boolean).join(' — ')
+      : (s.meta.name || s.source.title || '');
+    // A station: what it says about itself, and the cover (or its logo) it sends with the title.
+    sub2 = list.length > 1 || s.meta.description === sub ? '' : s.meta.description || '';
+    pos = (s.track_seconds || 0) * 1000;
+    dur = item.duration_ms || (item.duration_s || 0) * 1000;
+    if (list.length <= 1) ph = PL_SVG.radio;
+    artSrc = item.art || (list.length > 1 ? '' : s.meta.art || '');
+    art = svg(ph, 'ph');
+    // Repeating all, the first track's previous is the last, and the last one's next the first.
+    const round = s.source.repeat === 'all' || s.source.shuffle;
+    can = {prev: round ? list.length > 1 : s.track > 0, next: round ? list.length > 1 : s.track + 1 < list.length, play: true, stop: true};
+  } else if (c.kind === 'board') {
+    // A test signal pauses and plays on like a station; a capture (a device's audio the board
+    // plays on) has no pause. Neither has tracks.
+    const s = c.s, src = s.source;
+    playing = s.state === 'running' && !s.paused;
+    title = streamTitle(s);
+    sub = TEST_SIGNALS.includes(src.type)
+      ? [src.type === 'silence' ? '' : `${src.level_db} dBFS ${src.type === 'noise' ? 'RMS' : 'peak'}`,
+        src.type === 'sweep' ? `${src.seconds} s${src.log ? ', logarithmic' : ''}${src.repeat ? ', repeating' : ''}` : ''].filter(Boolean).join(' · ')
+      : src.monitor ? '' : src.target || 'the default source';
+    sub2 = `${s.rate / 1000} kHz · ${s.channels === 1 ? 'mono' : 'stereo'} · ${fmtMs(s.seconds * 1000)}`;
+    ph = streamKind(s).icon;
+    art = svg(ph, 'ph');
+    can = {prev: false, next: false, play: src.type !== 'capture', stop: true};
   }
-  // Oldest first into prepend(): newest ends on top.
-  list.streams.slice().reverse().forEach(upsertStream);
-  loaded($('st-list'));
-  $('st-empty').hidden = list.streams.length > 0;
+  // An image: loading until it arrived (or failed: then the note stays).
+  if (artSrc) {
+    art = svg(ph, 'ph') + `<img alt="" src="${esc(artSrc)}" onload="npArtDone(this, true)" onerror="npArtDone(this, false)"${au.artDone[artSrc] === true ? '' : ' hidden'}>`;
+    artLoading = au.artDone[artSrc] === undefined;
+  }
+  // Until /media answers, "Nothing playing" would be a guess: the cover and the title wait instead.
+  const waiting = c.kind === 'none' && !au.media && !au.mediaFailed;
+  setHTML($('np-art'), art);
+  $('np-art').classList.toggle('loading', artLoading || waiting);
+  $('np-title').classList.toggle('wait', waiting);
+  setText($('np-title'), waiting ? '' : title);
+  setText($('np-sub'), sub);
+  setText($('np-sub2'), sub2);
+  $('np').classList.toggle('idle', c.kind === 'none');
+  $('np-bar').parentElement.hidden = c.kind === 'none';
+  const btn = (a, d, on, cls) => `<button class="np-btn ${cls || ''}" data-np="${a}" title="${a}" aria-label="${a}"${on ? '' : ' disabled'}>${svg(d)}</button>`;
+  // Play and pause both, all the buttons alike, and the state said in words: a phone reports its
+  // status late or not at all, and buttons that change with it then offer the wrong one.
+  const status = c.kind === 'phone' ? (c.p.status || 'unknown') : c.kind === 'board' ? (c.s.paused ? 'paused' : c.s.state === 'running' ? 'playing' : c.s.state) : '';
+  // Two rows, so the buttons keep their width on a phone: the transport, then repeat, shuffle and
+  // the state.
+  setHTML($('np-ctl'), '<div class="np-row">' + btn('previous', PL_SVG.previous, can.prev) +
+    btn('play', PL_SVG.play, can.play) + btn('pause', PL_SVG.pause, can.play) +
+    btn('next', PL_SVG.next, can.next) + btn('stop', PL_SVG.stop, can.stop) + '</div><div class="np-row">' +
+    (c.kind === 'phone' && !c.p.input ? modeButtons('np-btn', btRepeat(c.p.repeat), c.p.shuffle == null ? null : c.p.shuffle !== 'off')
+      : c.kind === 'board' && isUrl(c.s) && (c.s.source.playlist || []).length > 1 ? modeButtons('np-btn', boardRepeat(c.s.source.repeat), !!c.s.source.shuffle) : '') +
+    (status ? pill(status, playing ? 'good' : status === 'paused' ? 'warn' : '') : '') + '</div>');
+  // The bar under Route, Library and Up next: the track, and play/pause and next, to skip without
+  // leaving the list.
+  $('np-mini').hidden = c.kind === 'none';
+  setText($('np-mini-title'), title);
+  setText($('np-mini-sub'), sub || sub2);
+  setHTML($('np-mini-ctl'), btn(playing ? 'pause' : 'play', playing ? PL_SVG.pause : PL_SVG.play, can.play) + btn('next', PL_SVG.next, can.next));
+  setHTML($('np-from'), npFrom(c));
+  renderTime(pos, dur);
+  renderVolume(c);
+  setMediaSession();
+  renderOuts();
+  renderQueue(c);
+  renderRoute();
 }
 
-const refreshStreams = () => api('/audio/streams').then(renderStreams).catch(e => { ldFail(e, $('st-list')); fail(e); });
-
-// ---------------------------------------------------------------- listening (Web Audio)
-
-function newAudioContext() {
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) { toast('This browser has no Web Audio'); return null; }
-  return new AC({latencyHint: 'playback'});
+// Which way the music flows, said above the title the same way for both: into the board from a
+// Bluetooth device (and whether its audio actually streams in, or only its player is known), or out
+// of the board from a station, a media server's tracks or a test signal; then the path, from the
+// source through the board to where it plays.
+function npFrom(c) {
+  const tag = (icon, cls, text) => `<span class="np-tag ${cls}">${svg(icon)}${text}</span>`;
+  const flow = parts => `<span class="np-flow">${parts.map(esc).join(svg(PL_SVG.arrow))}</span>`;
+  const lower = n => n.replace(/^The /, 'the ');
+  const outs = s => (s ? streamOuts(s).map(v => lower(outName(v))) : []).concat(s && au.hearId === s.id ? ['this browser'] : []);
+  if (c.kind === 'phone') {
+    const ts = c.p.input ? c.p.transports : (au.media ? au.media.transports : []).filter(t => t.address === c.p.address && /^(110b|2bc9)$/i.test(t.uuid));
+    const on = ts.some(t => t.state === 'active' || t.state === 'broadcasting');
+    const s = routeStream(), inp = au.route.input;
+    // What the board does with it: records it (the capture) and plays that on the route's outputs.
+    const to = routeOuts().map(v => lower(outName(v))).concat(s && au.hearId === s.id ? ['this browser'] : []);
+    const bc = c.p.input && c.p.broadcast;
+    const state = inp.state === 'failed' ? inp.error
+      : inp.state === 'waiting' ? (inp.error ? 'stopped sending: play brings it back' : bc ? 'syncing to it…' : 'waiting for its audio…')
+      : on || s ? (bc ? 'received by the board' : 'streaming into the board')
+      : bc ? (c.p.status === 'syncing' ? 'syncing to it…' : 'in range: play receives it')
+      : ts.length ? 'connected, not streaming' : 'remote control only, no audio link';
+    const cls = inp.state === 'failed' ? 'bad-text' : on || s ? 'good-text' : '';
+    return tag(PL_SVG.into, 'bt', bc ? 'Receiving · Auracast' : c.p.hfp ? 'Receiving · Call audio' : 'Receiving · Bluetooth') +
+      `<span class="np-state ${cls}">${esc(state)}</span>` +
+      flow([inputLabel(c.p) + (c.p.also ? ' + ' + c.p.also.map(devName).join(' + ') : ''), 'this board', to.length ? to.join(' + ') : 'no output']);
+  }
+  if (c.kind === 'board') {
+    const s = c.s, to = outs(s);
+    return tag(PL_SVG.outof, 'local', `Playing from the board · ${streamKind(s).what}`) +
+      flow(['this board', to.length ? to.join(' + ') : 'no output']);
+  }
+  return '';
 }
 
-// One listening stream: reads the WAV, turns each ~100 ms of samples into an AudioBuffer and
-// schedules it right after the previous one, keeping about a third of a second queued (played a
-// hair faster or slower to stay there). A gap (Wi-Fi) re-primes that cushion; more than two
-// seconds queued (a background tab let it pile up) drops blocks to catch up.
-class Listen {
-  constructor(id, ctx) {
-    this.id = id;
-    this.ctx = ctx;
-    this.abort = new AbortController();
-    this.gain = ctx.createGain();
-    this.analyser = ctx.createAnalyser();
-    this.analyser.fftSize = 2048;
-    this.gain.connect(this.analyser);
-    this.analyser.connect(ctx.destination);
-    this.next = 0;
-    this.dropped = 0;
-    this.underruns = 0;
+// Repeat or shuffle pressed: the phone's player's setting, or the board's playlist's.
+function npMode(mode) {
+  const c = current();
+  if (c.kind === 'phone' && !c.p.input) {
+    const p = c.p;
+    const body = mode === 'repeat' ? {repeat: btRepeatValue(nextRepeat(btRepeat(p.repeat)))} : {shuffle: p.shuffle === 'off' ? 'alltracks' : 'off'};
+    return put('/media/players', Object.assign({path: p.path}, body)).catch(fail);
   }
-
-  async run() {
-    const r = await fetch(`/api/audio/streams/${this.id}/listen`, {signal: this.abort.signal});
-    if (!r.ok) {
-      let msg = r.statusText;
-      try { msg = (await r.json()).error || msg; } catch (e) { /* not JSON */ }
-      throw new Error(msg);
-    }
-    const reader = r.body.getReader();
-    let head = new Uint8Array(0);
-    let rate = 0, ch = 0, rest = new Uint8Array(0);
-    // The header: RIFF, then chunks until "data" (fmt gives the rate and the channels).
-    while (!rate) {
-      const {value, done} = await reader.read();
-      if (done) return;
-      head = concat(head, value);
-      const p = parseWavHeader(head);
-      if (p) { rate = p.rate; ch = p.channels; rest = head.subarray(p.dataAt); }
-    }
-    this.rate = rate;
-    this.ch = ch;
-    const block = Math.round(rate / 10) * ch * 2;  // bytes in ~100 ms
-    let pend = rest;
-    for (;;) {
-      while (pend.length >= block) {
-        this.schedule(pend.subarray(0, block));
-        pend = pend.subarray(block);
-      }
-      const {value, done} = await reader.read();
-      if (done) break;
-      pend = concat(pend, value);
-    }
-  }
-
-  schedule(bytes) {
-    const frames = bytes.length / (2 * this.ch);
-    const buf = this.ctx.createBuffer(this.ch, frames, this.rate);
-    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
-    for (let c = 0; c < this.ch; c++) {
-      const out = buf.getChannelData(c);
-      for (let i = 0; i < frames; i++) out[i] = dv.getInt16((i * this.ch + c) * 2, true) / 32768;
-    }
-    const now = this.ctx.currentTime;
-    if (this.next < now + 0.02) {
-      if (this.next) this.underruns++;
-      this.next = now + 0.3;
-    } else if (this.next > now + 2) {
-      this.dropped++;
-      return;
-    }
-    // The board's clock and this browser's output differ by up to a few hundred ppm: left alone the
-    // cushion drains into a gap every few minutes, or grows. Each block plays a little faster or
-    // slower to hold it near 0.3 s (the error averaged over ~1 s of blocks), at most ±0.5%: 9 cents.
-    this.err = 0.9 * (this.err || 0) + 0.1 * (this.next - now - 0.3);
-    const rate = Math.min(1.005, Math.max(0.995, 1 + 0.02 * this.err));
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    src.playbackRate.value = rate;
-    src.connect(this.gain);
-    src.start(this.next);
-    this.next += buf.duration / rate;
-  }
-
-  buffered() { return Math.max(0, this.next - this.ctx.currentTime); }
-
-  stop() {
-    this.abort.abort();
-    this.ctx.close().catch(() => {});
+  if (c.kind === 'board') {
+    const src = c.s.source;
+    const body = mode === 'repeat' ? {repeat: boardRepeatValue(nextRepeat(boardRepeat(src.repeat)))} : {shuffle: !src.shuffle};
+    return put(`/audio/streams/${c.s.id}`, body).then(refreshPlayerStreams).catch(fail);
   }
 }
 
-function concat(a, b) {
-  const c = new Uint8Array(a.length + b.length);
-  c.set(a);
-  c.set(b, a.length);
-  return c;
+function renderTime(pos, dur) {
+  $('np-bar').style.width = dur ? (Math.min(1, pos / dur) * 100).toFixed(2) + '%' : '0%';
+  $('np-bar').parentElement.classList.toggle('live', !dur);
+  setText($('np-pos'), pos ? fmtMs(pos) : '');
+  setText($('np-dur'), dur ? fmtMs(dur) : '');
 }
 
-function parseWavHeader(h) {
-  if (h.length < 12) return null;
-  const dv = new DataView(h.buffer, h.byteOffset, h.length);
-  const tag = o => String.fromCharCode(h[o], h[o + 1], h[o + 2], h[o + 3]);
-  if (tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('not a WAV stream');
-  let pos = 12, rate = 0, channels = 0;
-  while (pos + 8 <= h.length) {
-    const id = tag(pos), len = dv.getUint32(pos + 4, true);
-    if (id === 'fmt ' && pos + 16 <= h.length) {
-      channels = dv.getUint16(pos + 10, true);
-      rate = dv.getUint32(pos + 12, true);
-    }
-    if (id === 'data') return rate ? {rate, channels, dataAt: pos + 8} : null;
-    pos += 8 + len + (len & 1);
+// The volume a person means: the speaker's own (AVRCP absolute volume of the link) when there is
+// one, else the stream's gain — and the gain for a stream on several outputs, which moves them all;
+// in this browser, the browser's.
+function volumeTarget(c) {
+  const ts = au.media ? au.media.transports : [];
+  if (c.kind === 'phone') {
+    const t = ts.find(x => x.path === c.p.transport);
+    return t && t.volume != null ? {kind: 'transport', path: t.path, max: transportVolMax(t), value: Math.round(t.volume / transportVolMax(t) * 100)} : null;
+  }
+  if (c.kind === 'board') {
+    const s = c.s;
+    const outs = streamOuts(s);
+    if (!outs.length) return au.hearId === s.id ? {kind: 'browser', value: Math.round(npAudio.volume * 100)} : null;
+    const ep = outs.length === 1 && outEndpoint(outs[0]);
+    // A device can have a transport each way (A2DP sink and source): the one the board sends on is
+    // its "Audio Source" side — the other is what the device would send the board.
+    const same = x => ep && ep.address && x.address && x.address.toUpperCase() === ep.address.toUpperCase() && x.volume != null;
+    const t = ts.find(x => same(x) && /source/i.test(x.profile || '')) || ts.find(same);
+    if (t) return {kind: 'transport', path: t.path, max: transportVolMax(t), value: Math.round(t.volume / transportVolMax(t) * 100)};
+    return {kind: 'gain', id: s.id, value: Math.round(Math.pow(10, s.gain_db / 40) * 100)};
   }
   return null;
 }
 
-function startListening(id, ctx) {
-  if (au.listeners[id]) return;
-  ctx = ctx || newAudioContext();
-  if (!ctx) return;
-  const l = new Listen(id, ctx);
-  au.listeners[id] = l;
-  const el = au.cards[id];
-  if (el) el.querySelector('.st-listening').hidden = false;
-  l.run().catch(e => { if (e.name !== 'AbortError') toast('listen: ' + e.message); })
-    .finally(() => stopListening(id));
-  drawListening();
-  const s = au.streams.find(x => x.id === id);
-  if (s) upsertStream(s);
+function renderVolume(c) {
+  const v = volumeTarget(c);
+  au.vol = v;
+  $('np-vol-row').hidden = !v;
+  if (v && idle($('np-vol'))) $('np-vol').value = Math.min(100, v.value);
 }
 
-function stopListening(id) {
-  const l = au.listeners[id];
-  if (!l) return;
-  delete au.listeners[id];
-  l.stop();
-  const el = au.cards[id];
-  if (el) {
-    el.querySelector('.st-listening').hidden = true;
-    setText(el.querySelector('.st-listen'), 'Listen');
+function setVolume(value) {
+  const v = au.vol;
+  if (!v) return;
+  if (v.kind === 'transport') put('/media/transport', {path: v.path, volume: Math.round(value / 100 * v.max)}).catch(fail);
+  else if (v.kind === 'browser') npAudio.volume = value / 100;
+  // 0..100 as -60..0 dB on a square-law curve: the slider's middle is about half as loud.
+  else put(`/audio/streams/${v.id}`, {gain_db: value <= 0 ? -60 : Math.max(-60, 40 * Math.log10(value / 100))}).catch(fail);
+}
+
+function npAction(a) {
+  const c = current();
+  if (c.kind === 'phone' && c.p.input) {
+    if (!c.p.broadcast) return null;
+    // Play receives the broadcast again and records it anew (the route does not by itself); stop
+    // lets it go, and the board's input is then nothing.
+    if (a === 'play') return receiveBroadcast(c.p, true).then(() => pickInput(au.route.input));
+    return receiveBroadcast(c.p, false).then(() => pickInput({type: 'none'}));
   }
+  if (c.kind === 'phone') return playerAction(c.p.path, a);
+  if (c.kind !== 'board') return;
+  const s = c.s;
+  if (a === 'stop') {
+    if (au.hearId === s.id) hearStop();
+    return del(`/audio/streams/${s.id}`).then(refreshPlayerStreams).catch(fail);
+  }
+  if (s.source.type === 'capture' || (!isUrl(s) && a !== 'play' && a !== 'pause')) return;  // tracks: a URL stream's
+  const body = a === 'play' ? {paused: false} : a === 'pause' ? {paused: true} : {[a]: true};
+  // Heard here: the element pauses with the board, and plays again from a fresh connection (what
+  // it buffered while paused is stale silence).
+  if (au.hearId === s.id) {
+    if (a === 'pause') npAudio.pause();
+    if (a === 'play') hearConnect();
+  }
+  put(`/audio/streams/${s.id}`, body).catch(fail);
 }
 
-// The spectrum of what is being heard, while anything is: one requestAnimationFrame loop for all.
-function drawListening() {
-  if (drawListening.on) return;
-  drawListening.on = true;
-  const frame = () => {
-    const ids = Object.keys(au.listeners);
-    if (!ids.length || currentTab !== 'audio') { drawListening.on = false; return; }
-    for (const id of ids) {
-      const l = au.listeners[id], el = au.cards[id];
-      if (!el) continue;
-      setText(el.querySelector('.st-buf'), `${(l.buffered() * 1000).toFixed(0)} ms buffered` +
-        (l.underruns ? ` · ${l.underruns} gaps` : '') + (l.dropped ? ` · ${l.dropped} blocks dropped` : ''));
-      drawSpectrum(el.querySelector('.st-spec'), l);
+// A device in words: its name, and for a broadcast what it is.
+function inputLabel(p) {
+  const name = p.device_name || devName(p.address);
+  return p.input && p.broadcast ? 'Auracast · ' + name : name;
+}
+// AVRCP's absolute volume is 0..127, LE Audio's (the Volume Control Service) 0..255.
+const transportVolMax = t => /^110[ab]$/i.test(t.uuid) ? 127 : 255;
+
+// A broadcast received or let go: every BIS of it (Select on each, as Audio → LE Audio does), with
+// the Broadcast Code typed there if it is encrypted. Resolves once BlueZ answered.
+function receiveBroadcast(p, on) {
+  const codes = typeof la !== 'undefined' ? la.codes : {};
+  // All its BISes in one request, linked: a BIG is synced once, with the BISes selected by then.
+  const [first, ...rest] = p.transports.map(t => t.path);
+  if (!first) return Promise.resolve();
+  return put('/le-audio/streams', {path: first, links: rest, receive: on, code: codes[first] || ''})
+    .catch(fail).finally(() => { api('/media').then(m => { au.media = m; renderNowPlaying(); }).catch(() => {}); });
+}
+
+
+// ---------------------------------------------------------------- hearing it in this browser
+
+// What the board plays is heard in this browser through one <audio> element, not Web Audio fed by
+// a script: a media element keeps playing with the page in the background (Android stops a page's
+// scripts seconds after the home button), it buffers a few seconds against Wi-Fi hiccups, and with
+// the Media Session it puts title, art and the transport keys on the lock screen. The spectrum taps
+// it only once asked for (hearAnalyser).
+const npAudio = new Audio();
+npAudio.preload = 'none';
+au.hearId = null;
+
+function hear(id) {
+  au.hearId = id;
+  hearConnect();
+  setMediaSession();
+}
+
+function hearConnect() {
+  if (!au.hearId) return;
+  au.heardAt = Date.now();
+  npAudio.src = `/api/audio/streams/${au.hearId}/listen?c=${Date.now()}`;
+  npAudio.play().catch(e => toast('This browser would not play: ' + e.message + ' (tap play)'));
+}
+
+function hearStop() {
+  au.hearId = null;
+  npAudio.pause();
+  npAudio.removeAttribute('src');
+  npAudio.load();
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+}
+
+// The connection dropped (the board restarted the stream, Wi-Fi went away) or the page was in the
+// background long enough for the browser to let it go: connect again if the stream still plays.
+function hearCheck() {
+  if (!au.hearId) return;
+  const s = au.streams.find(x => x.id === au.hearId);
+  if (!s || (s.state !== 'running' && s.state !== 'starting')) { hearStop(); renderNowPlaying(); return; }
+  if (s.paused) return;
+  const stuck = npAudio.paused || npAudio.ended || npAudio.error || npAudio.readyState < 2;
+  if (stuck && Date.now() - au.heardAt > 4000) hearConnect();
+}
+['error', 'ended', 'stalled'].forEach(ev => npAudio.addEventListener(ev, () => setTimeout(hearCheck, 1000)));
+// "This browser is connecting…" turns into playing.
+['playing', 'waiting'].forEach(ev => npAudio.addEventListener(ev, () => { if (currentTab === 'audio') renderNowPlaying(); }));
+// Back from the background — shown again, thawed after the browser froze the page (Page
+// Lifecycle "resume"), restored from the back/forward cache, or focused: look at once.
+const hearBack = () => { au.heardAt = 0; hearCheck(); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) hearBack(); });
+document.addEventListener('resume', hearBack);
+window.addEventListener('pageshow', hearBack);
+window.addEventListener('focus', hearBack);
+
+// The lock screen and the notification: what plays, and the keys, which act on the board.
+function setMediaSession() {
+  if (!('mediaSession' in navigator) || !au.hearId) return;
+  const c = current();
+  const title = $('np-title').textContent, artist = $('np-sub').textContent;
+  const img = $('np-art').querySelector('img');
+  const key = title + '|' + artist + '|' + (img ? img.src : '');
+  if (au.msKey !== key) {
+    au.msKey = key;
+    navigator.mediaSession.metadata = new MediaMetadata({title, artist, album: 'btbench',
+      artwork: img ? [{src: img.src, sizes: '512x512'}] : []});
+  }
+  const playing = c.kind === 'board' ? !c.s.paused : c.kind === 'phone' && c.p.status === 'playing';
+  navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+}
+if ('mediaSession' in navigator) {
+  const on = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) { /* not this browser */ } };
+  on('play', () => npAction('play'));
+  on('pause', () => npAction('pause'));
+  on('stop', () => npAction('stop'));
+  on('nexttrack', () => npAction('next'));
+  on('previoustrack', () => npAction('previous'));
+}
+
+
+// ---------------------------------------------------------------- the queue
+
+function renderQueue(c) {
+  let rows = '', note = '';
+  if (c.kind === 'board') {
+    const s = c.s, list = s.source.playlist || [];
+    // The list in the order it plays (shuffled too: the board shuffles the list itself), each
+    // track but the one playing with a remove.
+    if (list.length > 1 || streamKind(s).what === 'Media server') {
+      rows = list.map((it, i) => {
+        const now = i === s.track, d = it.duration_ms || (it.duration_s || 0) * 1000;
+        return `<div class="tr${now ? ' now' : ''}" data-track="${i}">
+          <span class="tr-n">${now ? svg(PL_SVG.play) : i + 1}</span>
+          <span class="tr-t">${esc(it.title || it.url)}${it.artist ? ` <span class="muted">${esc(it.artist)}</span>` : ''}</span>
+          ${d ? `<span class="tr-d">${fmtMs(d)}</span>` : ''}
+          ${now || it.id == null ? '<span class="icon-btn" aria-hidden="true"></span>' : `<button class="icon-btn" data-q-del="${it.id}" title="Remove from the queue" aria-label="Remove from the queue">${svg(PL_SVG.remove)}</button>`}</div>`;
+      }).join('');
+      note = `${list.length} track${list.length > 1 ? 's' : ''}${s.source.shuffle ? ', shuffled' : ''}`;
+    } else {
+      note = isUrl(s) ? 'A radio stream' : streamKind(s).what;
     }
-    requestAnimationFrame(frame);
-  };
-  requestAnimationFrame(frame);
-}
-
-function drawSpectrum(cv, l) {
-  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
-  if (!w) return;
-  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
-  const g = cv.getContext('2d');
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, w, h);
-  const bins = new Float32Array(l.analyser.frequencyBinCount);
-  l.analyser.getFloatFrequencyData(bins);
-  // Log frequency axis 20 Hz .. Nyquist, -100..0 dB.
-  const ny = l.ctx.sampleRate / 2, lo = Math.log(20), hi = Math.log(ny);
-  const style = getComputedStyle(document.documentElement);
-  g.strokeStyle = style.getPropertyValue('--accent').trim();
-  g.lineWidth = 1.2;
-  g.beginPath();
-  for (let i = 1; i < bins.length; i++) {
-    const f = i * ny / bins.length;
-    if (f < 20) continue;
-    const x = (Math.log(f) - lo) / (hi - lo) * w;
-    const y = h - Math.max(0, Math.min(1, (bins[i] + 100) / 100)) * (h - 4);
-    if (i === 1) g.moveTo(x, y); else g.lineTo(x, y);
+  } else if (c.kind === 'phone') {
+    // The phone's now-playing list: read when the track changes, and retried a little later after
+    // a failure (a phone answers browsing slowly, or not at all, for a while after it connects).
+    // Read again too when its shuffle changes, or it says its list changed (AVRCP's now playing
+    // content changed: another board reshuffling or editing its queue does). Not re-read on a
+    // timer: every read moves the phone's browsing from the library's folder to Now Playing,
+    // which drops the items BlueZ holds for the other, and on some phones (an S25) costs 10 s
+    // during which the library waits.
+    const key = [c.p.path, (c.p.track || {}).title || '', c.p.shuffle || '', c.p.playlist_changes || 0].join('|');
+    const due = au.queueKey !== key ? 0 : au.queueOk ? Infinity : au.queueEmpty === 1 ? 2000 : au.queueEmpty ? 6000 : 8000;
+    if (c.p.browsable && !au.queueBusy && Date.now() - au.queueAt > due) {
+      au.queueBusy = true;
+      au.queueAt = Date.now();
+      post('/media/players/browse', {path: c.p.path, folder: c.p.path + '/NowPlaying'})
+        .then(r => {
+          const items = r.items || [];
+          // An empty answer right after a track change can be the phone rebuilding its list (AVRCP
+          // "UIDs changed": BlueZ drops the old items meanwhile), or the new list not there yet.
+          // For a track of a list (it has a number) what is on screen stays, and the phone is
+          // asked again 2 s later and 6 s after that; empty a third time, it is empty. A track
+          // with no number (a test tone after a playlist) has no list.
+          const numbered = ((c.p.track || {}).track_number || 0) > 0;
+          au.queueEmpty = au.queueKey === key ? au.queueEmpty || 0 : 0;
+          if (!items.length && numbered && au.queueEmpty < 2) {
+            au.queueKey = key;
+            au.queueEmpty++;
+            au.queueOk = false;
+            setTimeout(renderNowPlaying, au.queueEmpty === 1 ? 2100 : 6100);
+            return;
+          }
+          au.queueItems = items;
+          au.queuePlayer = c.p.path;
+          au.queueKey = key;
+          au.queueOk = true;
+        })
+        .catch(() => {
+          if (au.queueKey !== key) au.queueEmpty = 0;
+          au.queueKey = key;
+          au.queueOk = false;
+          setTimeout(renderNowPlaying, 8100);
+        })
+        .finally(() => { au.queueBusy = false; renderNowPlaying(); });
+    }
+    const cur = (c.p.track || {}).title;
+    rows = au.queueItems.map((it, i) => {
+      const t = it.title || (it.metadata && it.metadata.title) || it.name;
+      const now = t && t === cur;
+      return `<div class="tr${now ? ' now' : ''}" data-item="${esc(it.path)}">
+        <span class="tr-n">${now ? svg(PL_SVG.play) : i + 1}</span>
+        <span class="tr-t">${esc(t)}${it.artist ? ` <span class="muted">${esc(it.artist)}</span>` : ''}</span></div>`;
+    }).join('');
+    note = c.p.browsable || c.p.input ? '' : 'This player does not share its list';
   }
-  g.stroke();
-  g.fillStyle = style.getPropertyValue('--muted').trim();
-  g.font = '10px system-ui';
-  for (const f of [100, 1000, 10000]) {
-    if (f >= ny) continue;
-    const x = (Math.log(f) - lo) / (hi - lo) * w;
-    g.fillText(f >= 1000 ? f / 1000 + 'k' : String(f), x + 2, h - 3);
+  setText($('np-q-note'), note);
+  $('np-q-head').hidden = !note;
+  const waiting = c.kind === 'phone' && c.p.browsable && au.queueBusy && !au.queueItems.length;
+  setHTML($('np-queue'), rows || (waiting ? '<div class="empty-line loading-line"><span class="dots"></span>Getting the phone’s list…</div>'
+    : `<div class="empty-line">${c.kind === 'none' ? 'Nothing playing: pick an input in Route, or something in Library.' : 'Nothing queued.'}</div>`));
+}
+
+
+// The rate the board decodes a track at: its own, in the family PipeWire's graph runs at (44.1 or
+// 48 kHz) — the decoder resampling a 44.1 kHz MP3 to 48 kHz costs a Zero W three times the CPU of
+// decoding it. Unknown (a radio station): 44.1 kHz, what nearly every MP3 stream is.
+const streamRate = r => r && r % 48000 === 0 ? 48000 : 44100;
+
+// The art and duration of the board's tracks, from what the library said about them.
+function decorate(s) {
+  (s.source.playlist || []).forEach(it => Object.assign(it, au.art[it.url] ? {art: it.art || au.art[it.url].art, duration_s: au.art[it.url].duration_s} : {}));
+  return s;
+}
+
+
+// ---------------------------------------------------------------- outputs
+
+// Where the input plays: the route's outputs, each on or off by itself — the board's own sound
+// card, any Bluetooth speaker or pair of earbuds, the board's Auracast broadcasts —
+// and this browser, which is this browser's own choice (it listens to the route's stream). They
+// are the route's, in the daemon: every browser sees the same, and they stay when the input
+// changes. Tapped while something plays, an output is added to the route's stream or taken off it
+// at once (PUT /api/audio/route {outputs} → the stream's sinks: the decoder and the other outputs
+// carry on). Values: "<backend>:<endpoint id>", "browser"; "default" (PipeWire's default sink) only
+// for a stream started elsewhere on it. The line under the buttons follows a switch until the
+// output takes the audio (and a Bluetooth link streams it), or says why it did not.
+const MAX_OUTS = 4;  // the daemon's AudioEngine::kMaxSinks
+au.listen = lsGet('btbench.pl.here') === '1';
+au.sw = null;  // a switch: {value, add, seq, phase: asking|removing|starting|linking|done|failed, at, error}
+
+const outSink = v => v === 'none' || v === 'browser' ? null : v === 'default' ? {type: 'pipewire', target: ''}
+  : {type: v.split(':')[0], target: v.slice(v.indexOf(':') + 1)};
+// A value the route has keeps its sink as the route has it (a broadcast's left or right channel).
+const outSinks = vs => vs.map(v => (au.route ? au.route.outputs : []).find(k => sinkOut(k) === v) || outSink(v)).filter(Boolean);
+const sinkOut = k => k.target ? `${k.type}:${k.target}` : 'default';
+// A stream's outputs, as values (a stream from before there were several has one "sink").
+const streamOuts = s => (s.sinks || (s.sink ? [s.sink] : [])).map(sinkOut);
+// The outputs after `v` was tapped with `cur` on: each one is added or taken off by itself.
+function nextOuts(cur, v) {
+  if (v === 'none') return [];
+  return cur.includes(v) ? cur.filter(x => x !== v) : cur.filter(x => x !== 'none').concat(v);
+}
+const outEndpoint = (v) => au.endpoints && au.endpoints.sinks.find(e => v.endsWith(':' + e.id));
+function outName(v) {
+  if (v === 'none') return 'No board output';
+  if (v === BCAST) return 'Auracast';
+  if (v === 'browser') return 'This browser';
+  if (v === 'default') return 'The board’s default output';
+  const e = outEndpoint(v);
+  if (e && isBcast(e)) return 'Auracast';
+  if (e) return e.address ? devName(e.address) : e.label;
+  // A Bluetooth sink PipeWire does not have (now): its device, by name.
+  const bt = /bluez_output\.([0-9A-F]{2}(?:_[0-9A-F]{2}){5})/i.exec(v);
+  return bt ? devName(bt[1].replace(/_/g, ':')) : v.slice(v.indexOf(':') + 1);
+}
+// An output's name after the start of a sentence ("Playing on the board’s sound card").
+const outInSentence = (v) => outName(v).replace(/^The /, 'the ');
+// The board's transport that carries a Bluetooth output's audio: its "Audio Source" side (a device
+// can have one each way, see volumeTarget).
+function outTransport(v) {
+  const e = outEndpoint(v);
+  if (!e || !e.address || !au.media) return null;
+  const same = x => x.address && x.address.toUpperCase() === e.address.toUpperCase();
+  return au.media.transports.find(x => same(x) && /source/i.test(x.profile || '')) || null;
+}
+// A stream's sink status for output `v`: {state, error, …}, or null.
+const outStatusOf = (b, v) => (b && b.sinks_status || []).find(k => sinkOut(k) === v) || null;
+
+function renderOutputs(ep) {
+  au.endpoints = ep;
+  renderNowPlaying();  // "Playing on …" names the output now that its label is known
+}
+
+// Auracast as an output: one button for the board's one broadcast, whose BISes (one, or a left and a
+// right) are each a sink of the route. Tapped with none, a broadcast is started; tapped off, its
+// sinks leave the outputs and the daemon ends it.
+const BCAST = 'auracast';
+const isBcast = e => !!e.transport && !e.address;
+
+// Why sink `e` (an endpoint; null for a broadcast not started yet) cannot be on while `input` is
+// the route's, or '': a device the input comes from would be sent its own audio back, and the
+// board does not broadcast while it receives a broadcast.
+function outBlocked(e, input) {
+  const ds = input && input.type === 'bluetooth' ? input.devices : [];
+  if (!e || isBcast(e)) return ds.some(d => d.kind === 'broadcast') ? 'receiving a broadcast' : '';
+  const addrs = e.set_leader ? (e.members || []) : e.address ? [e.address] : [];
+  const from = a => ds.some(d => sameAddr(d.address, a) || (inputSet(d.address) || []).some(m => sameAddr(m, a)));
+  return addrs.some(from) ? 'the input' : '';
+}
+
+// The outputs, in one list: this browser, the board's own sound cards, the Bluetooth speakers and
+// earbuds (a coordinated set as one: PipeWire's node of the set, its members' own nodes left out),
+// then the board's Auracast broadcast (one to start when there is none). The loopback card is left
+// out: nobody hears it. An output the input rules out is shown off and cannot be tapped
+// (outBlocked). Now playing shows them as buttons, Route as rows.
+function outOptions() {
+  const ep = au.endpoints;
+  const opts = [{value: 'browser', name: 'This browser', sub: 'listen here', icon: PL_SVG.browser, rank: 0}];
+  const kind = ep && ep.backend === 'alsa' ? 'alsa' : 'pipewire';
+  const input = au.route ? au.route.input : null;
+  const sinks = (ep ? ep.sinks : []).filter(e => e.kind !== 'loopback');
+  sinks.forEach(e => {
+    if (e.set && !e.set_leader) return;
+    if (isBcast(e)) return;
+    const v = `${kind}:${e.id}`;
+    const t = e.address ? outTransport(v) : null;
+    const bcast = isBcast(e);
+    const bt = e.kind === 'bluetooth' && !bcast;
+    opts.push({value: v, name: e.set_leader ? ((e.members || []).length === 1 ? devName(e.members[0]) : e.label) : e.address ? devName(e.address) : e.label,
+      sub: e.set_leader ? ((e.members || []).length > 1 ? `${e.members.length} devices, one each channel` : 'left + right') : e.address ? (t && t.codec ? t.codec.name : 'Bluetooth')
+        : bcast ? 'Auracast' : 'the board’s sound card',
+      icon: bt || bcast ? PL_SVG.bt : PL_SVG.speaker, rank: bt ? 2 : bcast ? 3 : 1, off: outBlocked(e, input)});
+  });
+  if (bcastAdapter() || sinks.some(isBcast)) {
+    opts.push({value: BCAST, name: 'Auracast', sub: '', icon: PL_SVG.bt, rank: 3, off: outBlocked(null, input)});
   }
+  return opts.sort((a, b) => a.rank - b.rank);
+}
+// The adapter that can broadcast (its broadcast endpoint registered by PipeWire), or null.
+const bcastAdapter = () => (au.la ? au.la.adapters : []).find(a => a.broadcaster && a.pac) || null;
+
+// When this view first saw an output's Bluetooth link in a state other than streaming while its
+// sink plays (stream id|value → {state, at}). A link idle for LINK_MS failed: nobody acquired it, or
+// BlueZ's Acquire failed (right after a device connected that is common). One pending is being
+// acquired, which BlueZ gives up on after 25 s (seen on the bench): failed only past ACQUIRE_MS.
+const LINK_MS = 8000, ACQUIRE_MS = 30000;
+const linkSeen = {};
+function linkLate(b, v, state) {
+  const k = b.id + '|' + v;
+  if (!state || state === 'active') { delete linkSeen[k]; return false; }
+  if (!linkSeen[k] || linkSeen[k].state !== state) linkSeen[k] = {state, at: Date.now()};
+  return Date.now() - linkSeen[k].at > (state === 'pending' ? ACQUIRE_MS : LINK_MS);
 }
 
-// ---------------------------------------------------------------- codec picker
-
-const CD_KINDS = [['a2dp', 'Send (A2DP)'], ['a2dp-duplex', 'Both ways (A2DP duplex)'], ['gateway', 'Receive A2DP / HFP gateway'],
-  ['headset', 'Headset (HFP/HSP)'], ['bap', 'LE Audio (BAP)'], ['other', 'Other'], ['off', 'Off']];
-
-function renderCodecs(r) {
-  au.devices = r;
-  if ($('st-sinks')) renderOutCodec();
-  renderAudioDevices();
+// What one of stream `b`'s outputs does, for its button: 'on' (it plays, and its Bluetooth link
+// streams), 'busy' (opening, or its link starting) or 'bad' (it would not open, takes no audio, or
+// its link did not stream).
+function sinkState(b, v) {
+  const ss = outStatusOf(b, v);
+  const seq = b.sink_seq != null ? b.sink_seq : (b.sink_status || {}).seq;
+  if (!ss) return b.sink_req != null && seq < b.sink_req ? 'busy' : 'bad';
+  if (ss.state === 'starting') return 'busy';
+  if (ss.state !== 'playing') return 'bad';
+  // An A2DP or LE Audio output whose link BlueZ has not shown yet is waited for like an idle one
+  // (HFP has no transport of BlueZ's to wait for).
+  const e = outEndpoint(v), t = outTransport(v);
+  const link = t ? t.state : e && e.address && /^(a2dp|bap)/.test(e.profile || '') ? 'none' : null;
+  return linkLate(b, v, link) ? 'bad' : link && link !== 'active' ? 'busy' : 'on';
 }
 
-function codecSelect(d) {
-  const a = d.active;
-  const groups = CD_KINDS.map(([k, label]) => {
-    const ps = d.profiles.filter(p => p.kind === k);
-    if (!ps.length) return '';
-    return `<optgroup label="${esc(label)}">${ps.map(p => `<option value="${p.index}"${a && a.index === p.index ? ' selected' : ''}${p.available ? '' : ' disabled'}>
-      ${p.codec ? esc(p.codec) + ' (' + esc(p.name) + ')' : esc(p.name)}</option>`).join('')}</optgroup>`;
+// An output's button, from the real state: lit only once it plays — while it opens and its link
+// starts it shows the dots, and one that failed is not lit (tapping it again is the retry). With
+// nothing playing (`b` null) an output on is only chosen, and is lit. The switch `sw` this view
+// asked for shows the dots until the board answered it.
+function outState(v, cur, b, sw) {
+  if (sw && sw.value === v && sw.phase === 'failed') return 'bad';
+  if (sw && sw.value === v && sw.phase !== 'done') return 'busy';
+  if (!(v === 'none' ? !cur.length : cur.includes(v))) return '';
+  if (v === 'browser') return au.hearId && (npAudio.paused || npAudio.readyState < 3) ? 'busy' : 'on';
+  if (!b || v === 'none') return 'on';
+  const vs = v === BCAST ? routeOuts().filter(isBcastOut) : [v];
+  const st = vs.map(x => sinkState(b, x));
+  return st.includes('bad') ? 'bad' : st.includes('busy') ? 'busy' : 'on';
+}
+
+// The buttons for outputs `cur` on, of stream `b` (null: nothing plays), with the switch `sw`
+// under way: each one on or off by itself; one on that is not there any more (a speaker gone)
+// stays, greyed.
+function outButtonsHTML(opts, cur, sw, b = null) {
+  cur.forEach(v => { if (!opts.some(x => x.value === v)) opts.push({value: v, name: outName(v), sub: 'not connected', icon: PL_SVG.bt, gone: true}); });
+  return opts.map(x => {
+    const st = x.off ? '' : outState(x.value, cur, b, sw);
+    const busy = st === 'busy', bad = st === 'bad', on = st === 'on';
+    const cls = 'np-o' + (on ? ' on' : '') + (busy ? ' busy' : '') + (bad ? ' bad' : '') + (x.gone ? ' gone' : '');
+    const sub = x.off || x.sub;
+    return `<button class="${cls}" data-out="${esc(x.value)}" aria-pressed="${on}"${x.off ? ' disabled' : ''}>` +
+      (busy ? '<span class="dots"></span>' : svg(x.icon)) + `<b>${esc(x.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</button>`;
   }).join('');
-  return `<select class="cd-pick grow" data-id="${d.id}" aria-label="Codec">${groups}</select>`;
 }
 
-const refreshCodecs = () => api('/audio/devices').then(renderCodecs).catch(e => renderCodecs({devices: [], error: e.message}));
+// The outputs on: the route's, and this browser when it listens.
+const isBcastOut = v => { const e = outEndpoint(v); return !!e && isBcast(e); };
+const curOuts = () => {
+  const vs = routeOuts();
+  return vs.filter(v => !isBcastOut(v)).concat(vs.some(isBcastOut) ? [BCAST] : [], au.listen ? ['browser'] : []);
+};
 
-// ---------------------------------------------------------------- AVRCP players
+function renderOuts() {
+  const b = outStream();
+  swAdvance(au.sw, b);
+  // A switch that failed is over once its output plays after all (put back by another browser,
+  // or by the board when the device came again).
+  if (au.sw && au.sw.phase === 'failed' && b && curOuts().includes(au.sw.value) && outState(au.sw.value, curOuts(), b, null) === 'on') au.sw = null;
+  // One this view turned on that failed is taken off the outputs again: not lit is off, and the
+  // next tap is the retry.
+  const sw = au.sw;
+  if (sw && sw.phase === 'failed' && sw.add && !sw.dropped && sw.value !== BCAST && routeOuts().includes(sw.value)) {
+    sw.dropped = true;
+    put('/audio/route', {outputs: outSinks(routeOuts().filter(x => x !== sw.value))}).then(setRoute).catch(() => refreshRoute());
+  }
+  // Not before the board's outputs and the route are known: the buttons would show nothing lit.
+  if ((au.endpoints || au.endpointsFailed) && au.route) setHTML($('np-outs'), outButtonsHTML(outOptions(), curOuts(), au.sw, b));
+  // A good line (everything plays where it should) is said for a few seconds and then cleared:
+  // the lit buttons say it from there. Anything else stays, and a change says it again.
+  const st = outStatus(b), key = st.cls + st.html;
+  if (key !== au.statusKey) {
+    au.statusKey = key;
+    au.statusAt = Date.now();
+    if (st.cls === 'good') setTimeout(renderOuts, OUT_STATUS_MS + 100);
+  }
+  const quiet = st.cls === 'good' && Date.now() - au.statusAt > OUT_STATUS_MS;
+  outStatusHTML($('np-out-status'), quiet ? {cls: '', html: ''} : st);
+  $('np-out-status').classList.toggle('quiet', quiet);
+}
+const OUT_STATUS_MS = 5000;
+
+// A status line ({cls, html}) into its element: a dot in the state's colour, or a spinner.
+function outStatusHTML(el, st) {
+  setClass(el, el.className.replace(/\s*\b(good|warn|bad|busy)\b/g, '') + (st.cls ? ' ' + st.cls : ''));
+  setHTML(el, (st.cls === 'busy' ? '<span class="dots"></span>' : '<span class="dot"></span>') + `<span>${st.html}</span>`);
+}
+
+const andList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+
+// One of a stream's outputs in words, from its sink status `k`: {cls, html, short}, and for one
+// that plays `what` (its name and codec), which outLine says of all of them at once. `short` is
+// the same without the output's name, for its own row in Route.
+function sinkLine(k, b) {
+  const v = sinkOut(k), name = `<b>${esc(outName(v))}</b>`, mid = `<b>${esc(outInSentence(v))}</b>`;
+  if (k.state === 'starting') return {cls: 'busy', html: `Opening ${mid}…`, short: 'opening…'};
+  if (k.state === 'failed') return {cls: 'bad', html: `Lost ${mid}: ${esc(outReason(k.error))}.`, short: 'lost: ' + outReason(k.error)};
+  const t = outTransport(v);
+  if (k.state === 'stalled') {
+    return {cls: 'bad', html: `${name} takes no audio` + (t ? ` (its Bluetooth link is ${esc(t.state)})` : '') + '.',
+      short: 'takes no audio' + (t ? `, link ${t.state}` : '')};
+  }
+  if (t && t.state !== 'active') {
+    return b && linkLate(b, v, t.state)
+      ? {cls: 'bad', html: `${name}’s Bluetooth link did not start streaming (it is ${esc(t.state)}): tap it to try again.`,
+        short: `link did not stream (${t.state}): tap to retry`}
+      : {cls: 'warn', html: `${name} takes the audio, but its Bluetooth link is ${esc(t.state)}, not streaming.`,
+        short: `waiting for its link (${t.state})`};
+  }
+  const codec = t && t.codec ? `${t.codec.name}${t.codec.rate ? ' ' + t.codec.rate / 1000 + ' kHz' : ''}` : '';
+  return {cls: 'good', what: mid + (codec ? ' · ' + esc(codec) : ''), short: 'playing' + (codec ? ' · ' + codec : '')};
+}
+
+// What the board is doing about a stream's outputs, in words: the switch `sw` under way (or how it
+// failed), else what its sinks' statuses say — the ones playing in one sentence, then each of the
+// others; null when it has no output and lost none. outStatus adds what this browser does.
+function outLine(b, sw) {
+  const name = v => `<b>${esc(outInSentence(v))}</b>`;
+  if (sw && sw.phase === 'failed') return {cls: 'bad', html: `Could not play on ${name(sw.value)}: ${esc(outReason(sw.error))}.`};
+  if (sw && sw.phase !== 'done') {
+    return {cls: 'busy', html: {broadcast: 'Starting an Auracast broadcast…', asking: sw.add ? `Asking the board to play on ${name(sw.value)}…` : `Taking ${name(sw.value)} off…`,
+      removing: `Taking ${name(sw.value)} off…`, starting: `Opening ${name(sw.value)}…`,
+      linking: `<b>${esc(outName(sw.value))}</b> takes the audio; waiting for its Bluetooth link to stream…`}[sw.phase]};
+  }
+  if (!b) return null;
+  const lines = (b.sinks_status || []).map(k => sinkLine(k, b));
+  if (!lines.length) return null;
+  const good = lines.filter(l => l.cls === 'good'), rest = lines.filter(l => l.cls !== 'good');
+  const worst = ['bad', 'busy', 'warn'].find(c => rest.some(l => l.cls === c));
+  return {cls: !worst ? 'good' : worst === 'bad' && good.length ? 'warn' : worst,
+    html: [good.length ? `Playing on ${andList(good.map(l => l.what))}.` : ''].concat(rest.map(l => l.html)).filter(Boolean).join(' ')};
+}
+
+// What the board is doing about its outputs, in words (under Now playing's buttons): outLine, and
+// this browser.
+function outStatus(b) {
+  const sw = au.sw;
+  const here = b && au.hearId === b.id;
+  const connecting = here && (npAudio.paused || npAudio.readyState < 3);
+  const browser = here ? (connecting ? ' This browser is connecting…' : ' Also in this browser.') : '';
+  if (sw && sw.phase === 'failed') return {cls: 'bad', html: outLine(b, sw).html + (here ? ' Still playing in this browser.' : '')};
+  if (sw && sw.phase !== 'done') return outLine(b, sw);
+  if (!au.route) return {cls: '', html: ''};
+  if (!b) {
+    const to = routeOuts().map(v => `<b>${esc(outInSentence(v))}</b>`).concat(au.listen ? ['this browser'] : []);
+    return {cls: '', html: to.length ? `What plays goes to ${andList(to)}.` : 'Nothing is on: turn on where the board plays.'};
+  }
+  const line = outLine(b, null);
+  if (line) return line.cls === 'good' || line.cls === 'warn' ? {cls: line.cls, html: line.html + browser} : line;
+  if (here) return {cls: connecting ? 'busy' : 'good', html: connecting ? 'Connecting this browser…' : 'Playing in this browser.'};
+  const others = b.listeners;
+  return {cls: '', html: others ? `Playing to ${others} other browser${others > 1 ? 's' : ''} only.`
+    : 'Playing, to no output: turn one on.'};
+}
+
+// PipeWire's words for an output that is not there.
+const outReason = e => /target not found/.test(e || '') ? 'it is not connected (no such output in PipeWire)' : (e || 'no reason given');
+
+// The switch `sw` under way on stream `b`, moved on by what the stream says: once its sink_seq
+// answers our request (seq) the pump has opened the output added (or failed to) or let the one
+// taken off go; a Bluetooth one is done when its link streams (in au.media).
+function swAdvance(sw, b) {
+  // A broadcast being started is followed by startBroadcastOut, not by the stream.
+  if (!sw || sw.phase === 'done' || sw.phase === 'failed' || sw.phase === 'broadcast') return;
+  const late = Date.now() - sw.at;
+  if (!b) {
+    if (sw.phase === 'asking' && late < 15000) return;
+    sw.phase = 'failed';
+    sw.error = 'the board stopped playing';
+    return;
+  }
+  if (sw.seq == null) { if (late > 10000) { sw.phase = 'failed'; sw.error = 'the board did not answer'; } return; }
+  const seq = b.sink_seq != null ? b.sink_seq : (b.sink_status || {}).seq;
+  if (seq < sw.seq) { if (late > 10000) { sw.phase = 'failed'; sw.error = 'the board did not switch within 10 s'; } return; }
+  if (!sw.add) { sw.phase = 'done'; return; }
+  const ss = outStatusOf(b, sw.value) || {};
+  if (ss.state === 'failed' || ss.state === 'stalled') { sw.phase = 'failed'; sw.error = ss.error; return; }
+  if (ss.state === 'starting') {
+    sw.phase = 'starting';
+    if (late > 10000) { sw.phase = 'failed'; sw.error = 'it took no audio within 10 s'; }
+    return;
+  }
+  if (ss.state === 'playing') {
+    const t = outTransport(sw.value);
+    // A Bluetooth link takes a moment to start streaming; one that does not failed (linkLate: idle
+    // for LINK_MS, or still being acquired past ACQUIRE_MS).
+    if (t && linkLate(b, sw.value, t.state)) {
+      sw.phase = 'failed';
+      sw.error = `its Bluetooth link did not start streaming (it is ${t.state})`;
+      return;
+    }
+    sw.phase = t && t.state !== 'active' ? 'linking' : 'done';
+    return;
+    return;
+  }
+  sw.phase = 'done';  // not among its sinks: nothing to follow
+}
+
+// An output tapped: added to the route's outputs or taken off them, and so to what plays now.
+// "This browser" is this browser listening or not.
+function pickOut(v) {
+  if (v === 'browser') return pickListen(!au.listen);
+  if (!au.route) return;
+  if (v === BCAST) {
+    const outs = routeOuts();
+    if (outs.some(isBcastOut)) return put('/audio/route', {outputs: outSinks(outs.filter(x => !isBcastOut(x)))}).then(setRoute).catch(fail);
+    // One that is not an output any more is being ended.
+    if (au.endpoints && au.endpoints.sinks.some(isBcast)) return;
+    return startBroadcastOut();
+  }
+  const b = outStream();
+  // One on that failed (not lit) is tried again: taken off and put back, so the board opens it
+  // anew (a sink that stalls or whose link did not stream is still open, and would be kept).
+  const retry = !!b && routeOuts().includes(v) && outState(v, curOuts(), b, au.sw) === 'bad';
+  const next = retry ? routeOuts() : nextOuts(routeOuts(), v);
+  if (next.length > MAX_OUTS) { toast(`The board plays to at most ${MAX_OUTS} outputs at once.`); return; }
+  const add = next.includes(v);
+  const sw = b ? {value: v, add, phase: 'asking', at: Date.now(), seq: null} : null;
+  au.sw = sw;
+  au.route.outputs = outSinks(next);
+  delete linkSeen[(b || {}).id + '|' + v];
+  renderOuts();
+  (retry ? put('/audio/route', {outputs: outSinks(next.filter(x => x !== v))}) : Promise.resolve())
+    .then(() => put('/audio/route', {outputs: outSinks(next)})).then(r => {
+    const u = r.updated;
+    delete r.updated;
+    au.route = r;
+    if (sw && au.sw === sw) {
+      if (u) {
+        sw.seq = u.sink_req;
+        sw.phase = add ? 'starting' : 'removing';
+        const i = au.streams.findIndex(x => x.id === u.id);
+        if (i >= 0) au.streams[i] = decorate(u);
+      } else {
+        sw.phase = 'done';
+      }
+    }
+    renderNowPlaying();
+  }).catch(e => {
+    if (sw && au.sw === sw) { sw.phase = 'failed'; sw.error = e.message; }
+    refreshRoute();
+  });
+  // The switch's result comes with the streams topic; this view asks too, in case it is slow.
+  if (sw) [400, 1200, 2500, 5000, 9000].forEach(t => setTimeout(() => { if (au.sw === sw && sw.phase !== 'done') refreshPlayerStreams(); }, t));
+}
+
+// Auracast tapped while the board broadcasts nothing: a stereo broadcast of BAP's 48_2_1 (LE
+// Audio's default) is started, which the daemon makes one of the route's outputs; tapped off
+// like any output, the daemon ends it. Its settings, or a second broadcast, are the LE Audio view's.
+function startBroadcastOut() {
+  const a = bcastAdapter();
+  if (!a || (au.sw && au.sw.phase !== 'done' && au.sw.phase !== 'failed')) return;
+  const sw = au.sw = {value: BCAST, add: true, phase: 'broadcast', at: Date.now(), seq: null};
+  renderOuts();
+  post('/le-audio/broadcasts', {adapter: a.adapter, preset: '48_2_1', channels: 2}).then(r => {
+    if (r.output_error) throw new Error(r.output_error);
+    return Promise.all([api('/audio/endpoints?fresh=1').then(ep => { au.endpoints = ep; }), refreshLa(), refreshRoute()]);
+  }).then(() => { if (au.sw === sw) au.sw = null; renderNowPlaying(); })
+    .catch(e => { if (au.sw === sw) { sw.phase = 'failed'; sw.error = e.message; } renderOuts(); });
+}
+
+// "This browser" on or off: whatever the route plays is heard here, or not, and the choice is this
+// browser's (it stays for the next input).
+function pickListen(on) {
+  au.listen = on;
+  lsSet('btbench.pl.here', on ? '1' : '0');
+  followRoute();
+  renderNowPlaying();
+}
+
+// This browser follows the route: listening, it hears the route's stream, and a new input (or the
+// same one recorded anew) is heard in its place.
+function followRoute() {
+  const id = au.route ? au.route.stream : null;
+  if (au.hearId && au.hearId !== id) hearStop();
+  if (au.listen && id && au.hearId !== id) hear(id);
+  if (!au.listen && au.hearId) hearStop();
+}
+
+function setRoute(r) {
+  delete r.updated;
+  au.route = r;
+  followRoute();
+  renderNowPlaying();
+}
+const refreshRoute = () => api('/audio/route').then(setRoute).catch(() => {});
+// Which adapter can broadcast and receive, for Auracast in the outputs and the inputs; asked again on
+// "bt" (a scan starting or ending, a broadcaster found), at most once a second.
+function refreshLa() {
+  return api('/le-audio').then(s => { au.la = s; renderNowPlaying(); }).catch(() => {});
+}
+
+// The outputs come and go with Bluetooth: asked again whenever the board's audio links change,
+// and once more a moment later (PipeWire makes a speaker's sink a little after BlueZ's transport).
+function outLinksChanged(m) {
+  const key = (m.transports || []).map(t => t.path).sort().join(',');
+  if (key === au.linksKey) return;
+  au.linksKey = key;
+  const ask = () => api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
+  ask();
+  refreshLa();
+  setTimeout(ask, 2000);
+}
+
+function refreshPlayerStreams() {
+  return api('/audio/streams').then(r => { au.streams = r.streams.map(decorate); noteFailure(); renderNowPlaying(); }).catch(() => {});
+}
+
+// What this view started and the board could not play (a decoder missing, a server refusing):
+// said once, with the board's reason — otherwise the page would only fall back to "Nothing
+// playing" without a word.
+function noteFailure() {
+  const s = au.streams.find(x => x.id === au.boardId);
+  if (!s || s.state !== 'failed' || au.failedShown === s.id) return;
+  au.failedShown = s.id;
+  const why = /mpg123/.test(s.error) && /\.(flac|wav|m4a|aac|ogg|opus)\b/i.test((s.source.playlist[s.track] || {}).url || s.source.url)
+    ? 'the board has no decoder for this format (mpg123 plays MP3 only; other formats need ffmpeg in the image, BTBENCH_FFMPEG)'
+    : s.error.replace(/\[\/usr\/src\/debug\/[^\]]*\]\s*/g, '');
+  toast('Could not play “' + (s.source.title || 'this') + '”: ' + why);
+}
+
+
+// ---------------------------------------------------------------- devices and players
 
 const fmtMs = ms => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -549,109 +1179,21 @@ function notePlayers(players) {
   }
 }
 
-// Transport icons, drawn rather than emoji: emoji render in colour and at different sizes on
-// every phone.
-const PL_ICON = {
-  previous: 'M18 6l-8.5 6L18 18zM6 6h2v12H6z', next: 'M6 6l8.5 6L6 18zM16 6h2v12h-2z',
-  rewind: 'M20 6l-8 6 8 6zM12 6l-8 6 8 6z', 'fast-forward': 'M4 6l8 6-8 6zM12 6l8 6-8 6z',
-  play: 'M8 5v14l11-7z', pause: 'M7 5h4v14H7zM13 5h4v14h-4z', stop: 'M6 6h12v12H6z',
-};
-const NOTE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12M9 18a2 2 0 11-4 0 2 2 0 014 0zM19 16a2 2 0 11-4 0 2 2 0 014 0z"/></svg>';
 // A device's name: from the device list, else from what the media state says about it (a view
 // that shows players gets the name with them, without waiting for the device list).
 const devName = addr => {
   const d = typeof btState !== 'undefined' && btState && btState.devices.find(x => x.address === addr);
   if (d) return d.alias;
-  const m = au.media || (typeof pl !== 'undefined' ? pl.media : null);
+  const m = au.media;
   const o = m && m.players.concat(m.transports).find(x => x.address === addr && x.device_name);
   return o ? o.device_name : addr;
 };
 
-// A player as a now-playing screen: cover, track, the transport row (with repeat and shuffle when
-// the player has them) and the volume. The browser is a click away (kept open across the rebuilds
-// every update causes).
-function playerCard(p, transports) {
-  const t = p.track || {};
-  const tr = p.transport && transports.find(x => x.path === p.transport);
-  const d = t.duration_ms || 0;
-  const num = t.track_number ? `track ${t.track_number}${t.number_of_tracks ? ' of ' + t.number_of_tracks : ''}` : '';
-  const btn = (a, title, cls) => `<button class="pl-btn ${cls || ''}" data-a="${a}" data-path="${esc(p.path)}" title="${title}" aria-label="${title}">
-    <svg viewBox="0 0 24 24"><path d="${PL_ICON[a]}"/></svg></button>`;
-  const playing = p.status === 'playing';
-  const art = p.obex_port != null && t.img_handle
-    ? `<img alt="cover art" src="/api/media/players/cover?path=${encodeURIComponent(p.path)}&h=${esc(t.img_handle)}&t=${encodeURIComponent([t.title, t.album].join('|'))}" onerror="coverRetry(this)">`
-    : (p.obex_port != null ? coverConnect(p) : '') + NOTE_SVG;
-  const extras = p.browsable;
-  au.plOpen = au.plOpen || {};
-  return `<div class="card player" data-path="${esc(p.path)}">
-    <div class="pl-art">${art}</div>
-    <div class="head"><span class="pl-who">${esc(p.name || 'Player')} on ${esc(devName(p.address))}${p.type ? ' · ' + esc(p.type) : ''}</span>
-      ${pill(p.status || 'unknown', playing ? 'good' : p.status === 'paused' ? 'warn' : '')}</div>
-    <div class="pl-title">${esc(t.title || 'Nothing playing')}</div>
-    <div class="small">${esc([t.artist, t.album].filter(Boolean).join(' — '))}</div>
-    <div class="small muted">${esc([t.genre, num].filter(Boolean).join(' · '))}</div>
-    <div class="pl-progress"><i style="width:${d ? (playerPosition(p) / d * 100).toFixed(2) : 0}%"></i></div>
-    <div class="pl-time mono">${fmtMs(playerPosition(p))}${d ? ' / ' + fmtMs(d) : ''}</div>
-    <div class="pl-controls">
-      ${btn('previous', 'Previous')}${btn('rewind', 'Rewind (hold)')}
-      ${btn('play', 'Play')}${btn('pause', 'Pause')}
-      ${btn('fast-forward', 'Fast forward (hold)')}${btn('next', 'Next')}${btn('stop', 'Stop')}
-      ${modeButtons('pl-btn', btRepeat(p.repeat), p.shuffle == null ? null : p.shuffle !== 'off', `data-path="${esc(p.path)}"`)}
-      <span class="spacer"></span>
-      <button class="small-btn pl-listen" data-address="${esc(p.address)}" title="Hear what this device sends the board">Listen here</button>
-    </div>
-    ${tr && tr.volume != null ? `<label class="row small pl-vol-row"><span class="muted">Volume</span> <input type="range" min="0" max="127" value="${tr.volume}" data-path="${esc(tr.path)}" class="grow pl-vol">
-      <span class="mono">${tr.volume}</span></label>` : ''}
-    ${extras ? `<details class="more-fields pl-more" data-path="${esc(p.path)}"${au.plOpen[p.path] ? ' open' : ''}>
-      <summary>Browse</summary>
-      ${browserHTML(p)}
-    </details>` : ''}
-  </div>`;
-}
-
-// AVRCP browsing: the player's folders (now playing, its file system, search results), kept per
-// player across the card rebuilds every media update causes.
-function browserHTML(p) {
-  const b = au.browse[p.path];
-  const items = b ? b.items : (p.items || []).map(i => Object.assign({title: i.metadata && i.metadata.title, artist: i.metadata && i.metadata.artist}, i));
-  const nav = `<div class="row wrap small pl-browser-nav">
-      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/NowPlaying">Now playing</button>
-      <button class="small-btn pl-nav" data-path="${esc(p.path)}" data-folder="${esc(p.path)}/Filesystem">Files</button>
-      ${b && b.stack && b.stack.length > 1 ? `<button class="small-btn pl-back" data-path="${esc(p.path)}">Back</button>` : ''}
-      ${p.searchable ? `<input class="pl-q narrow" data-path="${esc(p.path)}" placeholder="Search"><button class="small-btn pl-search" data-path="${esc(p.path)}">Search</button>` : ''}
-      <span class="muted mono">${esc(b ? b.folder : (p.folder ? p.folder.name : ''))}</span></div>`;
-  return `<div class="pl-items small">${nav}${items.length ? items.map(i => `<div class="row between">
-      <span>${i.type === 'folder' ? '📁 ' : ''}${esc(i.title || i.name)}${i.artist ? ' <span class="muted">— ' + esc(i.artist) + '</span>' : ''}</span>
-      <span>${i.type === 'folder' ? `<button class="small-btn pl-open" data-path="${esc(p.path)}" data-folder="${esc(i.path)}">open</button>` : ''}
-        ${i.playable ? `<button class="small-btn pl-item" data-a="play" data-path="${esc(i.path)}">play</button>
-          <button class="small-btn pl-item" data-a="add" data-path="${esc(i.path)}">add</button>` : ''}</span></div>`).join('')
-    : '<div class="muted">nothing listed</div>'}</div>`;
-}
-
-function browse(player, folder, push) {
-  const b = au.browse[player] || (au.browse[player] = {stack: [], items: [], folder: ''});
-  return post('/media/players/browse', folder ? {path: player, folder} : {path: player}).then(r => {
-    if (push !== false) b.stack.push(folder);
-    b.items = r.items;
-    b.folder = r.folder || folder || '';
-    if (au.media) renderPlayers(au.media);
-  }).catch(fail);
-}
-
-// The first image of a player can be asked for while its BIP channel is still opening: try once
-// more a few seconds later before giving up on it.
-function coverRetry(img) {
-  if (img.dataset.retried) { img.hidden = true; return; }
-  img.dataset.retried = '1';
-  setTimeout(() => { img.src = img.src.replace(/&r=\d+$/, '') + '&r=' + Date.now(); }, 3000);
-}
-
-// A player with cover art but no image handle yet: the phone sends handles only while a BIP
-// channel is open, so open one (once per player); the next track info then carries a handle.
-// The cover-art (BIP) channel to a player's device: opened once per connection (a player that
-// goes away is forgotten, see notePlayers), again 10 s after a failure. au.cover[path] is
-// {state: asking | open | failed, at}: `at` is when it opened, 0 when it was open already (a
-// player BlueZ made again); `changed` is called when the answer comes.
+// The cover-art (BIP) channel to a player's device: the phone sends image handles only while one
+// is open, so it is opened once per connection (a player that goes away is forgotten, see
+// notePlayers), again 10 s after a failure; the next track info then carries a handle.
+// au.cover[path] is {state: asking | open | failed, at}: `at` is when it opened, 0 when it was
+// open already (a player BlueZ made again); `changed` is called when the answer comes.
 function coverConnect(p, changed) {
   const c = au.cover[p.path];
   if (!c || (c.state === 'failed' && Date.now() - c.at > 10000)) {
@@ -661,161 +1203,54 @@ function coverConnect(p, changed) {
       .then(r => r.ok ? r.json().catch(() => ({})) : Promise.reject())
       .then(j => done('open', j.channel === 'open' ? 0 : Date.now()), () => done('failed', Date.now()));
   }
-  return '';
-}
-
-function renderPlayers(m) {
-  notePlayers(m.players);
-  // Not while a select is open or a slider held: the rebuild would close it under the pointer.
-  const ae = document.activeElement;
-  if (ae && $('au-players').contains(ae) && (ae.tagName === 'SELECT' || ae.type === 'range' || ae.classList.contains('pl-q'))) return;
-  setHTML($('au-players'), m.players.length ? m.players.map(p => playerCard(p, m.transports)).join('')
-    : '<div class="card empty-card"><h3>No player</h3><p class="hint">Connect a phone, or anything that plays, with the board as its speaker: its AVRCP player shows here with the track, cover art and controls.</p></div>');
-}
-
-// The progress bars move between updates.
-function tickPlayers() {
-  if (!au.media) return;
-  for (const p of au.media.players) {
-    if (p.status !== 'playing' && !String(p.status).endsWith('seek')) continue;
-    const el = $('au-players').querySelector(`.player[data-path="${CSS.escape(p.path)}"]`);
-    if (!el) continue;
-    const d = p.track.duration_ms, pos = playerPosition(p);
-    const bar = el.querySelector('.pl-progress i');
-    if (bar && d) bar.style.width = (pos / d * 100).toFixed(2) + '%';
-    setText(el.querySelector('.pl-time'), `${fmtMs(pos)}${d ? ' / ' + fmtMs(d) : ''}`);
-  }
-}
-
-// ---------------------------------------------------------------- the board's own player
-
-// What a car or speaker the board plays to sees over AVRCP: the board's player (bench_player.h),
-// its track and its library, which such a device can browse. The library is browsed here from the
-// tree the state carries; playing from here is the same as playing from the remote.
-function localPlayerCard(s) {
-  const lib = s.library || [];
-  const byId = id => lib.find(i => i.id === id);
-  const t = s.track || {};
-  const playing = s.status === 'playing';
-  const btn = (a, title, cls) => `<button class="pl-btn lp-a ${cls || ''}" data-a="${a}" title="${title}" aria-label="${title}">
-    <svg viewBox="0 0 24 24"><path d="${PL_ICON[a]}"/></svg></button>`;
-  const folder = au.lpFolder == null ? null : au.lpFolder;
-  const entries = lib.filter(i => (i.parent == null ? null : i.parent) === folder);
-  const cur = s.track ? s.track.id : null;
-  const path = [];
-  for (let f = folder == null ? null : byId(folder); f; f = f.parent == null ? null : byId(f.parent)) path.unshift(f.name);
-  const reg = (s.registered || []).map(a => a.split('/').pop()).join(', ');
-  const num = t.Number ? `track ${t.Number}${t.NumberOfTracks ? ' of ' + t.NumberOfTracks : ''}` : '';
-  return `<div class="card player lp">
-    <div class="pl-art">${NOTE_SVG}</div>
-    <div class="head"><span class="pl-who">This board's player · what a car or speaker sees</span>
-      ${pill(s.enabled ? s.status : 'off', playing ? 'good' : s.status === 'paused' ? 'warn' : '')}</div>
-    <div class="pl-title">${esc(t.Title || 'Nothing playing')}</div>
-    <div class="small">${esc([t.Artist, t.Album, num].filter(Boolean).join(' · '))}</div>
-    <div class="small muted">${s.enabled ? (reg ? 'Offered on ' + esc(reg) : 'Waiting for BlueZ') : 'Not offered to devices'}${s.sink ? ' · plays to ' + esc(s.sink) : ''}</div>
-    ${s.error ? `<div class="small bad">${esc(s.error)}</div>` : ''}
-    <div class="pl-controls">
-      ${btn('previous', 'Previous')}${btn('play', 'Play')}${btn('pause', 'Pause')}${btn('next', 'Next')}${btn('stop', 'Stop')}
-      ${s.repeat != null ? modeButtons('pl-btn lp-mode', boardRepeat(s.repeat), !!s.shuffle) : ''}
-      <span class="spacer"></span>
-      <label class="row small"><input type="checkbox" id="lp-enabled"${s.enabled ? ' checked' : ''}> Offer it</label>
-    </div>
-    <details class="more-fields pl-more" id="lp-more"${au.lpOpen ? ' open' : ''}>
-      <summary>Library and now playing</summary>
-      <div class="pl-items small">
-        <div class="row wrap small pl-browser-nav">
-          ${folder != null ? '<button class="small-btn lp-up">Up</button>' : ''}
-          <span class="muted mono">/${esc(path.join('/'))}</span></div>
-        ${entries.map(i => `<div class="row between">
-          <span>${i.type === 'folder' ? '📁 ' : ''}${i.id === cur ? '<b>' + esc(i.name) + '</b>' : esc(i.name)}</span>
-          <span>${i.type === 'folder' ? `<button class="small-btn lp-open" data-id="${i.id}">open</button>` : ''}
-            <button class="small-btn lp-play" data-id="${i.id}">play</button>
-            <button class="small-btn lp-add" data-id="${i.id}">add</button></span></div>`).join('')}
-        <div class="muted" style="margin-top:.5rem">Now playing</div>
-        ${(s.queue || []).length ? s.queue.map((q, n) => `<div class="row between"><span>${s.position && n === s.position.index ? '<b>' + esc(q.name) + '</b>' : esc(q.name)}</span></div>`).join('')
-          : '<div class="muted">empty: play something, here or from the remote</div>'}
-      </div>
-    </details>
-  </div>`;
-}
-
-function refreshLocalPlayer() {
-  return api('/media/local-player').then(s => {
-    au.local = s;
-    const ae = document.activeElement;
-    if (ae && $('au-local').contains(ae) && ae.type === 'checkbox') return;
-    setHTML($('au-local'), localPlayerCard(s));
-  }).catch(() => setHTML($('au-local'), ''));
-}
-
-function localPlayerPost(body) {
-  return post('/media/local-player', body).then(s => {
-    au.local = s;
-    setHTML($('au-local'), localPlayerCard(s));
-  }).catch(fail);
 }
 
 function playerAction(path, action) {
   return post('/media/players/control', {path, action}).catch(fail);
 }
 
-// Hear what a phone plays into the board: PipeWire's capture node of its link, found by address in
-// a fresh read of the endpoints (a cached one may be from before the phone connected). A phone that
-// is connected but not streaming may have no node yet: it is asked once over AVRCP to play — never
-// paused, which would interrupt what someone is listening to — and the node is waited for.
-// `onStream`: the caller plays the stream itself (the Listen view's media element) instead of Web
-// Audio here. Resolves with the stream, or null when there was nothing to hear (said in a toast).
-// A capture of what the device at `address` sends the board: heard in this browser (Web Audio) or,
-// with `onStream`, handed to it instead; `sinks` plays it on outputs as well (a tunnel).
-function listenToDevice(address, onStream, sinks) {
-  const same = a => !!a && a.toUpperCase() === address.toUpperCase();
-  // The AudioContext comes from the click itself, before any wait.
-  const ctx = onStream ? null : newAudioContext();
-  if (!onStream && !ctx) return Promise.resolve(null);
-  const m = au.media || (typeof pl !== 'undefined' ? pl.media : null);
-  const player = m && m.players.find(p => same(p.address) && /\/avrcp\//.test(p.path));
-  if (m && !m.transports.some(t => same(t.address))) {
-    if (ctx) ctx.close();
-    toast('The phone sends no audio to the board: connect it with the board as its speaker (A2DP).');
-    return Promise.resolve(null);
-  }
-  const deadline = Date.now() + 10000;
-  let asked = false, looks = 0;
-  // The first look takes the board's answer of the last two seconds: the page has usually just
-  // asked (a pw-dump costs a busy Zero W seconds, and a fresh one would wait behind it).
-  const look = () => api(looks++ ? '/audio/endpoints?fresh=1' : '/audio/endpoints').then(ep => {
-    renderEndpoints(ep);
-    const src = ep.sources.find(e => same(e.address));
-    if (src) {
-      return startStream({type: 'capture', backend: src.backend, target: src.id, title: src.label}, sinks || [], !onStream,
-        {rate: src.rate || 48000, channels: 2, gain_db: 0}, ctx);
-    }
-    if (!asked && player && player.status !== 'playing') {
-      asked = true;
-      toast('Asking the phone to play…');
-      post('/media/players/control', {path: player.path, action: 'play'}).catch(() => {});
-    }
-    if (Date.now() > deadline) throw new Error('The phone is not streaming to the board: play something on it, with the board as its speaker.');
-    return new Promise(r => setTimeout(r, 700)).then(look);
-  });
-  return look().then(s => { if (onStream) onStream(s); return s; })
-    .catch(e => { if (ctx) ctx.close(); toast(e.message); return null; });
+// ---- the codec picker: PipeWire's profile of a Bluetooth device is its codec choice
+
+const CD_KINDS = [['a2dp', 'Send (A2DP)'], ['a2dp-duplex', 'Both ways (A2DP duplex)'], ['gateway', 'Receive A2DP / HFP gateway'],
+  ['headset', 'Headset (HFP/HSP)'], ['bap', 'LE Audio (BAP)'], ['other', 'Other'], ['off', 'Off']];
+
+function codecSelect(d) {
+  const a = d.active;
+  const groups = CD_KINDS.map(([k, label]) => {
+    const ps = d.profiles.filter(p => p.kind === k);
+    if (!ps.length) return '';
+    return `<optgroup label="${esc(label)}">${ps.map(p => `<option value="${p.index}"${a && a.index === p.index ? ' selected' : ''}${p.available ? '' : ' disabled'}>
+      ${p.codec ? esc(p.codec) + ' (' + esc(p.name) + ')' : esc(p.name)}</option>`).join('')}</optgroup>`;
+  }).join('');
+  return `<select class="cd-pick grow" data-id="${d.id}" aria-label="Codec">${groups}</select>`;
 }
 
-// ---------------------------------------------------------------- media (BlueZ)
+// The cards, for the codec pickers in Route and PipeWire: read when those are shown and when a
+// device's links change (onMessage), not with every track position.
+const refreshCodecs = () => api('/audio/devices').then(r => { au.devices = r; renderRoute(); })
+  .catch(e => { au.devices = {devices: [], error: e.message}; renderRoute(); });
+const cardOf = address => ((au.devices && au.devices.devices) || []).find(d => sameAddr(d.address, address)) || null;
+
+// A codec picked (Route, PipeWire): the link renegotiates, and the outputs follow (a switch makes
+// the device's node anew).
+function pickCodec(sel, then) {
+  sel.disabled = true;
+  put(`/audio/devices/${sel.dataset.id}/profile`, {profile: parseInt(sel.value, 10)})
+    .then(d => { if (d.switch_error) toast(d.switch_error); })
+    .catch(fail)
+    .finally(() => {
+      sel.disabled = false;
+      refreshCodecs();
+      api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
+      if (then) then();
+    });
+}
+
+// ---- a Bluetooth link in words
 
 function codecCell(c) {
   return `<b>${esc(c.name)}</b> <span class="small">${esc(c.summary)}</span>`;
 }
-
-function renderMedia(m) {
-  au.media = m;
-  renderPlayers(m);
-  renderAudioDevices();
-}
-
-// ---------------------------------------------------------------- Bluetooth: one card a device
-
 // The board's own role on a transport is its UUID: Audio Sink (or a sink PAC, or a broadcast it
 // syncs to: Basic Audio Announcement) means the board receives from the device.
 const receives = t => /^(110b|2bc9|1851)$/i.test(t.uuid);
@@ -823,416 +1258,208 @@ const receives = t => /^(110b|2bc9|1851)$/i.test(t.uuid);
 const LINK_KIND = {'110a': 'A2DP', '110b': 'A2DP', '2bc9': 'LE Audio · CIS', '2bcb': 'LE Audio · CIS',
   '1851': 'Auracast · BIS', '1852': 'Auracast · BIS'};
 const linkKind = t => LINK_KIND[(t.uuid || '').toLowerCase()] || t.profile || t.uuid;
-// AVRCP's absolute volume is 0..127; LE Audio's (the Volume Control Service) 0..255.
-const volMax = t => /^110[ab]$/i.test(t.uuid) ? 127 : 255;
 
-// Every device with a transport, a PipeWire card or stream endpoints, by address.
-function audioDevices() {
-  const m = au.media || {transports: [], endpoints: []};
-  const by = new Map();
-  const get = a => {
-    const k = (a || '').toUpperCase();
-    if (!by.has(k)) by.set(k, {address: k, transports: [], endpoints: [], card: null});
-    return by.get(k);
+// A level bar from -60 dBFS (empty) to 0 (full); the peak is the thin mark.
+function meterHTML(lv, ch) {
+  const n = Math.max(1, (lv && lv.rms_db.length) || ch || 1);
+  let h = '';
+  for (let c = 0; c < n; c++) {
+    const rms = lv && lv.rms_db[c] != null ? lv.rms_db[c] : -120;
+    const pk = lv && lv.peak_db[c] != null ? lv.peak_db[c] : -120;
+    const w = v => Math.max(0, Math.min(100, (v + 60) / 60 * 100)).toFixed(1);
+    h += `<div class="meter${pk > -1 ? ' clip' : pk > -6 ? ' hot' : ''}"><i style="width:${w(rms)}%"></i><b style="left:${w(pk)}%"></b>` +
+      `<span>${n > 1 ? (c ? 'R ' : 'L ') : ''}${pk > -119 ? pk.toFixed(1) : '—'} dB</span></div>`;
+  }
+  return h;
+}
+
+// ---- the spectrum of what this browser hears
+
+// The <audio> element goes through Web Audio only once someone opens the spectrum: until then it
+// plays as a plain media element, which keeps playing with the page in the background (see
+// npAudio). From then on, for this page, an analyser sits between it and the speakers.
+function hearAnalyser() {
+  if (au.hearCtx) return au.hearCtx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  const ctx = new AC();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  ctx.createMediaElementSource(npAudio).connect(analyser);
+  analyser.connect(ctx.destination);
+  au.hearCtx = {ctx, analyser};
+  return au.hearCtx;
+}
+
+// One requestAnimationFrame loop while the spectrum is open and on screen.
+function drawHearing() {
+  if (drawHearing.on) return;
+  drawHearing.on = true;
+  const frame = () => {
+    const cv = document.querySelector('#rt-outputs .rt-spec');
+    const open = cv && cv.closest('details').open && currentTab === 'audio' && panes.audio === 'route';
+    if (!open || !au.hearCtx) { drawHearing.on = false; return; }
+    if (au.hearCtx.ctx.state === 'suspended') au.hearCtx.ctx.resume().catch(() => {});
+    drawSpectrum(cv, au.hearCtx);
+    const b = npAudio.buffered;
+    const ahead = b.length ? b.end(b.length - 1) - npAudio.currentTime : 0;
+    setText(document.querySelector('#rt-outputs .rt-buf'), au.hearId ? `${(ahead * 1000).toFixed(0)} ms buffered` : '');
+    requestAnimationFrame(frame);
   };
-  m.transports.forEach(t => get(t.address).transports.push(t));
-  ((au.devices && au.devices.devices) || []).forEach(c => { if (c.address) get(c.address).card = c; });
-  m.endpoints.forEach(e => get(e.address).endpoints.push(e));
-  by.delete('');
-  return [...by.values()];
+  requestAnimationFrame(frame);
 }
 
-function audioDeviceCard(x) {
-  const name = devName(x.address) !== x.address ? devName(x.address) : x.card ? x.card.label : x.address;
-  const live = x.transports.some(t => t.state === 'active');
-  const links = x.transports.slice().sort((a, b) => receives(b) - receives(a)).map(t => `<div class="ad-link">
-      <span class="ad-dir"><b>${receives(t) ? 'Receiving' : 'Sending'}</b> <span class="muted small">${esc(linkKind(t))}</span></span>
-      <span class="ad-codec">${codecCell(t.codec)}${t.delay_ms != null ? ` <span class="muted small">· delay ${t.delay_ms.toFixed(1)} ms</span>` : ''}</span>
-      <span class="ad-state">${pill(t.state === 'active' ? 'streaming' : t.state, t.state === 'active' ? 'good' : t.state === 'pending' ? 'warn' : '')}</span>
-      <span class="ad-acts">${/^185[12]$/.test(t.uuid) ? '<a class="small-btn btn-link" href="#leaudio" title="Receiving a broadcast is chosen in Audio → LE Audio">LE Audio</a>'
-        : receives(t) ? `<button class="small-btn ad-listen" data-address="${esc(x.address)}" title="Hear what the device sends the board, in this browser">Listen here</button>` : ''}</span>
-      ${t.volume != null ? `<label class="row small ad-vol"><span class="muted">Volume</span> <input type="range" min="0" max="${volMax(t)}" value="${t.volume}" data-path="${esc(t.path)}" class="grow">
-        <span class="mono">${t.volume}</span></label>` : ''}
-    </div>`).join('');
-  // Every A2DP endpoint set has SBC (the spec makes it mandatory): one without it was discovered
-  // half way — while the device was still registering its codecs — and holds for this connection.
-  const a2dp = x.endpoints.filter(e => /^Audio (Sink|Source)$/.test(e.role || ''));
-  const noSbc = ['Audio Sink', 'Audio Source'].filter(r => a2dp.some(e => e.role === r) && !a2dp.some(e => e.role === r && e.codec.id === 0));
-  const partial = noSbc.length ? `<p class="small warn-text">Its ${noSbc.join(' and ').toLowerCase()} endpoints are listed without SBC, which every A2DP device has: the list was read while the device was still registering its codecs. Disconnect and connect it again for the whole list.</p>` : '';
-  const eps = x.endpoints.length ? `<details class="more-fields" data-key="ep-${esc(x.address)}"${au.adOpen['ep-' + x.address] ? ' open' : ''}>
-      <summary>Its stream endpoints (${x.endpoints.length})</summary>
-      <div class="scroll-x"><table class="tbl"><tr><th>Role</th><th>Codec</th><th>Capabilities</th><th>Delay reports</th></tr>
-      ${x.endpoints.map(e => `<tr><td>${esc(e.role || e.uuid)}</td><td><b>${esc(e.codec.name)}</b></td>
-        <td class="wrap small" title="${esc(e.capabilities)}">${esc(e.codec.summary)}</td><td>${e.delay_reporting ? 'yes' : 'no'}</td></tr>`).join('')}</table></div>
-    </details>` : '';
-  const raw = x.transports.length ? `<details class="more-fields" data-key="raw-${esc(x.address)}"${au.adOpen['raw-' + x.address] ? ' open' : ''}><summary>Details</summary>
-      <div class="kv" style="margin-top:.4rem">${x.transports.map(t => `<span>${esc(linkKind(t))}</span><span class="mono">${esc(t.configuration)} · ${esc(t.path)}</span>`).join('')}</div></details>` : '';
-  return `<div class="card ad-card" data-address="${esc(x.address)}">
-    <div class="card-head"><h3>${esc(name)} <span class="mono small muted">${esc(x.address)}</span></h3>
-      ${pill(live ? 'streaming' : x.transports.length ? 'idle' : 'connected', live ? 'good' : '')}</div>
-    ${links || '<p class="hint">No audio link set up: the device and the board have not agreed on a stream yet.</p>'}
-    ${x.card ? `<label class="row wrap small ad-profile"><span class="muted">PipeWire profile and codec</span> ${codecSelect(x.card)}</label>` : ''}
-    ${partial}${eps}${raw}
-  </div>`;
+// Log frequency axis 20 Hz .. Nyquist, -100..0 dB. `l`: {ctx, analyser}.
+function drawSpectrum(cv, l) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (!w) return;
+  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const bins = new Float32Array(l.analyser.frequencyBinCount);
+  l.analyser.getFloatFrequencyData(bins);
+  const ny = l.ctx.sampleRate / 2, lo = Math.log(20), hi = Math.log(ny);
+  const style = getComputedStyle(document.documentElement);
+  g.strokeStyle = style.getPropertyValue('--accent').trim();
+  g.lineWidth = 1.2;
+  g.beginPath();
+  for (let i = 1; i < bins.length; i++) {
+    const f = i * ny / bins.length;
+    if (f < 20) continue;
+    const x = (Math.log(f) - lo) / (hi - lo) * w;
+    const y = h - Math.max(0, Math.min(1, (bins[i] + 100) / 100)) * (h - 4);
+    if (i === 1) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+  g.fillStyle = style.getPropertyValue('--muted').trim();
+  g.font = '10px system-ui';
+  for (const f of [100, 1000, 10000]) {
+    if (f >= ny) continue;
+    const x = (Math.log(f) - lo) / (hi - lo) * w;
+    g.fillText(f >= 1000 ? f / 1000 + 'k' : String(f), x + 2, h - 3);
+  }
 }
 
-function renderAudioDevices() {
-  const el = $('ad-list');
-  // Which links a device has comes with /media: without it, every device would look idle.
-  if (!el || !au.media) return;
-  // Not while a picker is open or a slider held: the rebuild would take it from under the pointer.
-  const ae = document.activeElement;
-  if (ae && el.contains(ae) && (ae.tagName === 'SELECT' || ae.type === 'range')) return;
-  const ds = audioDevices();
-  setHTML(el, ds.length ? ds.map(audioDeviceCard).join('')
-    : `<div class="card empty-card"><h3>No Bluetooth audio device</h3><p class="hint">${esc((au.devices && au.devices.error) || '')}
-        Connect a phone with the board as its speaker, or a speaker or headphones to play to (Devices): each shows here with its audio links and codec.</p></div>`);
-}
-
-// AVDTP browsing: ask a device for its stream endpoints over a signalling channel of our own.
-function probeAvdtp() {
-  const addr = $('av-dev').value;
-  if (!addr) return;
-  setHTML($('av-result'), '<span class="muted">Probing: paging the device…</span>');
-  post(`/media/avdtp/${addr}`).then(r => setHTML($('av-result'), `<div class="small muted" style="margin-bottom:.4rem">${r.seps.length} stream endpoints in ${r.took_ms} ms</div>
-    <div class="scroll-x"><table class="tbl"><tr><th>SEID</th><th>role</th><th>media</th><th>in use</th><th>codec</th><th>capabilities</th></tr>
-    ${r.seps.map(sp => `<tr><td>${sp.seid}</td><td>${esc(sp.role)}</td><td>${esc(sp.media_type)}</td><td>${sp.in_use ? pill('in use', 'warn') : ''}</td>
-      <td>${sp.codec ? `<b>${esc(sp.codec.name)}</b> <span class="small">${esc(sp.codec.summary || '')}</span>` : esc(sp.error || '—')}</td>
-      <td class="wrap small" title="${esc(((sp.capabilities || []).find(c => c.category === 7) || {}).hex || '')}">${(sp.capabilities || []).filter(c => c.category !== 7).map(c => esc(c.name) + (c.type ? ' (' + esc(c.type) + ')' : '')).join(', ')}</td></tr>`).join('')}</table></div>`))
-    .catch(e => setHTML($('av-result'), `<span class="bad-text">${esc(e.message)}</span>`));
-}
-
-function avdtpDevices() {
-  api('/bluetooth').then(b => { if (!btState) btState = b; return b; }).then(b => fillSelect($('av-dev'), b.devices.filter(d => d.paired || d.connected || d.rssi != null)
-    .map(d => ({value: d.address, label: `${d.alias} (${d.address})${d.connected ? ' — connected' : ''}`})))).catch(() => {});
-}
-
-function refreshMedia() { return api('/media').then(renderMedia).catch(e => { ldFail(e, $('ad-list'), $('au-players')); fail(e); }); }
-
-// ---------------------------------------------------------------- radio
-
-function renderRadio(r) {
-  au.radio = r.stations;
-  setHTML($('rd-list'), r.stations.length ? r.stations.map((s, i) => `<div class="row between radio-row">
-      <span title="${esc(s.url)}">${esc(s.name)}</span>
-      <span class="acts"><button class="small-btn" data-play="${i}" title="Play to the output chosen above">Play</button><button class="small-btn" data-hear="${i}" title="Listen in this browser">Listen</button></span></div>`).join('')
-    : '<span class="muted">No stations: Edit to add some.</span>');
-}
-
-// A URL plays at the rate it most likely is (streamRate, player.js) unless one was chosen under
-// Format and gain: decoding to another rate makes the decoder resample, at three times the CPU.
-function playUrl(url, title, listen, rate) {
-  const extra = $('st-rate').dataset.chosen ? {} : {rate: streamRate(rate)};
-  return startStream({type: 'url', url, title, decoder: $('st-decoder').value}, chosenSinks(), listen, extra).catch(() => {});
-}
-
-// ---------------------------------------------------------------- setup
-
-function showSourceFields() {
-  const t = $('st-src').value;
-  document.querySelectorAll('#st-new [data-for]').forEach(el => {
-    el.hidden = !el.dataset.for.split(' ').includes(t);
-  });
-  setText($('st-level-kind'), t === 'noise' ? 'Level (dBFS, RMS)' : 'Level (dBFS, peak)');
-  if (t === 'noise' && $('st-level').value === '-12') $('st-level').value = '-20';
-}
+// ---------------------------------------------------------------- wiring
 
 function setupAudio() {
-  // The whole stack on or off, kept across reboots (btbench-audio on|off).
-  $('au-on').onchange = e => {
-    const on = e.target.checked;
-    if (!on && !confirm('Switch the audio stack off? Audio links are dropped, and it stays off after a reboot until switched on here.')) {
-      e.target.checked = true;
+  $('np-ctl').onclick = e => {
+    const b = e.target.closest('[data-np]');
+    if (b && !b.disabled) npAction(b.dataset.np);
+    const m = e.target.closest('[data-mode]');
+    if (m) npMode(m.dataset.mode);
+  };
+  $('np-mini-ctl').onclick = e => {
+    const b = e.target.closest('[data-np]');
+    if (b && !b.disabled) npAction(b.dataset.np);
+  };
+  $('np-src').onclick = e => {
+    const b = e.target.closest('[data-src]');
+    if (!b) return;
+    const p = phones().find(x => x.path === b.dataset.src);
+    if (p) au.players[p.address.toUpperCase()] = p.path;
+    au.queueKey = '';
+    renderNowPlaying();
+  };
+  $('np-vol').oninput = e => {
+    clearTimeout(au.volT);
+    // A slider sends many values a second: at most one request each 150 ms.
+    au.volT = setTimeout(() => setVolume(parseInt(e.target.value, 10)), 150);
+  };
+  $('np-outs').onclick = e => {
+    const b = e.target.closest('[data-out]');
+    if (b) pickOut(b.dataset.out);
+  };
+  $('np-queue').onclick = e => {
+    const c = current();
+    const del = e.target.closest('[data-q-del]');
+    if (del) {
+      if (c.kind === 'board') put(`/audio/streams/${c.s.id}`, {remove: parseInt(del.dataset.qDel, 10)}).then(refreshPlayerStreams).catch(fail);
       return;
     }
-    e.target.disabled = true;
-    setText($('au-msg'), on ? 'starting PipeWire…' : 'stopping PipeWire…');
-    put('/audio', {enabled: on}).then(s => { renderAudio(s); setText($('au-msg'), ''); refreshEndpoints(true); })
-      .catch(err => { setText($('au-msg'), err.message); refreshAudio(); })
-      .finally(() => { e.target.disabled = false; });
+    const r = e.target.closest('.tr');
+    if (!r) return;
+    if (r.dataset.track != null && c.kind === 'board') put(`/audio/streams/${c.s.id}`, {track: parseInt(r.dataset.track, 10), paused: false}).catch(fail);
+    if (r.dataset.item && c.kind === 'phone') post('/media/items', {path: r.dataset.item, action: 'play'}).catch(fail);
   };
-  $('au-restart').onclick = () => {
-    const restart = $('au-restart-bt').checked;
-    if (!confirm(`Restart PipeWire and WirePlumber${restart ? ' and bluetoothd' : ''}? Audio connections are dropped.`)) return;
-    $('au-restart').disabled = true;
-    setText($('au-msg'), 'restarting…');
-    post('/audio/restart', {restart_bt: restart}).then(s => { renderAudio(s); setText($('au-msg'), 'restarted'); refreshEndpoints(true); })
-      .catch(e2 => { setText($('au-msg'), e2.message); refreshAudio(); })
-      .finally(() => { $('au-restart').disabled = false; });
-  };
-  // Sent as the slider settles, not on every pixel of a drag.
-  const volume = e => {
-    const r = e.target.closest('input[type=range][data-path]');
-    if (r) put('/media/transport', {path: r.dataset.path, volume: parseInt(r.value, 10)}).catch(fail);
-  };
-  // The device cards: volume, the codec picker, listening, what is open.
-  const ad = $('ad-list');
-  ad.addEventListener('change', e => {
-    if (e.target.type === 'range') volume(e);
-  });
-  ad.addEventListener('toggle', e => { if (e.target.dataset && e.target.dataset.key) au.adOpen[e.target.dataset.key] = e.target.open; }, true);
-  ad.addEventListener('click', e => {
-    const ls = e.target.closest('.ad-listen');
-    if (ls) listenToDevice(ls.dataset.address);
-  });
-
-  // The board's player.
-  const lp = $('au-local');
-  lp.addEventListener('toggle', e => { if (e.target.id === 'lp-more') au.lpOpen = e.target.open; }, true);
-  lp.addEventListener('change', e => {
-    if (e.target.id === 'lp-enabled')
-      put('/media/local-player', {enabled: e.target.checked}).then(s => { au.local = s; setHTML(lp, localPlayerCard(s)); }).catch(fail);
-  });
-  lp.addEventListener('click', e => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    const id = b.dataset.id != null ? Number(b.dataset.id) : null;
-    if (b.classList.contains('lp-a')) localPlayerPost({action: b.dataset.a});
-    else if (b.classList.contains('lp-mode')) {
-      const s = au.local;
-      put('/media/local-player', b.dataset.mode === 'repeat' ? {repeat: boardRepeatValue(nextRepeat(boardRepeat(s.repeat)))} : {shuffle: !s.shuffle})
-        .then(n => { au.local = n; setHTML(lp, localPlayerCard(n)); }).catch(fail);
-    }
-    else if (b.classList.contains('lp-play')) localPlayerPost({play: id});
-    else if (b.classList.contains('lp-add')) localPlayerPost({enqueue: id});
-    else if (b.classList.contains('lp-open')) { au.lpFolder = id; setHTML(lp, localPlayerCard(au.local)); }
-    else if (b.classList.contains('lp-up')) {
-      const f = au.local.library.find(i => i.id === au.lpFolder);
-      au.lpFolder = f && f.parent != null ? f.parent : null;
-      setHTML(lp, localPlayerCard(au.local));
-    }
-  });
-
-  // Players: buttons, hold-to-seek, settings, browsing.
-  const pl = $('au-players');
-  // "toggle" does not bubble: caught on the way down, it says which players have their extras open.
-  pl.addEventListener('toggle', e => {
-    if (e.target.classList.contains('pl-more')) au.plOpen[e.target.dataset.path] = e.target.open;
-  }, true);
-  pl.onchange = volume;
-  pl.onclick = e => {
-    const b = e.target.closest('.pl-btn');
-    const p = b && b.dataset.mode && au.media && au.media.players.find(x => x.path === b.dataset.path);
-    if (p) {
-      put('/media/players', Object.assign({path: p.path}, b.dataset.mode === 'repeat'
-        ? {repeat: btRepeatValue(nextRepeat(btRepeat(p.repeat)))} : {shuffle: p.shuffle === 'off' ? 'alltracks' : 'off'})).catch(fail);
-    } else if (b && b.dataset.a && b.dataset.a !== 'fast-forward' && b.dataset.a !== 'rewind') {
-      playerAction(b.dataset.path, b.dataset.a);
-    }
-    const ls = e.target.closest('.pl-listen');
-    if (ls) listenToDevice(ls.dataset.address);
-    const nav = e.target.closest('.pl-nav, .pl-open');
-    if (nav) {
-      if (nav.classList.contains('pl-nav')) au.browse[nav.dataset.path] = {stack: [], items: [], folder: ''};
-      browse(nav.dataset.path, nav.dataset.folder);
-    }
-    const back = e.target.closest('.pl-back');
-    if (back) {
-      const b = au.browse[back.dataset.path];
-      b.stack.pop();
-      browse(back.dataset.path, b.stack[b.stack.length - 1], false);
-    }
-    const sr = e.target.closest('.pl-search');
-    if (sr) {
-      const q = $('au-players').querySelector(`.pl-q[data-path="${CSS.escape(sr.dataset.path)}"]`);
-      post('/media/players/search', {path: sr.dataset.path, value: q ? q.value : ''}).then(r => {
-        const b = au.browse[sr.dataset.path] || (au.browse[sr.dataset.path] = {stack: []});
-        b.stack.push(r.result);
-        b.items = r.items;
-        b.folder = r.folder;
-        if (au.media) renderPlayers(au.media);
-      }).catch(fail);
-    }
-    const it = e.target.closest('.pl-item');
-    if (it) post('/media/items', {path: it.dataset.path, action: it.dataset.a}).then(() => toast(it.dataset.a === 'add' ? 'added to now playing' : 'playing')).catch(fail);
-  };
-  // Seeking runs while the button is held, as on a remote: pressed starts it, released resumes play.
-  pl.onpointerdown = e => {
-    const b = e.target.closest('.pl-btn');
-    if (!b || (b.dataset.a !== 'fast-forward' && b.dataset.a !== 'rewind')) return;
-    playerAction(b.dataset.path, b.dataset.a);
-    const up = () => { window.removeEventListener('pointerup', up); playerAction(b.dataset.path, 'play'); };
-    window.addEventListener('pointerup', up);
-  };
-
-  $('av-probe').onclick = probeAvdtp;
-
-  // The codec picker, on a device's card and next to the output.
-  ad.onchange = $('st-codec').onchange = e => {
-    const sel = e.target.closest('select.cd-pick');
-    if (!sel) return;
-    sel.disabled = true;
-    put(`/audio/devices/${sel.dataset.id}/profile`, {profile: parseInt(sel.value, 10)})
-      .then(d => { if (d.switch_error) toast(d.switch_error); refreshCodecs(); refreshEndpoints(true); })
-      .catch(err => { fail(err); refreshCodecs(); })
-      .finally(() => { sel.disabled = false; });
-  };
-
-  // The stream form.
-  $('st-rate').onchange = () => { $('st-rate').dataset.chosen = '1'; };
-  $('st-src').onchange = showSourceFields;
-  showSourceFields();
-  $('st-sinks').onclick = e => {
-    const b = e.target.closest('[data-out]');
-    if (b) pickNewOut(b.dataset.out);
-  };
-  $('st-refresh').onclick = () => refreshEndpoints(true);
-  $('st-start').onclick = () => {
-    const src = sourceFromForm();
-    const sinks = chosenSinks();
-    const listen = $('st-listen').checked;
-    if (!sinks.length && !listen) { setText($('st-msg'), 'Choose an output in "Play to", or turn on "Also listen in this browser".'); return; }
-    startStream(src, sinks, listen).catch(() => {});
-  };
-  const playTyped = () => {
-    const url = $('st-url').value.trim();
-    if (!url) return $('st-url').focus();
-    if (!chosenSinks().length && !$('st-listen').checked) { toast('Choose an output in "Play to" above, or turn on "Also listen in this browser".'); return; }
-    playUrl(url, '', $('st-listen').checked);
-  };
-  $('st-url-play').onclick = playTyped;
-  $('st-url').onkeydown = e => { if (e.key === 'Enter') playTyped(); };
-
-  // The stream cards.
-  const list = $('st-list');
-  list.onclick = e => {
-    const card = e.target.closest('.stream');
-    if (!card) return;
-    const id = parseInt(card.dataset.id, 10);
-    if (e.target.closest('.st-stop')) {
-      stopListening(id);
-      const live = (au.streams.find(s => s.id === id) || {}).state;
-      del(`/audio/streams/${id}`).then(() => {
-        if (live !== 'running' && live !== 'starting') { au.cards[id] && au.cards[id].remove(); delete au.cards[id]; }
-        refreshStreams();
-      }).catch(fail);
-    } else if (e.target.closest('.st-pause, .st-prev, .st-next')) {
-      const b = e.target.closest('button');
-      const s = au.streams.find(x => x.id === id) || {};
-      const body = b.classList.contains('st-pause') ? {paused: !s.paused} : b.classList.contains('st-next') ? {next: true} : {previous: true};
-      put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
-    } else if (e.target.closest('.st-listen')) {
-      if (au.listeners[id]) stopListening(id); else startListening(id);
-    } else if (e.target.closest('[data-out]')) {
-      pickStreamOut(id, e.target.closest('[data-out]').dataset.out);
-    }
-  };
-  list.oninput = e => {
-    const card = e.target.closest('.stream');
-    if (!card) return;
-    if (e.target.classList.contains('st-vol')) {
-      const l = au.listeners[card.dataset.id];
-      if (l) l.gain.gain.value = parseFloat(e.target.value);
-    } else if (e.target.classList.contains('st-gain')) {
-      setText(card.querySelector('.st-gain-v'), `${parseFloat(e.target.value).toFixed(1)} dB`);
-    }
-  };
-  list.onchange = e => {
-    const card = e.target.closest('.stream');
-    if (!card) return;
-    const id = card.dataset.id;
-    let body = null;
-    if (e.target.classList.contains('st-gain')) body = {gain_db: parseFloat(e.target.value)};
-    else if (e.target.classList.contains('st-freq')) body = {source: {freq: parseFloat(e.target.value)}};
-    else if (e.target.classList.contains('st-level')) body = {source: {level_db: parseFloat(e.target.value)}};
-    if (body) put(`/audio/streams/${id}`, body).then(upsertStream).catch(fail);
-  };
-
-  // Radio.
-  $('rd-list').onclick = e => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    const s = au.radio[parseInt(b.dataset.play != null ? b.dataset.play : b.dataset.hear, 10)];
-    if (!s) return;
-    if (b.dataset.play != null && !chosenSinks().length) { toast('Choose an output in "Play to" above first, or use Listen.'); return; }
-    playUrl(s.url, s.name, b.dataset.hear != null || $('st-listen').checked);
-  };
-  $('rd-edit').onclick = () => {
-    $('rd-text').value = au.radio.map(s => `${s.name} | ${s.url}`).join('\n');
-    $('rd-editor').hidden = false;
-  };
-  $('rd-cancel').onclick = () => { $('rd-editor').hidden = true; };
-  $('rd-save').onclick = () => {
-    const stations = $('rd-text').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
-      const i = l.lastIndexOf('|');
-      return i < 0 ? {url: l} : {name: l.slice(0, i).trim(), url: l.slice(i + 1).trim()};  // the board names it
-    });
-    put('/audio/radio', {stations}).then(r => { renderRadio(r); $('rd-editor').hidden = true; }).catch(fail);
-  };
-
 }
 
-// ---------------------------------------------------------------- PipeWire's graph (pw-top)
-
-// The drivers, running ones first, each with its followers under it.
-function renderPipewire(t) {
-  if (!t.drivers) {
-    setText($('pw-note'), t.error ? 'pw-top: ' + t.error : 'waiting for pw-top…');
-    return;
-  }
-  setText($('pw-note'), `${fmtTime(t.ts)}${t.xruns ? ` · ${t.xruns} xrun${t.xruns === 1 ? '' : 's'} this second` : ''}`);
-  const on = st => /[RITt]/.test(st);
-  const stName = {R: 'running', I: 'idle', S: 'suspended', C: 'creating', E: 'error', T: 'running', t: 'starting'};
-  const load = q => q == null ? '' : `<span class="pw-load${q > 0.8 ? ' bad' : q > 0.5 ? ' warn' : ''}"><i style="width:${Math.min(100, Math.round(q * 100))}%"></i></span> ${Math.round(q * 100)}%`;
-  const ms = v => v == null ? '' : v < 1 ? `${(v * 1000).toFixed(0)} µs` : `${v.toFixed(2)} ms`;
-  const errCell = n => `<td class="num${n.xruns ? ' bad-text' : n.err ? ' warn-text' : ' muted'}" title="${n.err} since pw-top started">${n.xruns ? '+' + n.xruns : n.err || ''}</td>`;
-  const drivers = [...t.drivers].sort((a, b) => on(b.state) - on(a.state));
-  const rows = drivers.map(d => {
-    const head = `<tr class="${on(d.state) ? '' : 'muted'}"><td>${pill(stName[d.state] || d.state, d.state === 'E' ? 'bad' : on(d.state) ? 'good' : '')}</td>
-      <td class="mono"><b>${esc(d.name)}</b></td><td class="mono">${d.quantum != null ? `${d.quantum}/${d.rate}` : ''}</td>
-      <td class="num">${d.period_ms != null ? d.period_ms + ' ms' : ''}</td><td>${load(d.busy_q)}</td>
-      <td class="num">${ms(d.busy_ms)}</td><td class="num">${ms(d.wait_ms)}</td>${errCell(d)}<td class="mono small">${esc(d.format || '')}</td></tr>`;
-    const fol = (d.followers || []).map(f => `<tr class="pw-fol${on(f.state) ? '' : ' muted'}"><td></td>
-      <td class="mono">↳ ${esc(f.name)}</td><td></td><td class="num" title="the latency it reports">${f.latency_ms != null ? f.latency_ms + ' ms' : ''}</td>
-      <td>${load(f.busy_q)}</td><td class="num">${ms(f.busy_ms)}</td><td class="num">${ms(f.wait_ms)}</td>${errCell(f)}<td class="mono small">${esc(f.format || '')}</td></tr>`).join('');
-    return head + fol;
-  }).join('');
-  setHTML($('pw-graph'), `<table class="tbl compact pw-tbl"><tr><th></th><th>Node</th><th>quantum</th><th class="num">period</th><th>load</th>
-    <th class="num">busy</th><th class="num">wait</th><th class="num">xruns</th><th>format</th></tr>${rows}</table>`);
-}
+// Not while a slider, a picker or a number of the view is held: the rebuild would take it from
+// under the pointer. Route lets go of them once they changed (setupRoute).
+const holding = () => {
+  const ae = document.activeElement;
+  return !!ae && ae.closest && !!ae.closest('#audio') && (ae.type === 'range' || ae.type === 'number' || ae.tagName === 'SELECT');
+};
 
 registerTab('audio', {
-  topics: () => ['media', 'audio.streams'].concat(panes.audio === 'stack' ? ['pipewire'] : []),
+  topics: () => ['media', 'audio.streams', 'audio.route', 'bt'],
   show() {
-    refreshAudio();
-    refreshMedia();
-    refreshEndpoints(false);
-    refreshCodecs();
-    avdtpDevices();
-    refreshStreams();
-    api('/audio/radio').then(renderRadio).catch(e => ldFail(e, $('rd-list')));
+    // The library opens once the players are known: a browsable phone's is the first tab.
+    // A folder still open from before (Back to this view, or a look at another tab) stays as it was
+    // left, with its Back entries; a phone's only while the phone is still there.
+    const kept = () => au.libPath.length && au.libItems.length && (au.libPath[0].parent || {}).lib === au.lib &&
+      (au.lib !== 'phone' || phones().some(x => x.browsable));
+    api('/media').then(m => { au.media = m; au.linksKey = (m.transports || []).map(t => t.path).sort().join(','); notePlayers(m.players); renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(au.lib); })
+      .catch(() => { au.mediaFailed = true; renderNowPlaying(); renderLibTabs(); if (!kept()) openLib(au.lib); });
+    api('/bluetooth').then(b => { btState = b; renderNowPlaying(); }).catch(() => {});
+    api('/audio/endpoints').then(renderOutputs).catch(() => { au.endpointsFailed = true; renderOuts(); });
+    refreshLa();
+    refreshPlayerStreams();
+    refreshRoute();
+    if (panes.audio === 'route') routeShown();
     clearInterval(au.tick);
-    au.tick = setInterval(tickPlayers, 500);
-    // The board's player has no topic: asked every two seconds while the players are shown.
-    refreshLocalPlayer();
-    clearInterval(au.lpTick);
-    au.lpTick = setInterval(() => { if (panes.audio === 'players' && !document.hidden) refreshLocalPlayer(); }, 2000);
-    if (Object.keys(au.listeners).length) drawListening();
+    // The progress bar moves between the phone's updates.
+    au.tick = setInterval(() => {
+      if (++au.ticks % 6 === 0) hearCheck();  // every 3 s
+      const c = current();
+      if (c.kind === 'phone' && c.p.status === 'playing') renderTime(playerPosition(c.p), (c.p.track || {}).duration_ms || 0);
+    }, 500);
   },
   hide() {
-    // Listening goes on in the background (it is what someone asked for); only the visuals stop.
     clearInterval(au.tick);
     au.tick = null;
-    clearInterval(au.lpTick);
-    au.lpTick = null;
+    routeHidden();
+  },
+  pane(p) {
+    if (currentTab !== 'audio') return;
+    // HFP's and a set's nodes are only in the endpoints, which follow the transports otherwise;
+    // the codec pickers are read when they are shown.
+    if (p === 'route') {
+      api('/audio/endpoints?fresh=1').then(renderOutputs).catch(() => {});
+      routeShown();
+    } else {
+      routeHidden();
+    }
   },
   onMessage(topic, data) {
-    // Graphs can keep the pipewire topic while Audio is not on screen: no table to redraw then.
-    if (topic === 'pipewire') return currentTab === 'audio' && renderPipewire(data);
     if (currentTab !== 'audio') return;
     if (topic === 'media') {
-      // The codec list changes when a device's transports do, not with every track position.
+      const hadLib = phones().some(p => p.browsable);
+      au.media = data;
+      notePlayers(data.players);
+      outLinksChanged(data);
+      if (hadLib !== phones().some(p => p.browsable)) renderLibTabs();
+      // The codecs change when a device's links do, not with every track position.
       const key = data.transports.map(t => t.path + t.state + t.configuration).join();
-      if (key !== au.cdKey) {
+      if (key !== au.cdKey && panes.audio === 'route') {
         au.cdKey = key;
         clearTimeout(au.cdTimer);
         au.cdTimer = setTimeout(refreshCodecs, 1500);
       }
-      // Not under a volume drag: the rebuild would take the slider from under the pointer.
-      const ae = document.activeElement;
-      if (!(ae && ae.type === 'range' && !$('au-players').contains(ae))) renderMedia(data);
+      if (!holding()) renderNowPlaying();
+    } else if (topic === 'bt') {
+      // "bt" carries every RSSI change during a scan.
+      if (!au.laT) au.laT = setTimeout(() => { au.laT = null; refreshLa(); }, 1000);
+    } else if (topic === 'audio.route') {
+      au.route = data;
+      followRoute();
+      if (!holding()) renderNowPlaying();
     } else if (topic === 'audio.streams') {
-      renderStreams(data);
+      au.streams = data.streams.map(decorate);
+      noteFailure();
+      if (!holding()) renderNowPlaying();
+      renderRouteMeters();
     }
   },
 });

@@ -71,7 +71,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
     one line, a DNS label; btbench-hostname makes it the hostname, with no MAC after it.
   - `/data/btbench/btsnoop.env` — `ROTATE_SIZE`, `ROTATE_COUNT` for the btmon ring.
   - `/data/btbench/radio.json` — btbenchd's radio station list, `{"stations":[{"name","url"}]}`.
-  - `/data/btbench/route.json` — the route's outputs (Listen's "Play to"), `{"outputs":[{"type",
+  - `/data/btbench/route.json` — the route's outputs (Audio → Route's outputs), `{"outputs":[{"type",
     "target"}]}` as a stream's sinks; the input is not kept.
   - `/data/btbench/hid.json` — the HID host's settings, `{"media_keys": true}`.
   - `/data/btbench/hid-remote.json` — the HID remote's, `{"enabled": true, "name": "btbench remote"}`.

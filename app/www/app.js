@@ -198,22 +198,20 @@ function registerTab(name, def) { tabs[name] = def; }
 // The areas in the rail and the views in each. A view is a tab (what owns topics and polls) and
 // optionally one pane of its panel: panes only change what is on screen, so moving between the
 // panes of one tab costs the board nothing, while a tab of its own (packets) starts and stops its
-// stream with it. The hash names the view, "#audio/streams".
+// stream with it. The hash names the view, "#audio/route".
 const NAV = [
-  {id: 'listen', label: 'Listen', icon: 'M12 21a9 9 0 100-18 9 9 0 000 18zM10 8.5v7l6-3.5z', views: [
-    {tab: 'player', pane: 'now', label: 'Now playing'},
-    {tab: 'player', pane: 'inputs', label: 'Inputs'},
-    {tab: 'player', pane: 'library', label: 'Library'},
-    {tab: 'player', pane: 'queue', label: 'Up next'}]},
   {id: 'devices', label: 'Devices', icon: 'M7 7l10 10-5 5V2l5 5L7 17', views: [
     {tab: 'devices', label: 'Devices'},
     {tab: 'hid', label: 'Input devices'}]},
+  // The board as a player and the audio bench in one: what plays and where (Now playing, Route),
+  // what to play (Library, Up next), then Auracast and the audio server itself.
   {id: 'audio', label: 'Audio', icon: 'M4 14v-2a8 8 0 0116 0v2M4 14h3v6H4zM17 14h3v6h-3z', views: [
-    {tab: 'audio', pane: 'bt', label: 'Bluetooth'},
+    {tab: 'audio', pane: 'now', label: 'Now playing'},
+    {tab: 'audio', pane: 'route', label: 'Route'},
+    {tab: 'audio', pane: 'library', label: 'Library'},
+    {tab: 'audio', pane: 'queue', label: 'Up next'},
     {tab: 'leaudio', label: 'LE Audio'},
-    {tab: 'audio', pane: 'players', label: 'Players'},
-    {tab: 'audio', pane: 'streams', label: 'Streams'},
-    {tab: 'audio', pane: 'stack', label: 'PipeWire'}]},
+    {tab: 'pipewire', label: 'PipeWire'}]},
   {id: 'le', label: 'LE', icon: 'M12 13a1 1 0 100-2 1 1 0 000 2zM8.5 8.5a5 5 0 000 7M15.5 8.5a5 5 0 010 7M5.6 5.6a9 9 0 000 12.8M18.4 5.6a9 9 0 010 12.8', views: [
     {tab: 'le', pane: 'explore', label: 'GATT explorer'},
     {tab: 'le', pane: 'adv', label: 'Advertise'},
@@ -288,8 +286,11 @@ function renderNav() {
   lsSet('btbench.area.' + area.id, here);
 }
 
-// Views that moved to a tab of their own, so their old links (and an area's remembered view) land.
-const MOVED = {'system/logs': 'logs'};
+// Views that moved, so their old links (and an area's remembered view) land: Listen and Audio's
+// views are one area now, its device cards and streams in Route, its players in Now playing.
+const MOVED = {'system/logs': 'logs', 'player': 'audio', 'player/now': 'audio/now', 'player/inputs': 'audio/route',
+  'player/library': 'audio/library', 'player/queue': 'audio/queue', 'audio/bt': 'audio/route',
+  'audio/players': 'audio/now', 'audio/streams': 'audio/route', 'audio/stack': 'pipewire'};
 
 // Shows a view by its key ("audio/streams", "capture"), keeping the hash in step. Each view shown is
 // a history entry, so a phone's Back returns to the view before instead of leaving the console;
@@ -369,7 +370,7 @@ function showPane(name, pane) {
 }
 
 function showTab(name, pane) {
-  if (!tabs[name] && !$(name)) name = 'player';
+  if (!tabs[name] && !$(name)) name = 'devices';
   showPane(name, pane);
   if (fullCard) setFull(fullCard, false, true);
   if (currentTab !== name) {
@@ -605,9 +606,9 @@ const splitGroups = f => f.split(/\s+\|\|\s+/).map(g => g.trim()).filter(Boolean
 // that holds the list with "fit-main"; the CSS does the rest, and only on a screen big enough.
 function updateFit() {
   document.body.classList.toggle('fit', !!document.querySelector('.panel.active.fit, .panel.active > .pane.fit:not([hidden])'));
-  // Listen on a wide screen: what plays and the library side by side, each column scrolling
-  // (style.css; a narrower screen keeps them as two views).
-  document.body.classList.toggle('fit-player', currentTab === 'player');
+  // Audio on a wide screen: what plays beside the route, the library or the queue, each column
+  // scrolling (style.css; a narrower screen keeps them as views of their own).
+  document.body.classList.toggle('fit-audio', currentTab === 'audio');
 }
 
 // ---------------------------------------------------------------- full screen
@@ -672,7 +673,7 @@ function startConsole() {
   api('/bluetooth').then(renderBtPill).catch(() => setClass($('pill-bt'), 'pill'));
   refreshRequest();
   buildNav();
-  const t = lsGet('btbench.tab') || 'player';
+  const t = MOVED[lsGet('btbench.tab')] || lsGet('btbench.tab') || 'devices';
   go(location.hash.slice(1) || (panes[t] ? t + '/' + panes[t] : t), true);
   $('boot').remove();
   connectWs();

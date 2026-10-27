@@ -31,6 +31,7 @@ function btApply(b) {
   if (currentTab === 'devices') {
     refreshDevAudio(b);
     renderDevices();
+    avdtpDevices(b);
   }
   if (typeof leOnBt === 'function') leOnBt(b);
 }
@@ -555,7 +556,7 @@ function deviceAction(key, act, el) {
   let req;
   if (act === 'goto-gatt') return openOnDevice('le/explore', 'gx-dev', d ? devKey(d) : key);
   if (act === 'goto-obex') return openOnDevice('obex/sessions', 'ob-dev', addr);
-  if (act === 'goto-avdtp') return openOnDevice('audio/bt', 'av-dev', addr);
+  if (act === 'goto-avdtp') return openOnDevice('devices', 'av-dev', addr);
   if (act === 'toggle') {
     if (devOpen.has(key)) devOpen.delete(key); else devOpen.add(key);
     renderDevices();
@@ -578,7 +579,31 @@ function deviceAction(key, act, el) {
   req.then(() => setTimeout(refreshBt, 200)).catch(fail);
 }
 
+// ---------------------------------------------------------------- the AVDTP probe
+
+// A device's own DISCOVER / GET_ALL_CAPABILITIES answer, over a signalling channel of the board's
+// own: what it could do, connected or not, rather than what is set up.
+function probeAvdtp() {
+  const addr = $('av-dev').value;
+  if (!addr) return;
+  setHTML($('av-result'), '<span class="muted">Probing: paging the device…</span>');
+  post(`/media/avdtp/${addr}`).then(r => setHTML($('av-result'), `<div class="small muted" style="margin-bottom:.4rem">${r.seps.length} stream endpoints in ${r.took_ms} ms</div>
+    <div class="scroll-x"><table class="tbl"><tr><th>SEID</th><th>role</th><th>media</th><th>in use</th><th>codec</th><th>capabilities</th></tr>
+    ${r.seps.map(sp => `<tr><td>${sp.seid}</td><td>${esc(sp.role)}</td><td>${esc(sp.media_type)}</td><td>${sp.in_use ? pill('in use', 'warn') : ''}</td>
+      <td>${sp.codec ? `<b>${esc(sp.codec.name)}</b> <span class="small">${esc(sp.codec.summary || '')}</span>` : esc(sp.error || '—')}</td>
+      <td class="wrap small" title="${esc(((sp.capabilities || []).find(c => c.category === 7) || {}).hex || '')}">${(sp.capabilities || []).filter(c => c.category !== 7).map(c => esc(c.name) + (c.type ? ' (' + esc(c.type) + ')' : '')).join(', ')}</td></tr>`).join('')}</table></div>`))
+    .catch(e => setHTML($('av-result'), `<span class="bad-text">${esc(e.message)}</span>`));
+}
+
+// The devices it can page: the paired, the connected and the ones a scan heard.
+function avdtpDevices(b) {
+  const seen = new Set();
+  fillSelect($('av-dev'), b.devices.filter(d => (d.paired || d.connected || d.rssi != null) && !seen.has(d.address) && seen.add(d.address))
+    .map(d => ({value: d.address, label: `${d.alias} (${d.address})${d.connected ? ' — connected' : ''}`})));
+}
+
 function setupDevices() {
+  $('av-probe').onclick = probeAvdtp;
   // The adapter settings go to the adapter picked; the agent's are the bench's.
   const send = body => {
     const a = selAdapter(btState);

@@ -8,9 +8,9 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<!-- The shell: seven areas in a rail (a bottom bar on a phone), each with its views in the bar above
+<!-- The shell: six areas in a rail (a bottom bar on a phone), each with its views in the bar above
      the content. app.js builds both from NAV; a view is a registered tab, optionally one pane of
-     it (#audio/play). Every element id the tab scripts use is kept from the flat-tab layout. -->
+     it (#audio/route). Every element id the tab scripts use is kept from the flat-tab layout. -->
 <aside id="rail">
   <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span id="hostname">btbench</span></div>
   <nav id="areas" aria-label="Areas"></nav>
@@ -31,8 +31,8 @@
 <main>
   <!-- Until the scripts have come (seconds from a Zero W just booted): app.js takes it away. -->
   <div id="boot" class="ld"></div>
-  <!-- ======================================================== Listen (the player) -->
-  <section id="player" class="panel">
+  <!-- ======================================================== Audio: the board as a player (audio.js, route.js, library.js) -->
+  <section id="audio" class="panel">
     <div class="pane" data-pane="now">
     <div class="np card" id="np">
       <div class="np-art loading" id="np-art"></div>
@@ -57,10 +57,18 @@
       </div>
     </div>
     </div>
-    <!-- What the board plays: its own music or one Bluetooth device's audio. -->
-    <div class="pane" data-pane="inputs">
-      <div class="card np-libcard">
-        <div id="np-inputs" class="tracklist ld"></div>
+    <!-- What the board plays (its own music, or one Bluetooth device's audio) and where. -->
+    <div class="pane" data-pane="route">
+      <div class="route-cols" id="rt-cols">
+        <div class="card np-libcard">
+          <div class="card-head"><h3>Inputs</h3></div>
+          <div id="rt-inputs" class="tracklist ld"></div>
+        </div>
+        <div class="card np-libcard">
+          <div class="card-head"><h3>Outputs</h3></div>
+          <div id="rt-outputs" class="tracklist ld"></div>
+          <details class="more-fields rt-board" id="rt-board-player"><summary>This board's player</summary><div id="au-local" class="ld"></div></details>
+        </div>
       </div>
     </div>
     <!-- The library on a page of its own: long folders get the screen. -->
@@ -78,9 +86,9 @@
         <div id="np-queue" class="tracklist"></div>
       </div>
     </div>
-    <!-- Under Inputs, Library and Up next: the track, play/pause and next in reach while browsing. -->
+    <!-- Under Route, Library and Up next: the track, play/pause and next in reach while browsing. -->
     <div class="np-mini card" id="np-mini" hidden>
-      <a href="#player/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
+      <a href="#audio/now" class="np-mini-t"><b id="np-mini-title"></b><span id="np-mini-sub" class="small muted"></span></a>
       <div class="np-mini-ctl" id="np-mini-ctl"></div>
     </div>
   </section>
@@ -149,6 +157,14 @@
       </div>
     </div>
     <div id="dev-list" class="rows ld"></div>
+    <div class="card av-probe">
+      <div class="card-head">
+        <h3>AVDTP probe</h3>
+        <div class="acts"><select id="av-dev" aria-label="Device"></select><button id="av-probe">Probe</button></div>
+      </div>
+      <p class="hint">Asks a device itself for its stream endpoints (DISCOVER, GET_ALL_CAPABILITIES), connected or not: what it could do, not what is set up. Refused while A2DP is streaming.</p>
+      <div id="av-result" class="small"></div>
+    </div>
   </section>
 
   <!-- ======================================================== Devices: input devices (HID host) -->
@@ -278,7 +294,7 @@
         <div class="tb-id"><b>LE Audio</b> <span id="la-caps" class="small muted"></span></div>
         <label class="inline-label small" id="la-ad-l" hidden>Adapter <select id="la-ad" aria-label="Adapter"></select></label>
       </div>
-      <p class="hint">Auracast both ways: the board broadcasts what plays into its broadcast, and receives the broadcasts in range. LE Audio earbuds and speakers (unicast) are in Bluetooth, with their codec and links.</p>
+      <p class="hint">Auracast both ways: the board broadcasts what plays into its broadcast, and receives the broadcasts in range. LE Audio earbuds and speakers (unicast) are in Route, with their codec and links.</p>
     </div>
 
     <div class="card" id="la-src">
@@ -305,144 +321,39 @@
         <h3>Broadcasts in range <span id="la-scan-st" class="pill"></span></h3>
         <div class="acts"><button id="la-scan">Scan</button></div>
       </div>
-      <p class="hint">While the adapter scans, BlueZ syncs to each broadcaster for a moment and reads what it sends (its BASE): one stream per BIS. <b>Listen</b> syncs to the BIG and makes it Listen's input: it plays on Listen's outputs (turn on <b>This browser</b> there to hear it here).</p>
+      <p class="hint">While the adapter scans, BlueZ syncs to each broadcaster for a moment and reads what it sends (its BASE): one stream per BIS. <b>Listen</b> syncs to the BIG and makes it the route's input: it plays on the route's outputs (turn on <b>This browser</b> there to hear it here).</p>
       <div id="la-sources" class="rows-cards ld"></div>
     </div>
   </section>
 
-  <!-- ======================================================== Audio -->
-  <section id="audio" class="panel">
-    <!-- Bluetooth: one card per audio device — its links, codec, endpoints and the AVDTP probe. -->
-    <div class="pane" data-pane="bt">
-      <p class="hint">Each connected Bluetooth audio device: which way audio goes on it and in what codec, the profile PipeWire uses for it (that is the codec choice), and what it offers.</p>
-      <div id="ad-list" class="rows-cards ld"></div>
-      <div class="card">
-        <div class="card-head">
-          <h3>AVDTP probe</h3>
-          <div class="acts"><select id="av-dev" aria-label="Device"></select><button id="av-probe">Probe</button></div>
+  <!-- ======================================================== Audio: PipeWire (pipewire.js) -->
+  <section id="pipewire" class="panel">
+    <div class="card pending" id="au-card">
+      <div class="card-head">
+        <h3>PipeWire <span id="au-services" class="ld"></span></h3>
+        <div class="acts">
+          <label class="switch inline" title="Kept across reboots"><input type="checkbox" id="au-on"><i></i> Audio on</label>
+          <button id="au-restart">Restart</button>
         </div>
-        <p class="hint">Asks a device itself for its stream endpoints (DISCOVER, GET_ALL_CAPABILITIES), connected or not: what it could do, not what is set up. Refused while A2DP is streaming.</p>
-        <div id="av-result" class="small"></div>
       </div>
+      <p class="hint" id="au-off-hint" hidden>The audio stack is off, and stays off after a reboot: Bluetooth works without it — LE, GATT, the remote, files — but no device can play to or from the board (no A2DP, no HFP), and the route has nothing to play to.</p>
+      <p class="hint">Restarting PipeWire and WirePlumber drops the audio links first, so devices reconnect to the new endpoints. It cures a WirePlumber that stopped answering after links vanished at once.</p>
+      <label class="switch inline small"><input type="checkbox" id="au-restart-bt"><i></i> Restart bluetoothd too</label>
+      <div id="au-msg" class="small muted"></div>
     </div>
-
-    <!-- Players: AVRCP — the phones' players and the board's own. -->
-    <div class="pane" data-pane="players">
-      <div id="au-players" class="rows-cards ld"></div>
-      <div id="au-local"></div>
+    <div class="cols">
+      <div class="card"><div class="card-head"><h3>Clock</h3></div><div id="pw-clock" class="ld"></div></div>
+      <div class="card"><div class="card-head"><h3>Defaults</h3></div><div id="pw-defaults" class="ld"></div></div>
     </div>
-
-    <!-- Streams: what the board itself plays — test signals, a device's audio, a URL — to an output. -->
-    <div class="pane" data-pane="streams">
-      <div class="card" id="st-out">
-        <div class="card-head">
-          <h3>Output for new streams</h3>
-          <button id="st-refresh" class="small-btn" title="Read PipeWire's nodes again">Refresh</button>
-        </div>
-        <div class="st-play-to"><span class="np-out-label">Play to</span>
-          <div class="np-outs ld" id="st-sinks" role="group" aria-label="Where new streams play"></div></div>
-        <div class="grid">
-          <label id="st-codec-l" hidden>Codec <span id="st-codec" class="row wrap"></span></label>
-        </div>
-        <div class="form-acts">
-          <label class="switch inline"><input type="checkbox" id="st-listen"><i></i> Also listen in this browser</label>
-          <span id="st-backend" class="small muted"></span>
-        </div>
-        <p class="hint">Every stream started on this page starts on the outputs lit here, as many as you like: one stream plays to two Bluetooth speakers at once. Each running stream has its own outputs, tapped on or off while it plays. The board plays one stream of its own at a time (a test signal or a station): a new one takes the place of the one playing. Audio from devices (a phone's A2DP, a microphone) plays beside it, each a stream of its own. A speaker or car shows what plays on its display, and its buttons pause and skip it. Music from media servers is in Listen → Library.</p>
-      </div>
-
-      <h2>Running</h2>
-      <div id="st-list" class="rows-cards ld"></div>
-      <div id="st-empty" class="small muted" hidden>Nothing is playing. Start a test signal, a device's audio or a station below.</div>
-
-      <div class="cols">
-        <div class="card" id="st-new">
-          <div class="card-head">
-            <h3>New stream</h3>
-            <select id="st-src" aria-label="Signal">
-              <optgroup label="Test signal">
-                <option value="tone">Tone</option>
-                <option value="sweep">Sweep</option>
-                <option value="noise">Noise</option>
-                <option value="silence">Silence</option>
-              </optgroup>
-              <optgroup label="Audio from">
-                <option value="capture">A device (a phone's A2DP, a microphone)</option>
-                <option value="monitor">What an output plays</option>
-              </optgroup>
-            </select>
-          </div>
-          <div class="grid">
-            <label data-for="tone">Frequency (Hz) <input type="number" id="st-freq" value="1000" min="1" max="48000"></label>
-            <label data-for="tone">Right channel (Hz) <input type="number" id="st-freq-r" min="1" max="48000" placeholder="same as left"></label>
-            <label data-for="sweep">From (Hz) <input type="number" id="st-from" value="20" min="1"></label>
-            <label data-for="sweep">To (Hz) <input type="number" id="st-to" value="20000" min="1"></label>
-            <label data-for="sweep">Seconds <input type="number" id="st-secs" value="10" min="0.5" max="600" step="0.5"></label>
-            <label data-for="noise">Colour
-              <select id="st-color"><option>pink</option><option>white</option><option>brown</option></select>
-            </label>
-            <label data-for="tone sweep noise"><span id="st-level-kind">Level (dBFS, peak)</span> <input type="number" id="st-level" value="-12" min="-96" max="0"></label>
-            <label data-for="capture">Capture from <select id="st-capture"></select></label>
-            <label data-for="monitor">Monitor of <select id="st-monitor"></select></label>
-          </div>
-          <p class="hint" data-for="capture">With a speaker as the output, this is a tunnel: one device's audio played on another.</p>
-          <details class="more-fields">
-            <summary>Format and gain</summary>
-            <div class="grid">
-              <label>Rate
-                <select id="st-rate"><option>48000</option><option>44100</option><option>32000</option><option>16000</option><option>8000</option></select>
-              </label>
-              <label>Channels <select id="st-ch"><option value="2">stereo</option><option value="1">mono</option></select></label>
-              <label>Gain (dB) <input type="number" id="st-gain" value="0" min="-60" max="20" step="0.5"></label>
-              <label>Decoder (radio, URLs)
-                <select id="st-decoder"><option value="auto">auto</option><option>mpg123</option><option>ffmpeg</option></select>
-              </label>
-              <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-log" checked><i></i> Logarithmic</label>
-              <label data-for="sweep" class="switch inline"><input type="checkbox" id="st-repeat" checked><i></i> Repeat</label>
-            </div>
-          </details>
-          <div class="form-acts">
-            <span id="st-msg" class="small"></span>
-            <button class="primary" id="st-start">Start</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>Internet radio and URLs</h3><button class="small-btn" id="rd-edit">Edit stations</button></div>
-          <div id="rd-list" class="small ld"></div>
-          <div id="rd-editor" hidden>
-            <textarea id="rd-text" class="mono" rows="8" placeholder="Name | https://url"></textarea>
-            <div class="form-acts"><span class="small muted">One station a line: <span class="mono">name | url</span></span>
-              <button id="rd-cancel">Cancel</button><button id="rd-save" class="primary">Save</button></div>
-          </div>
-          <div class="row url-row">
-            <input type="url" id="st-url" class="grow" aria-label="Stream URL" placeholder="A stream, .pls or .m3u URL, or a file">
-            <button class="small-btn" id="st-url-play">Play</button>
-          </div>
-        </div>
-      </div>
+    <div class="card" data-full>
+      <div class="card-head"><h3>Nodes</h3><span id="pw-graph-note" class="small muted"></span><div class="acts"><button id="pw-reload" class="small-btn">Reload</button></div></div>
+      <div id="pw-nodes" class="ld"></div>
     </div>
-
-    <!-- PipeWire: the audio server itself. -->
-    <div class="pane" data-pane="stack">
-      <div class="card pending" id="au-card">
-        <div class="card-head">
-          <h3>PipeWire <span id="au-services" class="ld"></span></h3>
-          <div class="acts">
-            <label class="switch inline" title="Kept across reboots"><input type="checkbox" id="au-on"><i></i> Audio on</label>
-            <button id="au-restart">Restart</button>
-          </div>
-        </div>
-        <p class="hint" id="au-off-hint" hidden>The audio stack is off, and stays off after a reboot: Bluetooth works without it — LE, GATT, the remote, files — but no device can play to or from the board (no A2DP, no HFP), and Streams and Listen have nothing to play to.</p>
-        <p class="hint">Restarting PipeWire and WirePlumber drops the audio links first, so devices reconnect to the new endpoints. It cures a WirePlumber that stopped answering after links vanished at once.</p>
-        <label class="switch inline small"><input type="checkbox" id="au-restart-bt"><i></i> Restart bluetoothd too</label>
-        <div id="au-msg" class="small muted"></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h3>Graph</h3><span id="pw-note" class="small muted"></span></div>
-        <p class="hint">Each driver (a sound card, a Bluetooth transport) runs a cycle of one quantum and pulls its followers through it. Load is the cycle's busy time against the quantum; an xrun is a cycle that did not finish in time. From pw-top, a second at a time, while this is on screen.</p>
-        <div id="pw-graph" class="scroll-x"></div>
-      </div>
+    <div class="card"><div class="card-head"><h3>Bluetooth cards</h3></div><div id="pw-cards" class="ld"></div></div>
+    <div class="card">
+      <div class="card-head"><h3>Timing</h3><span id="pw-note" class="small muted"></span></div>
+      <p class="hint">Each driver (a sound card, a Bluetooth transport) runs a cycle of one quantum and pulls its followers through it. Load is the cycle's busy time against the quantum; an xrun is a cycle that did not finish in time. From pw-top, a second at a time, while this is on screen.</p>
+      <div id="pw-graph" class="scroll-x"></div>
     </div>
   </section>
 
@@ -845,12 +756,14 @@
 <script src="devices.js"></script>
 <script src="le.js"></script>
 <script src="audio.js"></script>
+<script src="route.js"></script>
+<script src="library.js"></script>
+<script src="pipewire.js"></script>
 <script src="leaudio.js"></script>
 <script src="monitor.js"></script>
 <script src="graphs.js"></script>
 <script src="dbus.js"></script>
 <script src="obex.js"></script>
-<script src="player.js"></script>
 <script src="hid.js"></script>
 <script src="setup.js"></script>
 <script src="capture.js"></script>

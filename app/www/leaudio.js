@@ -1,7 +1,7 @@
 'use strict';
 // Audio → LE Audio: Auracast both ways (GET /api/le-audio). The board's own broadcasts — a BIG
 // each, which goes on air while something plays into its node — and the broadcasts in range, each
-// stream (BIS) received on request. What plays goes through Listen's route, as everywhere: a
+// stream (BIS) received on request. What plays goes through the route, as everywhere: a
 // broadcast started is one of its outputs (the daemon adds it), one taken off them ends, and a
 // broadcast received becomes its input.
 // States are BlueZ's as they are: a stream that does not sync stays where it got to, and Listen
@@ -48,7 +48,7 @@ function qosLine(q, codec) {
 // ---------------------------------------------------------------- the board's broadcasts
 
 function broadcastRow(b, first) {
-  // It exists while it is one of Listen's outputs: off air it waits for Listen to play, or (taken
+  // It exists while it is one of the route's outputs: off air it waits for the route to play, or (taken
   // off them) the daemon is ending it.
   const on = b.state === 'active', routed = b.node && laOn(b.node);
   const st = on ? pill('on air', 'good') : b.state === 'idle' ? pill(routed || !b.node ? 'silent' : 'ending…')
@@ -56,9 +56,9 @@ function broadcastRow(b, first) {
   const out = routed;
   // Taken off the outputs, the daemon ends it once it is off air.
   const ending = la.ending[b.big] || (b.node && !routed);
-  // Streams started elsewhere into it (Audio → Streams, bench) are named; Listen's is its input.
+  // Streams started elsewhere into it (bench, the API) are named; the route's is its input.
   const others = la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === b.node) && s.state !== 'ended');
-  const playing = [out ? 'what Listen plays' : '', ...others.map(s => esc(s.label.split(' → ')[0]))].filter(Boolean).join(', ') ||
+  const playing = [out ? 'what the route plays' : '', ...others.map(s => esc(s.label.split(' → ')[0]))].filter(Boolean).join(', ') ||
     `<span class="muted">${b.node ? 'nothing' : 'nothing (PipeWire has no node for it yet)'}</span>`;
   return `<div class="rw"><div class="rw-main"><span class="rw-led${on ? ' on' : ''}"></span>
       <div class="rw-title"><b>BIG ${b.big}${b.bis != null && b.bis !== 255 ? ' · BIS ' + b.bis : ''}</b> ${st}${b.encrypted ? ' ' + pill('encrypted') : ''}
@@ -82,7 +82,7 @@ function streamRow(src, t) {
       <span class="ad-state">${st}${t.encrypted ? ' ' + pill('encrypted') : ''}</span>
       <span class="ad-acts">${code}
         <button class="small-btn" data-la-rx="${esc(t.path)}" data-addr="${esc(src.address)}" data-on="${selected ? 0 : 1}"${busy ? ' disabled' : ''}
-          title="${selected ? 'Stop receiving it' : 'Receive it as Listen’s input'}">${busy ? '…' : selected ? 'Stop' : 'Listen'}</button>
+          title="${selected ? 'Stop receiving it' : 'Receive it as the route’s input'}">${busy ? '…' : selected ? 'Stop' : 'Listen'}</button>
 </span>
     </div>`;
 }
@@ -154,7 +154,7 @@ function endBroadcast(btn, a) {
   la.ending[big] = true;
   btn.disabled = true;
   setText(btn, 'going off air…');
-  // The streams started elsewhere into it are stopped; the daemon takes it off Listen's outputs
+  // The streams started elsewhere into it are stopped; the daemon takes it off the route's outputs
   // and ends it once BlueZ says it is off air (202), else clears it at once.
   const node = b && b.node;
   const plays = b ? la.streams.filter(s => s.id !== (la.route && la.route.stream) && (s.sinks || []).some(k => k.target === node) && s.state !== 'ended') : [];
@@ -175,8 +175,8 @@ function setupLeAudio() {
       code: f.code.value, presentation_delay_us: Math.round((parseFloat(f.pd_ms.value) || 40) * 1000)};
     setText($('la-msg'), 'starting…');
     post('/le-audio/broadcasts', body).then(r => {
-      setText($('la-msg'), r.output_error ? `BIG ${r.big} is ready, but not one of Listen's outputs: ${r.output_error}`
-        : `BIG ${r.big} is one of Listen's outputs: what Listen plays goes on air.`);
+      setText($('la-msg'), r.output_error ? `BIG ${r.big} is ready, but not one of the route's outputs: ${r.output_error}`
+        : `BIG ${r.big} is one of the route's outputs: what the route plays goes on air.`);
       return refreshLeAudio();
     }).catch(err => setText($('la-msg'), err.message));
   };
@@ -188,8 +188,8 @@ function setupLeAudio() {
   $('la-sources').onclick = e => {
     const rx = e.target.closest('[data-la-rx]');
     if (!rx) return;
-    // Listen: received, and Listen's input from then on (its outputs keep playing it; the board's
-    // own broadcasts go off them, as Listen does). Stop: no longer the input, then let go.
+    // Listen: received, and the route's input from then on (its outputs keep playing it; the board's
+    // own broadcasts go off them, as picking any input does). Stop: no longer the input, then let go.
     const path = rx.dataset.laRx, on = rx.dataset.on === '1', addr = rx.dataset.addr;
     const isInput = !!la.route && la.route.input.type === 'bluetooth' && la.route.input.devices.some(d => d.kind === 'broadcast' && d.address.toUpperCase() === addr.toUpperCase());
     const own = la.s.broadcasts.map(b => b.node).filter(Boolean);
