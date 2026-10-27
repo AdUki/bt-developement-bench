@@ -97,6 +97,8 @@ class AudioRoute {
   // The board's own stream: the newest one that is not a capture and has not ended.
   int local_stream() const;
   bool bind_locked();
+  // The outputs a Bluetooth input plays to: Play to without the input's own device.
+  nlohmann::json input_outputs_locked() const;
   void set_input_state(const std::string& state, const std::string& error);
   nlohmann::json json_locked() const;
   void publish_locked();

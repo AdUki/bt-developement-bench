@@ -731,6 +731,10 @@ device. Both act only on BlueZ's news of that device, never because another one 
 btbenchd starts, every transport BlueZ has is news: a device already sending to the board becomes
 the input as if it had just started.
 
+A Bluetooth input never plays to its own device: a device that is in the outputs and becomes the
+input is left out of what the input plays to, so that what it sends does not go back to it, and
+plays again once another input takes over. `outputs` still lists it.
+
 The outputs are kept in `/data/btbench/route.json` across restarts; the input is not. A browser
 listening is the browser's own (`GET /api/audio/streams/{stream}/listen`).
 

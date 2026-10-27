@@ -350,6 +350,22 @@ json AudioRoute::get() {
   return json_locked();
 }
 
+json AudioRoute::input_outputs_locked() const {
+  if (type_ != "bluetooth") return outputs_;
+  // Never the input's own device: what it sends would go straight back to it, both directions of
+  // one link carrying the same audio. Play to keeps it, for when another input plays.
+  const json ep = engine_.endpoints(false);
+  json out = json::array();
+  for (const json& o : outputs_) {
+    bool input = false;
+    for (const json& e : ep.value("sinks", json::array()))
+      if (str(e, "id") == str(o, "target"))
+        for (const RouteDevice& d : devices_) input = input || upper(str(e, "address")) == d.address;
+    if (!input) out.push_back(o);
+  }
+  return out;
+}
+
 bool AudioRoute::bind_locked() {
   SourceSpec src;
   int rate = 48000;
@@ -364,7 +380,7 @@ bool AudioRoute::bind_locked() {
     return true;
   }
   json body{{"source", {{"type", "capture"}, {"backend", src.backend}, {"target", src.target}, {"title", src.title}}},
-            {"sinks", outputs_}, {"rate", rate}, {"channels", 2}};
+            {"sinks", input_outputs_locked()}, {"rate", rate}, {"channels", 2}};
   if (!src.target_right.empty()) body["source"]["target_right"] = src.target_right;
   json out;
   int status = 400;
@@ -445,7 +461,9 @@ bool AudioRoute::put(const json& body, json* out, std::string* err, int* status)
     save();
     // What plays now plays on them at once: its kept outputs untouched, new ones opened.
     const int active = type_ == "bluetooth" ? (stream_alive(capture_) ? capture_ : 0) : type_ == "local" ? local_stream() : 0;
-    if (active && !body.contains("input") && !engine_.update(active, json{{"sinks", outputs_}}, &updated, err, status)) return false;
+    if (active && !body.contains("input") &&
+        !engine_.update(active, json{{"sinks", input_outputs_locked()}}, &updated, err, status))
+      return false;
   }
   if (body.contains("input")) set_input_locked(type, devices, &updated, err, status);
   *out = json_locked();
@@ -560,7 +578,7 @@ void AudioRoute::look_for_sinks_locked() {
     json updated;
     std::string err;
     int status = 0;
-    if (engine_.update(active, json{{"sinks", outputs_}}, &updated, &err, &status))
+    if (engine_.update(active, json{{"sinks", input_outputs_locked()}}, &updated, &err, &status))
       LOG_INFO("route: {} came while the input played to no output: it is one now", sink);
     else
       LOG_WARN("route: {} came, but the input cannot play to it: {}", sink, err);
