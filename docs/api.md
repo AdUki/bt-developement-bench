@@ -776,16 +776,18 @@ what the board sends as the HFP hands-free unit or an LE Audio earbud — the no
 ### Bluetooth codecs
 
 PipeWire picks a Bluetooth device's codec with its profile: `a2dp-sink-sbc_xq` sends A2DP with
-SBC-XQ, `a2dp-duplex-opus_05` runs Opus both ways, `audio-gateway` receives the device's A2DP (and
-is its HFP gateway), `headset-head-unit` is HFP with mSBC. Choosing a profile is choosing the
-codec (as in a desktop's Bluetooth sound settings). PipeWire switches the codec only while the
-device does not also send to the board: on a duplex link (`a2dp-duplex-*`, two boards that both
-have the A2DP sink and source roles on) picking a profile tears the nodes down and switches
-nothing. For two boards, turn the A2DP source role off on the one that receives (Setup → Profiles,
-WirePlumber's `bluez5.roles`) and pair them again: the link is then one way, and its codec
-switches. The switch makes the device's nodes anew: a stream playing to the device loses that
-sink (`failed`, "defined target not found") and plays on its others, and a capture of the device's
-audio ends; add the sink again, or start the capture again, once the new node is there.
+SBC-XQ, `audio-gateway` receives the device's A2DP (and is its HFP gateway), `headset-head-unit`
+is HFP with mSBC. Choosing a profile is choosing the codec (as in a desktop's Bluetooth sound
+settings). An A2DP profile's codec is the one of the stream the board *sends*. On a duplex link
+(`a2dp-duplex-*`, the device also sends to the board, as two boards that both have the A2DP sink
+and source roles on do), `a2dp-duplex-sbc_xq` switches the board's stream to SBC-XQ and leaves the
+device's stream to the board as it is: the device picks that codec, as its source. Between two
+boards, pick on each the codec it sends; each board's choice holds, also across a reconnect. A
+duplex codec (`opus_05_duplex`, `faststream_duplex`) carries the way back on the board's own
+stream. The switch makes the node of the board's stream anew: a stream playing to the device
+loses that sink (`failed`, "defined target not found") and plays on its others, and on the other
+board a capture of what this one sends ends; add the sink again, or start the capture again, once
+the new node is there. The other direction plays on.
 
 `GET /api/audio/devices` — `{"backend": "pipewire", "error": "", "devices": [{"id": 38, "name":
 "bluez_card.A4_B1_C1_0B_28_E4", "label": "SMI-PC", "address": "A4:B1:C1:0B:28:E4", "active":
