@@ -1593,7 +1593,10 @@ void AudioEngine::Stream::run() {
   else if (!fail.empty()) set_state("failed", fail);
   else set_state("ended");
   close_listeners();
-  LOG_INFO("audio: stream {} ({}) {}", id, label, fail.empty() ? "ended" : fail);
+  // Which of the three: stopped by someone, its source finished (a radio whose server hung up, a
+  // playlist at its end), or failed with why.
+  LOG_INFO("audio: stream {} ({}) {}", id, label,
+           stopped ? "stopped" : !fail.empty() ? fail : type == "url" ? "ended: its source finished" : "ended");
 }
 
 // ---- the engine ---------------------------------------------------------------------------------
