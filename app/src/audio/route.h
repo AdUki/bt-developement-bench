@@ -20,8 +20,11 @@
 // While nothing plays, a device that comes is connected by itself, as a speaker or a phone would:
 // one that starts sending while the input plays nothing becomes the input, and a Bluetooth sink
 // that connects while the input plays to no output becomes an output. Both only on BlueZ's news of
-// that device (a transport that came or started), never because something else went away.
+// that device (a transport that came or started), never because something else went away. An
+// output whose node PipeWire makes anew while the input plays to it (a codec switch, which keeps
+// the node's name) is played to again once the new node is there.
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -89,6 +92,9 @@ class AudioRoute {
   // Bluetooth changed (a transport came or went): a device waited for may have its node now, and
   // a broadcast may have gone off air (end_unused_).
   void poke();
+  // A stream lost a sink (AudioEngine::on_sink_lost). An output of the input's stream is looked
+  // for again: PipeWire makes a Bluetooth node anew, by the same name, when its codec changes.
+  void sink_lost(int stream, const SinkSpec& sink);
 
  private:
   void run();
@@ -96,6 +102,8 @@ class AudioRoute {
   void save() const;
   // The board's own stream: the newest one that is not a capture and has not ended.
   int local_stream() const;
+  // The stream the input plays: the route's capture of a device, or the local stream; 0 for none.
+  int active_stream_locked() const;
   bool bind_locked();
   // The outputs a Bluetooth input plays to: Play to without the input's own device.
   nlohmann::json input_outputs_locked() const;
@@ -110,7 +118,10 @@ class AudioRoute {
                         std::string* err, int* status);
   // BlueZ's transports against the last ones: a device that started sending, a sink that came.
   void transports_changed_locked(const nlohmann::json& ts);
-  // A sink that came while the input plays to no output: one of the outputs now.
+  // The sinks lost since the last look: the input's outputs among them are looked for again.
+  void take_lost_locked();
+  // A sink that came while the input plays to no output: one of the outputs now. An output whose
+  // node went away: played to again once it is back.
   void look_for_sinks_locked();
   // The devices as the devices list names them, from BlueZ's transports ts.
   std::string who_locked(const nlohmann::json& ts) const;
@@ -145,7 +156,14 @@ class AudioRoute {
   // Devices whose sending transport came: address → steady ms until which their sink is looked for
   // (PipeWire makes the node a moment after BlueZ's transport).
   std::map<std::string, int64_t> sink_looks_;
+  // Outputs the input's stream lost: target → steady ms until which their node is looked for.
+  std::map<std::string, int64_t> target_looks_;
   static constexpr int kSinkLookMs = 5000;
+  // The sinks streams lost, queued from the streams' threads under a lock of their own: the
+  // route's lock may be held by a thread that waits for that very stream to end (engine_.remove).
+  std::mutex lost_m_;
+  std::vector<std::pair<int, std::string>> lost_;
+  std::atomic<bool> lost_pending_{false};
   EndUnused end_unused_;
 };
 

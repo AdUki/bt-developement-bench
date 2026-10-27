@@ -892,6 +892,7 @@ struct AudioEngine::Stream {
   std::string label;
   std::string node_name;
   const Tools* tools = nullptr;
+  const SinkLost* sink_lost = nullptr;
   std::atomic<bool> stop{false};
   std::thread thread;
   std::thread titles;  // the ICY title poller of a URL
@@ -1308,12 +1309,14 @@ void AudioEngine::Stream::run() {
   // stream playing on its own clock until it is stopped or given another output.
   auto give_up = [&](size_t i, const std::string& why, const std::string& lost) {
     Out& o = *outs[i];
+    const SinkSpec gone = o.sink;
     set_sink(o.sink, "failed", why.empty() ? lost : why);
     LOG_WARN("audio: stream {} lost its sink {}: {}", id, sink_name(o.sink), lost);
     if (o.proc) o.proc->stop();
     outs.erase(outs.begin() + static_cast<std::ptrdiff_t>(i));
     sync_spec();
     if (!any_open()) next_ms = mono_ms();
+    if (sink_lost && *sink_lost) (*sink_lost)(id, gone);
   };
 
   // A sink whose process ended (a speaker gone, a codec change that made its node anew): given up
@@ -1684,6 +1687,7 @@ bool AudioEngine::create(const json& body, json* out, std::string* err, int* sta
     s->label = spec.label.empty() ? default_label(spec) : spec.label;
     s->node_name = "btbench-stream-" + std::to_string(s->id);
     s->tools = &tools_;
+    s->sink_lost = &sink_lost_;
     s->started_ms = wall_ms();
     streams_[s->id] = s;
   }

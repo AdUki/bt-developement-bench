@@ -261,6 +261,9 @@ int main(int argc, char** argv) {
   // the player, which plays through it, so it outlives the player's worker.
   btb::audio::AudioRoute route(audio, publish, [&bt] { return btb::model_media(*bt.objects())["transports"]; },
                                data_dir + "/route.json");
+  // A sink a stream lost may be an output whose node PipeWire made anew (a codec switch): the
+  // route plays to it again once it is back. The streams end (audio.stop_all) before the route.
+  audio.on_sink_lost([&route](int stream, const btb::audio::SinkSpec& sink) { route.sink_lost(stream, sink); });
 
   // The board's own AVRCP player, for what it plays to (a car, a speaker): its library is the
   // board's input, played on the route's outputs.

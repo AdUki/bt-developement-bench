@@ -234,6 +234,12 @@ class AudioEngine {
   // plays to them stops).
   void forget_device(const std::string& address);
 
+  // A sink a stream lost: its process ended (a speaker gone, its node made anew for another
+  // codec). Called from the stream's thread, without the engine's locks. Set before the first
+  // stream is made.
+  using SinkLost = std::function<void(int stream, const SinkSpec& sink)>;
+  void on_sink_lost(SinkLost f) { sink_lost_ = std::move(f); }
+
   const Tools& tools() const { return tools_; }
   UpnpBrowser& upnp() { return upnp_; }
 
@@ -249,6 +255,7 @@ class AudioEngine {
 
   const Publish publish_;
   const HasSubscribers has_subscribers_;
+  SinkLost sink_lost_;
   const std::string data_dir_;
   const Tools tools_;
   UpnpBrowser upnp_;

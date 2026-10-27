@@ -727,7 +727,9 @@ input: an A2DP source when it starts its stream, a broadcast when its BIS is syn
 unicast source once its stream is configured (the board starts that one itself, by recording it).
 A Bluetooth sink (A2DP or LE Audio) whose transport comes while the input plays to no output (none
 on, or every one lost) becomes an output, or plays again if it was one; never the input's own
-device. Both act only on BlueZ's news of that device, never because another one went away. When
+device. Both act only on BlueZ's news of that device, never because another one went away. An
+output whose node PipeWire makes anew while the input plays to it (a codec switch: the node comes
+back by the same name) is played to again as soon as it is back, whatever the other outputs do. When
 btbenchd starts, every transport BlueZ has is news: a device already sending to the board becomes
 the input as if it had just started.
 
@@ -785,10 +787,11 @@ and source roles on do), `a2dp-duplex-sbc_xq` switches the board's stream to SBC
 device's stream to the board as it is: the device picks that codec, as its source. Between two
 boards, pick on each the codec it sends; each board's choice holds, also across a reconnect. A
 duplex codec (`opus_05_duplex`, `faststream_duplex`) carries the way back on the board's own
-stream. The switch makes the node of the board's stream anew: a stream playing to the device
-loses that sink (`failed`, "defined target not found") and plays on its others, and on the other
-board a capture of what this one sends ends; add the sink again, or start the capture again, once
-the new node is there. The other direction plays on.
+stream. The switch makes the node of the board's stream anew, by the same name: a stream playing
+to the device loses that sink (`failed`, "defined target not found") and plays on its others. The
+route's input plays to it again once the new node is there; a stream started apart from the route
+does not, add the sink again. On the other board a capture of what this one sends ends: start it
+again. The other direction plays on.
 
 `GET /api/audio/devices` — `{"backend": "pipewire", "error": "", "devices": [{"id": 38, "name":
 "bluez_card.A4_B1_C1_0B_28_E4", "label": "SMI-PC", "address": "A4:B1:C1:0B:28:E4", "active":

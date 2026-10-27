@@ -540,48 +540,121 @@ void AudioRoute::transports_changed_locked(const json& ts) {
   seen_transports_ = now;
 }
 
+int AudioRoute::active_stream_locked() const {
+  if (type_ == "bluetooth") return stream_alive(capture_) ? capture_ : 0;
+  return type_ == "local" ? local_stream() : 0;
+}
+
+void AudioRoute::sink_lost(int stream, const SinkSpec& sink) {
+  {
+    std::lock_guard<std::mutex> lk(lost_m_);
+    lost_.emplace_back(stream, sink.target);
+  }
+  lost_pending_ = true;
+  cv_.notify_all();
+}
+
+void AudioRoute::take_lost_locked() {
+  std::vector<std::pair<int, std::string>> lost;
+  {
+    std::lock_guard<std::mutex> lk(lost_m_);
+    lost.swap(lost_);
+  }
+  const int active = active_stream_locked();
+  if (!active) return;
+  const json outs = input_outputs_locked();
+  for (const auto& [stream, target] : lost) {
+    if (stream != active || target.empty()) continue;
+    for (const json& o : outs)
+      if (str(o, "target") == target) target_looks_[target] = mono_ms() + kSinkLookMs;
+  }
+}
+
 void AudioRoute::look_for_sinks_locked() {
   const int64_t now = mono_ms();
-  const json ep = engine_.endpoints(false);
-  const int active = type_ == "bluetooth" ? (stream_alive(capture_) ? capture_ : 0) : type_ == "local" ? local_stream() : 0;
-  for (auto it = sink_looks_.begin(); it != sink_looks_.end();) {
-    const std::string addr = it->first;
-    std::string sink;
+  json ep = engine_.endpoints(false);
+  // An answer without PipeWire's nodes (pw-dump timed out on a busy Zero W, or failed) says
+  // nothing about them: it ends no look. A look ends without its node only on
+  // a dump made after its time is up, not on a cached one from before the node came.
+  bool fresh = false;
+  const auto known = [&ep] { return str(ep, "backend") == "pipewire" && str(ep, "error").empty(); };
+  const auto settle = [&]() {
+    if (fresh) return;
+    ep = engine_.endpoints(true);
+    fresh = true;
+  };
+  const auto has_node = [&ep](const std::string& id) {
+    for (const json& e : ep.value("sinks", json::array()))
+      if (str(e, "id") == id) return true;
+    return false;
+  };
+  const auto bt_sink = [&ep](const std::string& addr) {
     for (const json& e : ep.value("sinks", json::array())) {
       const std::string k = route_kind(e);
-      if ((k == "a2dp" || k == "bap") && upper(str(e, "address")) == addr) {
-        sink = str(e, "id");
-        break;
-      }
+      if ((k == "a2dp" || k == "bap") && upper(str(e, "address")) == addr) return str(e, "id");
     }
-    if (sink.empty() && now < it->second) {
+    return std::string{};
+  };
+  const int active = active_stream_locked();
+  const json s = active ? engine_.get(active) : json();
+  const auto sink_plays = [&s](const json& k) {
+    const std::string st = str(k, "state");
+    return st == "starting" || st == "playing" || st == "stalled";
+  };
+  const auto plays_to = [&](const std::string& target) {
+    for (const json& k : s.value("sinks_status", json::array()))
+      if (str(k, "target") == target && sink_plays(k)) return true;
+    return false;
+  };
+  const auto replay = [&](const std::string& sink, const char* why) {
+    json updated;
+    std::string err;
+    int status = 0;
+    if (engine_.update(active, json{{"sinks", input_outputs_locked()}}, &updated, &err, &status))
+      LOG_INFO("route: {} {}", sink, why);
+    else
+      LOG_WARN("route: {} came, but the input cannot play to it: {}", sink, err);
+  };
+  std::vector<std::string> replayed;
+
+  // Outputs the input lost: their node made anew (a codec switch) comes back by the same name.
+  for (auto it = target_looks_.begin(); it != target_looks_.end();) {
+    const std::string target = it->first;
+    if (!(known() && has_node(target)) && now >= it->second) settle();
+    const bool there = known() && has_node(target);
+    if (!there && (!known() || now < it->second)) {
+      ++it;
+      continue;
+    }
+    it = target_looks_.erase(it);
+    if (!there || !active || !playing_locked() || plays_to(target)) continue;
+    replay(target, "is back (its node made anew): the input plays to it again");
+    replayed.push_back(target);
+  }
+
+  for (auto it = sink_looks_.begin(); it != sink_looks_.end();) {
+    const std::string addr = it->first;
+    if (bt_sink(addr).empty() && now >= it->second) settle();
+    const std::string sink = known() ? bt_sink(addr) : std::string{};
+    if (sink.empty() && (!known() || now < it->second)) {
       ++it;
       continue;
     }
     it = sink_looks_.erase(it);
     if (sink.empty() || !active || !playing_locked()) continue;
+    if (std::find(replayed.begin(), replayed.end(), sink) != replayed.end()) continue;
     // Never the input's own device: what it sends would go back to it.
     bool input = false;
     for (const RouteDevice& d : devices_) input = input || (type_ == "bluetooth" && d.address == addr);
     if (input) continue;
     bool plays = false;
-    const json s = engine_.get(active);
-    for (const json& k : s.value("sinks_status", json::array())) {
-      const std::string st = str(k, "state");
-      plays = plays || st == "starting" || st == "playing" || st == "stalled";
-    }
+    for (const json& k : s.value("sinks_status", json::array())) plays = plays || sink_plays(k);
     if (plays) continue;
     bool listed = false;
     for (const json& o : outputs_) listed = listed || str(o, "target") == sink;
     if (!listed) outputs_.push_back(json{{"type", "pipewire"}, {"target", sink}});
     save();
-    json updated;
-    std::string err;
-    int status = 0;
-    if (engine_.update(active, json{{"sinks", input_outputs_locked()}}, &updated, &err, &status))
-      LOG_INFO("route: {} came while the input played to no output: it is one now", sink);
-    else
-      LOG_WARN("route: {} came, but the input cannot play to it: {}", sink, err);
+    replay(sink, "came while the input played to no output: it is one now");
   }
 }
 
@@ -599,13 +672,16 @@ void AudioRoute::poke() {
 void AudioRoute::run() {
   std::unique_lock<std::mutex> lk(m_);
   while (!stop_) {
-    cv_.wait_for(lk, std::chrono::seconds(1), [this] { return stop_ || poked_ || unused_; });
+    // A loss queued just before the wait is taken on the next tick at the latest: sink_lost may
+    // not take the route's lock to wake it (lost_m_).
+    cv_.wait_for(lk, std::chrono::seconds(1), [this] { return stop_ || poked_ || unused_ || lost_pending_.load(); });
     if (stop_) break;
     const bool unused = unused_, bt_changed = bt_changed_;
     poked_ = unused_ = bt_changed_ = false;
     const json before = json_locked();
     if (bt_changed && transports_) transports_changed_locked(transports_());
-    if (!sink_looks_.empty()) look_for_sinks_locked();
+    if (lost_pending_.exchange(false)) take_lost_locked();
+    if (!sink_looks_.empty() || !target_looks_.empty()) look_for_sinks_locked();
     if (type_ == "bluetooth" && wait_until_) {
       if (!bind_locked()) {
         const json ts = transports_ ? transports_() : json::array();
