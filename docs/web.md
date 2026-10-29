@@ -164,7 +164,7 @@ and now-playing list; read while the fold is open.
 
 *Library*, a page of its own so long folders get the screen: the phone's own folders and search
 (for a browsable player), the radio
-stations, the media servers on the LAN, and *Test signals* (tones, a left/right check, a sweep,
+stations, the media servers on the LAN (the last search's, *Search again* under them), and *Test signals* (tones, a left/right check, a sweep,
 pink and white noise, silence, and under them any of them made to measure: a tone with its own
 frequency on the right channel if wanted, a sweep's range, length, logarithmic and repeat, white,
 pink or brown noise, the level, and under *Format and gain* the rate, channels and gain): a station plays on its own,

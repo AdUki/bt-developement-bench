@@ -148,7 +148,9 @@ function upnpServers(search) {
     if (!search && !r.servers.length) return upnpServers(true);
     au.libItems = r.servers.map(s => ({kind: 'server', title: s.name, id: s.id, thumb: s.icon,
       sub: [s.manufacturer, s.model].filter(Boolean).join(' ')}));
-    renderLib(r.servers.length ? '' : `<div class="empty-line">No media servers found. <button class="small-btn" data-lib-search="1">Search the network</button></div>`);
+    // The list is the last search's: a server started since (or gone) shows after another one.
+    renderLib(r.servers.length ? '' : `<div class="empty-line">No media servers found.</div>`,
+      `<div class="radio-add row"><button class="small-btn" data-lib-search="1">${svg(PL_SVG.server)} Search again</button></div>`);
   }).catch(e => setHTML($('np-lib'), `<div class="empty-line bad-text">${esc(e.message)}</div>`));
 }
 
