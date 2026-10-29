@@ -213,6 +213,14 @@ both switched on in `prj.conf`:
   read off the capture, with the numbers its firmware's developers need, instead of guessed from a
   0x3e. More of the kind (what the standard events leave out when a peer misbehaves) belong here.
 
+A DK that sits on a board's USB can be reflashed without moving it: SEGGER's `JLinkRemoteServer`
+for arm64 (from the same licence-click download, `JLink_Linux_<ver>_arm64.tgz`; only
+`JLinkRemoteServerCLExe` and `libjlinkarm.so.*` are needed) goes to the board's `/data/jlink` and
+runs there (`LD_LIBRARY_PATH=/data/jlink /data/jlink/JLinkRemoteServerCLExe -Port 19020`, e.g. under
+`systemd-run --unit=jlink-remote`); then `make nrf-flash NRF_IP=<board>` flashes through it. The
+board's HCI goes away during the flash: `systemctl restart btbench-hci-uart@ttyACMn` afterwards, and
+bluetoothd's broadcast probes need `bench audio restart --restart-bt` once the adapter is back.
+
 Moved to a board's USB, the DK is attached by udev (`70-btbench-hci-uart.rules` starts
 `btbench-hci-uart@ttyACMn.service`, which runs `btattach -P h4 -S 1000000` on the port and is
 bound to it), and bluetoothd picks up the new hci as it does any adapter: `bench -a hciN`, Devices

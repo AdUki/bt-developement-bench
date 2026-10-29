@@ -73,10 +73,19 @@ nrf-patches: check-nrf
 nrf-hci: nrf-patches ## Build the nRF54L15 DK's HCI controller firmware (build/nrf-hci)
 	cd $(ZEPHYR_WORKSPACE) && $(WEST) build -b $(NRF_BOARD) -d $(NRF_B) $(NRF_APP)
 
+# A DK that sits on a board's USB is flashed through SEGGER's JLinkRemoteServer running on that
+# board (its arm64 build in /data/jlink, docs/system.md): NRF_IP=<board> makes J-Link Commander
+# use it instead of a local USB probe, with the same script west's jlink runner would run.
+NRF_IP ?=
 .PHONY: nrf-flash
-nrf-flash: check-nrf ## Flash build/nrf-hci onto the DK over its J-Link (the DK on this PC's USB)
+nrf-flash: check-nrf ## Flash build/nrf-hci onto the DK over its J-Link (on this PC's USB, or NRF_IP=<board> running JLinkRemoteServer)
 	@[ -x $(JLINK_DIR)/JLinkExe ] || { echo -e "$(BOLD)No J-Link at $(JLINK_DIR)$(OFF) (JLINK_DIR=)."; exit 1; }
-	cd $(ZEPHYR_WORKSPACE) && $(WEST) flash -d $(NRF_B) --runner jlink
+	@if [ -n "$(NRF_IP)" ]; then \
+	  printf 'ExitOnError 1\nr\nloadfile %s\nr\ng\nq\n' $(NRF_B)/zephyr/zephyr.hex > $(NRF_B)/flash.jlink; \
+	  $(JLINK_DIR)/JLinkExe -nogui 1 -if swd -speed 4000 -device nRF54L15_M33 -ip $(NRF_IP) -CommanderScript $(NRF_B)/flash.jlink; \
+	else \
+	  cd $(ZEPHYR_WORKSPACE) && $(WEST) flash -d $(NRF_B) --runner jlink; \
+	fi
 
 .PHONY: nrf-check
 nrf-check: ## HCI reset, version and LE features from the DK on this PC's USB (NRF_TTY=/dev/ttyACMn)
