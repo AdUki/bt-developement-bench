@@ -1,0 +1,460 @@
+Bluetooth: Controller: Periodic and BIG sync establishment, a wider first window and timing events
+
+Two things for the bench's nRF54L15 DK controller, in Zephyr's open link layer:
+
+1. CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US (default 0: unchanged). The link layer listens for the first
+   AUX_SYNC_IND exactly where the advertiser's SyncInfo offset put it, plus clock drift and the
+   offset's own unit. A stream195x board's Infineon controller announces its periodic
+   advertising 10 ms (one ISO interval of its BIG) earlier than it sends it: all six establishment
+   attempts miss and the sync fails with 0x3e, while tolerant receivers join. The option opens the
+   first window that much earlier and longer, bounded by half the periodic interval, and reserves
+   the time until the first PDU is in; the anchor is then re-aligned to the PDU, the reservation
+   given back, and the normal window applies.
+
+2. CONFIG_BT_CTLR_SYNC_TIMING_EVENTS. After LE Periodic Advertising Sync Established (also a
+   failed one) and LE BIG Sync Established, a vendor event (subevent 0xb0, 0xb2; hci_vs.h) says
+   where the first PDU landed relative to the announced SyncInfo or BIGInfo offset, how many events
+   were listened to and how many PDUs failed their CRC. Measured with it: a stream210 (Realtek) and a
+   Galaxy S24 land within 100 us of their SyncInfo, the stream195x 10.0 ms late. A peer whose offsets
+   are wrong is then a line in the HCI trace instead of a bare failure, for whoever owns its firmware.
+
+Applied to the workspace's Zephyr tree (ZEPHYR_VERSION) by `make nrf-hci`; the bench's prj.conf
+sets both.
+
+diff --git a/include/zephyr/bluetooth/hci_vs.h b/include/zephyr/bluetooth/hci_vs.h
+index 529c5045123..57b88075272 100644
+--- a/include/zephyr/bluetooth/hci_vs.h
++++ b/include/zephyr/bluetooth/hci_vs.h
+@@ -235,6 +235,32 @@ struct bt_hci_evt_vs {
+ 	uint8_t  subevent;
+ } __packed;
+ 
++/* Diagnostic events of the bench's controller build (CONFIG_BT_CTLR_SYNC_TIMING_EVENTS): after
++ * LE Periodic Advertising Sync Established and LE BIG Sync Established, where the first PDU was
++ * received relative to where the advertiser's SyncInfo or BIGInfo offset announced it (positive:
++ * later), how many events were listened to and how many PDUs failed their CRC on the way.
++ */
++#define BT_HCI_EVT_VS_PER_ADV_SYNC_TIMING      0xb0
++struct bt_hci_evt_vs_per_adv_sync_timing {
++	uint8_t  status;
++	uint16_t sync_handle;
++	uint16_t interval;
++	uint8_t  phy;
++	uint8_t  events;
++	uint8_t  crc_fail;
++	int32_t  first_pdu_offset_us;
++	uint32_t window_us;
++} __packed;
++
++#define BT_HCI_EVT_VS_BIG_SYNC_TIMING          0xb2
++struct bt_hci_evt_vs_big_sync_timing {
++	uint8_t  status;
++	uint8_t  big_handle;
++	uint16_t iso_interval;
++	int32_t  first_pdu_offset_us;
++	uint32_t window_us;
++} __packed;
++
+ #define BT_HCI_EVT_VS_ERROR_DATA_TYPE_STACK_FRAME   0x01
+ #define BT_HCI_EVT_VS_ERROR_DATA_TYPE_CTRL_ASSERT   0x02
+ #define BT_HCI_EVT_VS_ERROR_DATA_TYPE_TRACE         0x03
+diff --git a/subsys/bluetooth/controller/Kconfig.ll_sw_split b/subsys/bluetooth/controller/Kconfig.ll_sw_split
+index c1ff1ce4228..109694a7660 100644
+--- a/subsys/bluetooth/controller/Kconfig.ll_sw_split
++++ b/subsys/bluetooth/controller/Kconfig.ll_sw_split
+@@ -575,6 +575,33 @@ config BT_CTLR_SCAN_AUX_SYNC_RESERVE_MIN
+ 	  reservation would avoid skipping closely scheduled reception of
+ 	  multiple Auxiliary or Periodic Sync PDUs.
+ 
++config BT_CTLR_SYNC_ESTAB_WINDOW_US
++	int "Extra receive window while establishing a periodic sync (us)"
++	depends on BT_CTLR_SYNC_PERIODIC
++	default 0
++	range 0 1000000
++	help
++	  Microseconds added before and after the time the SyncInfo offset
++	  names, to the receive window for the first AUX_SYNC_IND of a periodic
++	  advertising sync being established. 0 listens only where the
++	  advertiser announced the PDU, plus clock drift, as the specification
++	  allows. A larger value also synchronizes to advertisers whose SyncInfo
++	  offset is wrong (a controller that sends the PDU one whole ISO interval
++	  later than announced has been seen), at the cost of a longer radio
++	  event and time reservation until the first PDU is received. It is
++	  limited to half the periodic interval.
++
++config BT_CTLR_SYNC_TIMING_EVENTS
++	bool "Vendor events with the timing of periodic and BIG sync establishment"
++	depends on BT_CTLR_SYNC_PERIODIC && BT_HCI_VS
++	help
++	  After LE Periodic Advertising Sync Established and LE BIG Sync
++	  Established, also send a vendor event (subevents 0xb0 and 0xb2)
++	  saying how far the first PDU was from where the advertiser's SyncInfo
++	  or BIGInfo offset announced it, how many events were listened to and
++	  how many PDUs failed their CRC. A peer whose offsets are wrong is then
++	  visible in an HCI trace instead of as a bare failure.
++
+ config BT_CTLR_SYNC_PERIODIC_SKIP_ON_SCAN_AUX
+ 	bool "Skip Periodic Sync event on overlap with Extended Scan Event"
+ 	depends on BT_CTLR_SYNC_PERIODIC
+diff --git a/subsys/bluetooth/controller/hci/hci.c b/subsys/bluetooth/controller/hci/hci.c
+index 944b1ec5db0..b8bc915e0cc 100644
+--- a/subsys/bluetooth/controller/hci/hci.c
++++ b/subsys/bluetooth/controller/hci/hci.c
+@@ -7799,6 +7799,28 @@ static void le_per_adv_sync_established(struct pdu_data *pdu_data,
+ 	sep->phy = find_lsb_set(se->phy);
+ 	sep->interval = sys_cpu_to_le16(se->interval);
+ 	sep->clock_accuracy = se->sca;
++
++#if defined(CONFIG_BT_CTLR_SYNC_TIMING_EVENTS)
++	{
++		struct bt_hci_evt_vs_per_adv_sync_timing *vs;
++		struct net_buf *evt_buf;
++
++		/* The timing of the establishment, as a second event after this one */
++		evt_buf = bt_buf_get_rx(BT_BUF_EVT, BUF_GET_TIMEOUT);
++		LL_ASSERT_ERR(evt_buf);
++		net_buf_frag_add(buf, evt_buf);
++
++		vs = vs_event(evt_buf, BT_HCI_EVT_VS_PER_ADV_SYNC_TIMING, sizeof(*vs));
++		vs->status = se->status;
++		vs->sync_handle = sep->handle;
++		vs->interval = sep->interval;
++		vs->phy = sep->phy;
++		vs->events = se->events;
++		vs->crc_fail = se->crc_fail;
++		vs->first_pdu_offset_us = sys_cpu_to_le32((uint32_t)se->estab_err_us);
++		vs->window_us = sys_cpu_to_le32(sync->lll.estab_extra_us);
++	}
++#endif /* CONFIG_BT_CTLR_SYNC_TIMING_EVENTS */
+ }
+ 
+ static void le_per_adv_sync_report(struct pdu_data *pdu_data,
+@@ -8208,6 +8230,25 @@ static void le_big_sync_established(struct pdu_data *pdu,
+ 
+ 	se = node;
+ 	sep->status = se->status;
++
++#if defined(CONFIG_BT_CTLR_SYNC_TIMING_EVENTS)
++	if (se->status != BT_HCI_ERR_OP_CANCELLED_BY_HOST) {
++		struct bt_hci_evt_vs_big_sync_timing *vs;
++		struct net_buf *evt_buf;
++
++		/* The timing of the establishment, as a second event after this one */
++		evt_buf = bt_buf_get_rx(BT_BUF_EVT, BUF_GET_TIMEOUT);
++		LL_ASSERT_ERR(evt_buf);
++		net_buf_frag_add(buf, evt_buf);
++
++		vs = vs_event(evt_buf, BT_HCI_EVT_VS_BIG_SYNC_TIMING, sizeof(*vs));
++		vs->status = se->status;
++		vs->big_handle = sep->big_handle;
++		vs->iso_interval = sys_cpu_to_le16(lll->iso_interval);
++		vs->first_pdu_offset_us = sys_cpu_to_le32((uint32_t)se->estab_err_us);
++		vs->window_us = sys_cpu_to_le32(se->window_us);
++	}
++#endif /* CONFIG_BT_CTLR_SYNC_TIMING_EVENTS */
+ 	if (sep->status) {
+ 		return;
+ 	}
+diff --git a/subsys/bluetooth/controller/ll_sw/lll_sync.h b/subsys/bluetooth/controller/ll_sw/lll_sync.h
+index 0bce7bd2260..c11f1ba7457 100644
+--- a/subsys/bluetooth/controller/ll_sw/lll_sync.h
++++ b/subsys/bluetooth/controller/ll_sw/lll_sync.h
+@@ -62,6 +62,11 @@ struct lll_sync {
+ 	uint32_t window_widening_prepare_us;
+ 	uint32_t window_widening_event_us;
+ 	uint32_t window_size_event_us;
++	/* What CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US added to the first window on each side, and
++	 * where the first PDU then landed relative to the SyncInfo offset (positive: later).
++	 */
++	uint32_t estab_extra_us;
++	int32_t estab_err_us;
+ 
+ 	/* used to store lll_aux when chain is being scanned */
+ 	struct lll_scan_aux *volatile lll_aux;
+diff --git a/subsys/bluetooth/controller/ll_sw/lll_sync_iso.h b/subsys/bluetooth/controller/ll_sw/lll_sync_iso.h
+index 4d1d8938881..82e6106b791 100644
+--- a/subsys/bluetooth/controller/ll_sw/lll_sync_iso.h
++++ b/subsys/bluetooth/controller/ll_sw/lll_sync_iso.h
+@@ -102,6 +102,8 @@ struct lll_sync_iso {
+ 	uint32_t window_widening_prepare_us;
+ 	uint32_t window_widening_event_us;
+ 	uint32_t window_size_event_us;
++	/* The first window's size, kept for the BIG sync timing event. */
++	uint32_t estab_window_us;
+ };
+ 
+ int lll_sync_iso_init(void);
+diff --git a/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync.c b/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync.c
+index 1da34a1a492..f66e63b48a8 100644
+--- a/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync.c
++++ b/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync.c
+@@ -797,6 +797,21 @@ static int isr_rx(struct lll_sync *lll, uint8_t node_type, uint8_t crc_ok,
+ 	bool sched = false;
+ 	int err;
+ 
++	/* Where did the establishing PDU land relative to where the SyncInfo
++	 * offset put it (positive: later)? The nominal position in the window
++	 * is the jitter and ticker margins, the widening and the extra
++	 * establishment window opened before it, then the preamble and
++	 * access address.
++	 */
++	if (crc_ok && (node_type == NODE_RX_TYPE_SYNC)) {
++		uint32_t actual_us = radio_tmr_aa_restore() - radio_tmr_ready_restore();
++		uint32_t nominal_us = EVENT_JITTER_US + EVENT_TICKER_RES_MARGIN_US +
++				      lll->window_widening_event_us + lll->estab_extra_us +
++				      addr_us_get(lll->phy);
++
++		lll->estab_err_us = (int32_t)actual_us - (int32_t)nominal_us;
++	}
++
+ 	/* Check CRC and generate Periodic Advertising Report */
+ 	if (crc_ok) {
+ 		struct node_rx_pdu *node_rx;
+diff --git a/subsys/bluetooth/controller/ll_sw/ull_sync.c b/subsys/bluetooth/controller/ll_sw/ull_sync.c
+index 001740e1219..74e572558ea 100644
+--- a/subsys/bluetooth/controller/ll_sw/ull_sync.c
++++ b/subsys/bluetooth/controller/ll_sw/ull_sync.c
+@@ -279,6 +279,10 @@ void ull_sync_setup_from_sync_transfer(struct ll_conn *conn, uint16_t service_da
+ 	}
+ 
+ 	sync->sync_expire = CONN_ESTAB_COUNTDOWN;
++	sync->estab_events = 0U;
++	sync->estab_crc_fail = 0U;
++	lll->estab_extra_us = 0U;
++	lll->estab_err_us = 0;
+ 
+ 	/* Extract the SCA value from the sca_chm field of the sync_info
+ 	 * structure.
+@@ -956,6 +960,7 @@ void ull_sync_setup(struct ll_scan_set *scan, uint8_t phy,
+ 	uint16_t sync_handle;
+ 	uint32_t interval_us;
+ 	uint32_t overhead_us;
++	uint32_t estab_extra_us;
+ 	struct pdu_adv *pdu;
+ 	uint16_t interval;
+ 	uint32_t slot_us;
+@@ -1025,6 +1030,10 @@ void ull_sync_setup(struct ll_scan_set *scan, uint8_t phy,
+ 	}
+ 
+ 	sync->sync_expire = CONN_ESTAB_COUNTDOWN;
++	sync->estab_events = 0U;
++	sync->estab_crc_fail = 0U;
++	lll->estab_extra_us = 0U;
++	lll->estab_err_us = 0;
+ 
+ 	/* Extract the SCA value from the sca_chm field of the sync_info
+ 	 * structure.
+@@ -1109,6 +1118,26 @@ void ull_sync_setup(struct ll_scan_set *scan, uint8_t phy,
+ 	/* CPU execution overhead to setup the radio for reception */
+ 	overhead_us += EVENT_OVERHEAD_END_US + EVENT_OVERHEAD_START_US;
+ 
++	/* Open the first receive window CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US
++	 * before and after the time the SyncInfo offset names, for
++	 * advertisers whose offset is wrong, keeping the window inside one
++	 * periodic interval. The anchor is re-aligned to where the first PDU
++	 * is actually received, so later events use the normal window.
++	 */
++	estab_extra_us = MIN(CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US,
++			     lll->window_widening_max_us);
++	if (estab_extra_us) {
++		while ((sync_offset_us - ftr->radio_end_us) <
++		       (estab_extra_us + overhead_us)) {
++			sync_offset_us += interval_us;
++			lll->event_counter++;
++		}
++
++		lll->window_size_event_us += 2U * estab_extra_us;
++		sync_offset_us -= estab_extra_us;
++	}
++	lll->estab_extra_us = estab_extra_us;
++
+ 	/* If not sufficient CPU processing time, skip to receiving next
+ 	 * event.
+ 	 */
+@@ -1130,6 +1159,14 @@ void ull_sync_setup(struct ll_scan_set *scan, uint8_t phy,
+ 
+ 	sync->ull.ticks_slot = HAL_TICKER_US_TO_TICKS_CEIL(slot_us);
+ 
++	/* Reserve the establishment window too, until the first PDU is
++	 * received (ull_sync_done gives it back).
++	 */
++	sync->ticks_slot_estab_extra =
++		HAL_TICKER_US_TO_TICKS_CEIL(slot_us + (2U * estab_extra_us)) -
++		sync->ull.ticks_slot;
++	sync->ull.ticks_slot += sync->ticks_slot_estab_extra;
++
+ 	ticks_slot_offset = HAL_TICKER_US_TO_TICKS(EVENT_OVERHEAD_XTAL_US);
+ 	if (IS_ENABLED(CONFIG_BT_CTLR_LOW_LAT)) {
+ 		ticks_slot_overhead = ticks_slot_offset;
+@@ -1247,6 +1284,10 @@ void ull_sync_established_report(memq_link_t *link, struct node_rx_pdu *rx)
+ 		se->status = BT_HCI_ERR_SUCCESS;
+ #endif /* CONFIG_BT_CTLR_SYNC_PERIODIC_CTE_TYPE_FILTERING */
+ 
++		se->estab_err_us = lll->estab_err_us;
++		se->events = sync->estab_events;
++		se->crc_fail = sync->estab_crc_fail;
++
+ 		/* NOTE: footer param has already been populated during sync
+ 		 * setup.
+ 		 */
+@@ -1313,6 +1354,7 @@ void ull_sync_done(struct node_rx_event_done *done)
+ 	{
+ 		uint32_t ticks_drift_minus;
+ 		uint32_t ticks_drift_plus;
++		uint32_t ticks_slot_minus;
+ 		uint16_t elapsed_event;
+ 		struct lll_sync *lll;
+ 		uint16_t skip_event;
+@@ -1328,6 +1370,19 @@ void ull_sync_done(struct node_rx_event_done *done)
+ 		/* Sync drift compensation and new skip calculation */
+ 		ticks_drift_plus = 0U;
+ 		ticks_drift_minus = 0U;
++		ticks_slot_minus = 0U;
++
++		/* Count what establishing the sync took, for its timing event */
++		if (sync->node_rx_sync_estab) {
++			if (sync->estab_events < UINT8_MAX) {
++				sync->estab_events++;
++			}
++			if (done->extra.trx_cnt && !done->extra.crc_valid &&
++			    (sync->estab_crc_fail < UINT8_MAX)) {
++				sync->estab_crc_fail++;
++			}
++		}
++
+ 		if (done->extra.trx_cnt) {
+ 			/* Calculate drift in ticks unit */
+ 			ull_drift_ticks_get(done, &ticks_drift_plus, &ticks_drift_minus);
+@@ -1335,6 +1390,15 @@ void ull_sync_done(struct node_rx_event_done *done)
+ 			/* Enforce skip */
+ 			lll->skip_event = sync->skip;
+ 
++			/* First PDU received: the establishment receive
++			 * window's time reservation is no longer needed.
++			 */
++			if (sync->sync_expire && sync->ticks_slot_estab_extra) {
++				ticks_slot_minus = sync->ticks_slot_estab_extra;
++				sync->ull.ticks_slot -= ticks_slot_minus;
++				sync->ticks_slot_estab_extra = 0U;
++			}
++
+ 			/* Reset failed to establish sync countdown */
+ 			sync->sync_expire = 0U;
+ 		}
+@@ -1395,7 +1459,8 @@ void ull_sync_done(struct node_rx_event_done *done)
+ 		}
+ 
+ 		/* Update Sync ticker instance */
+-		if (ticks_drift_plus || ticks_drift_minus || lazy || force) {
++		if (ticks_drift_plus || ticks_drift_minus || ticks_slot_minus ||
++		    lazy || force) {
+ 			uint16_t sync_handle = ull_sync_handle_get(sync);
+ 			uint32_t ticker_status;
+ 
+@@ -1412,7 +1477,8 @@ void ull_sync_done(struct node_rx_event_done *done)
+ 					      (TICKER_ID_SCAN_SYNC_BASE +
+ 					       sync_handle),
+ 					      ticks_drift_plus,
+-					      ticks_drift_minus, 0, 0,
++					      ticks_drift_minus, 0,
++					      ticks_slot_minus,
+ 					      lazy, force,
+ 					      ticker_update_op_cb, sync);
+ 			LL_ASSERT_ERR((ticker_status == TICKER_STATUS_SUCCESS) ||
+@@ -1769,6 +1835,9 @@ static void sync_expire(void *param)
+ 	 */
+ 	se = (void *)rx->pdu;
+ 	se->status = BT_HCI_ERR_CONN_FAIL_TO_ESTAB;
++	se->estab_err_us = 0;
++	se->events = sync->estab_events;
++	se->crc_fail = sync->estab_crc_fail;
+ 
+ 	/* NOTE: footer param has already been populated during sync setup */
+ 
+diff --git a/subsys/bluetooth/controller/ll_sw/ull_sync_iso.c b/subsys/bluetooth/controller/ll_sw/ull_sync_iso.c
+index 24b38eae24c..dd0491c2185 100644
+--- a/subsys/bluetooth/controller/ll_sw/ull_sync_iso.c
++++ b/subsys/bluetooth/controller/ll_sw/ull_sync_iso.c
+@@ -575,6 +575,7 @@ void ull_sync_iso_setup(struct ll_sync_iso_set *sync_iso,
+ 	} else {
+ 		lll->window_size_event_us = OFFS_UNIT_30_US;
+ 	}
++	lll->estab_window_us = lll->window_size_event_us;
+ 
+ 	ftr = &node_rx->rx_ftr;
+ 	pdu = (void *)((struct node_rx_pdu *)node_rx)->pdu;
+@@ -740,6 +741,21 @@ void ull_sync_iso_estab_done(struct node_rx_event_done *done)
+ 			se->status = BT_HCI_ERR_SUCCESS;
+ 		}
+ 
++		/* Where the first BIS PDU landed relative to the BIGInfo offset
++		 * (positive: later), for the BIG sync timing event.
++		 */
++		se->window_us = sync_iso->lll.estab_window_us;
++		se->estab_err_us = 0;
++		if (done->extra.trx_cnt) {
++			uint32_t nominal_us = EVENT_JITTER_US + EVENT_TICKER_RES_MARGIN_US +
++					      done->extra.drift.window_widening_event_us +
++					      done->extra.drift.preamble_to_addr_us;
++
++			se->estab_err_us =
++				(int32_t)done->extra.drift.start_to_address_actual_us -
++				(int32_t)nominal_us;
++		}
++
+ 		ll_rx_put_sched(rx->hdr.link, rx);
+ 	}
+ 
+diff --git a/subsys/bluetooth/controller/ll_sw/ull_sync_types.h b/subsys/bluetooth/controller/ll_sw/ull_sync_types.h
+index 5ec93ee81cd..bd4e12ca0bc 100644
+--- a/subsys/bluetooth/controller/ll_sw/ull_sync_types.h
++++ b/subsys/bluetooth/controller/ll_sw/ull_sync_types.h
+@@ -26,6 +26,16 @@ struct ll_sync_set {
+ 	uint16_t volatile timeout_reload;
+ 	uint16_t timeout_expire;
+ 
++	/* Ticks the establishment receive window
++	 * (CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US) added to ull.ticks_slot;
++	 * given back once the first AUX_SYNC_IND is received.
++	 */
++	uint32_t ticks_slot_estab_extra;
++
++	/* Events listened to and PDUs with a bad CRC before the sync was established. */
++	uint8_t estab_events;
++	uint8_t estab_crc_fail;
++
+ 	/* Member to store periodic advertising sync prepare.
+ 	 * Also serves as a flag to inform if sync established was
+ 	 * already generated.
+@@ -105,6 +115,10 @@ struct node_rx_sync {
+ 	uint8_t  phy;
+ 	uint16_t interval;
+ 	uint8_t  sca;
++	/* For the periodic sync timing vendor event. */
++	int32_t  estab_err_us;
++	uint8_t  events;
++	uint8_t  crc_fail;
+ };
+ 
+ struct node_rx_past_received {
+@@ -139,13 +153,18 @@ struct ll_sync_iso_set {
+ 	 */
+ 	struct {
+ 		struct node_rx_pdu rx;
+-		/* Dummy declaration to ensure space allocated to hold two pdu bytes */
+-		uint8_t dummy[2];
++		/* Dummy declaration to ensure space allocated to hold a struct node_rx_sync_iso
++		 * (the status, interval and the BIG sync timing event's fields).
++		 */
++		uint8_t dummy[12];
+ 	} node_rx_lost;
+ };
+ 
+ struct node_rx_sync_iso {
+ 	uint8_t status;
+ 	uint16_t interval;
++	/* For the BIG sync timing vendor event. */
++	int32_t  estab_err_us;
++	uint32_t window_us;
+ };
+ #endif /* CONFIG_BT_CTLR_SYNC_ISO */

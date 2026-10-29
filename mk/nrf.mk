@@ -57,8 +57,20 @@ nrf-setup: ## Once: west venv, the Zephyr workspace with its modules, the SDK's 
 	fi; \
 	[ -x $(JLINK_DIR)/JLinkExe ] || echo -e "$(BOLD)No J-Link at $(JLINK_DIR).$(OFF) Unpack SEGGER's JLink_Linux_x86_64.deb there (dpkg-deb -x) for make nrf-flash."
 
+# The bench's changes to Zephyr's link layer are plain diffs in tools/nrf-hci/patches, applied to
+# the workspace's zephyr tree before a build (a patch already in is left alone, so a tree with
+# local work on top still builds); each patch starts with the prose of why.
+.PHONY: nrf-patches
+nrf-patches: check-nrf
+	@for p in $(NRF_APP)/patches/*.patch; do \
+	  [ -f "$$p" ] || continue; \
+	  if git -C $(ZEPHYR_WORKSPACE)/zephyr apply --check -R "$$p" >/dev/null 2>&1; then continue; fi; \
+	  echo "applying $$(basename $$p) to $(ZEPHYR_WORKSPACE)/zephyr"; \
+	  git -C $(ZEPHYR_WORKSPACE)/zephyr apply "$$p" || exit 1; \
+	done
+
 .PHONY: nrf-hci
-nrf-hci: check-nrf ## Build the nRF54L15 DK's HCI controller firmware (build/nrf-hci)
+nrf-hci: nrf-patches ## Build the nRF54L15 DK's HCI controller firmware (build/nrf-hci)
 	cd $(ZEPHYR_WORKSPACE) && $(WEST) build -b $(NRF_BOARD) -d $(NRF_B) $(NRF_APP)
 
 .PHONY: nrf-flash

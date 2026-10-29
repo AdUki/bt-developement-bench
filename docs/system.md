@@ -191,10 +191,27 @@ J-Link software is the one download with a licence click: unpack `JLink_Linux_x8
 `dpkg-deb -x` into `JLINK_DIR`, no root needed. Then, with the DK on this PC's USB:
 
 ```
-make nrf-hci      # build/nrf-hci
+make nrf-hci      # build/nrf-hci (first applies tools/nrf-hci/patches to the Zephyr tree)
 make nrf-flash    # over the DK's J-Link
 make nrf-check    # HCI reset, version, BD_ADDR, LE features, buffer sizes — no root, no attach
 ```
+
+The bench's own changes to Zephyr's link layer are diffs in `tools/nrf-hci/patches/`, each
+opening with why; `make nrf-hci` applies the ones not yet in the workspace's tree (a patch whose
+hunks a later one touches would fail that check, so the changes stay in one file). What is in it,
+both switched on in `prj.conf`:
+
+- `CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US`: a wider receive window for the first PDU of a periodic
+  advertising sync. Zephyr listens exactly where the advertiser's SyncInfo offset says, which the
+  specification allows, but a StreamSDK stream195x board's Infineon controller sends its AUX_SYNC_IND
+  10 ms (one ISO interval of its BIG) later than it announces, so every sync to its Auracast failed
+  with 0x3e; with the window the sync takes one event, and the normal window is used from the next.
+- `CONFIG_BT_CTLR_SYNC_TIMING_EVENTS`: after every periodic sync (established or failed) and BIG
+  sync, a vendor event with where the first PDU landed relative to the announced offset, the
+  events listened to and the CRC failures. The monitor decodes them as `Zephyr Periodic Sync
+  Timing` and `Zephyr BIG Sync Timing` (`is:vendor`), so a peer with a wrong SyncInfo or BIGInfo is
+  read off the capture, with the numbers its firmware's developers need, instead of guessed from a
+  0x3e. More of the kind (what the standard events leave out when a peer misbehaves) belong here.
 
 Moved to a board's USB, the DK is attached by udev (`70-btbench-hci-uart.rules` starts
 `btbench-hci-uart@ttyACMn.service`, which runs `btattach -P h4 -S 1000000` on the port and is
