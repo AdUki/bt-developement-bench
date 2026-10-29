@@ -263,7 +263,7 @@ struct ObexManager::Bus {
 
 ObexManager::ObexManager(Options opt, Publish publish, HasSubscribers has_subscribers)
     : opt_(std::move(opt)), publish_(std::move(publish)), has_subscribers_(std::move(has_subscribers)) {
-  for (const char* d : {"in", "out", "shared", "in/cover"}) mkdirs(opt_.root + "/" + d);
+  make_root();
   // What the server does with a push is a setting: kept across reboots, unlike the files.
   if (!opt_.state_file.empty()) {
     std::ifstream f(opt_.state_file);
@@ -403,6 +403,14 @@ void ObexManager::set_noplugin(const std::string& list) {
 
 bool ObexManager::start(std::string* err) { return ensure_running(err); }
 
+// The root and its folders, made before obexd is started and not only once: systemd's tmp
+// cleaning removes what in /tmp looks old, and empty folders made at boot look old on a board
+// without a clock once NTP sets the time (the image's tmpfiles rule exempts /tmp/btbench, an
+// older image has none). An obexd whose root is gone exits at once.
+void ObexManager::make_root() {
+  for (const char* d : {"in", "out", "shared", "in/cover"}) mkdirs(opt_.root + "/" + d);
+}
+
 bool ObexManager::ensure_running(std::string* err) {
   {
     std::lock_guard<std::mutex> lk(m_);
@@ -418,6 +426,7 @@ bool ObexManager::ensure_running(std::string* err) {
   // obexd writes nothing outside its root — not even where its own agent says to put a push — so
   // the root is the whole OBEX folder: pushes land in in/, and a device browsing the board over
   // FTP sees in/, out/ and shared/.
+  make_root();
   Spawned p;
   std::string e;
   std::vector<std::string> argv{exe, "-n", "-s", "-r", opt_.root};
@@ -584,6 +593,13 @@ void ObexManager::on_signal(sd_bus_message* m) {
       owner_ = new_owner ? new_owner : "";
       agent_registered_ = false;
       if (owner_.empty()) {
+        // Ours gave the name up by exiting (obexd takes the name before it sets up its root, so a
+        // failing one appears and goes again): reaped here, or it stays a zombie and the next
+        // start would wait for an owner that is gone.
+        if (managed_ && pid_ > 0 && waitpid(pid_, nullptr, WNOHANG) == pid_) {
+          pid_ = -1;
+          managed_ = false;
+        }
         sessions_.clear();
         session_meta_.clear();
         if (request_ && request_->msg) request_->msg = sd_bus_message_unref(request_->msg);

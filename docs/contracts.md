@@ -90,7 +90,7 @@ in `SRC_URI` as `file://...`, so bitbake tracks their checksums.
   - `/data/btbench/factory-reset` — written by `POST /api/system/factory-reset`; at the next boot
     btbench-data empties `/data/btbench` except `ssh/`, `timesync/` and (unless the file says
     `wifi`) `wifi/`, and `/data/bluetooth` when it says `pairings`, then removes it.
-  - `/tmp/btbench/obex/` — OBEX files and obexd's root, in RAM (btbenchd `--volatile-dir`): `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`.
+  - `/tmp/btbench/obex/` — OBEX files and obexd's root, in RAM (btbenchd `--volatile-dir`): `in/` (received, pulled; `in/cover/` cover art), `out/` (to send), `shared/`. Made before each obexd start; `/tmp/btbench` and `/tmp/btbench-cover` are exempt from systemd's 10-day cleaning of `/tmp` (btbench-base's tmpfiles rule), which would otherwise remove folders made before NTP set a clockless board's time.
   - `/data/btbench/ssh/` — sshd's host keys (btbench-sshkeys); sshd reads them through `/run/btbench/ssh`.
   - `/data/btbench/timesync/` — systemd-timesyncd's clock, bound over `/var/lib/systemd/timesync` (btbench-data).
   - `/data/btbench/wifi/` — wpa_supplicant networks.

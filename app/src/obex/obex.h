@@ -141,6 +141,7 @@ class ObexManager {
   void publish_soon();
   void tick();
   bool ensure_running(std::string* err);
+  void make_root();
   bool wait_for_owner(int timeout_ms);
   std::string session_path(const std::string& id) const;
   nlohmann::json files_json() const;
