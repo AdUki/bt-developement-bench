@@ -443,6 +443,8 @@ const char* cmd_name(uint16_t op) {
 // Vendor opcodes (OGF 0x3f) mean one thing on an Intel controller and another on a Broadcom or
 // Realtek one, so they are Intel's only where the controller said it is Intel (Out::manufacturer).
 constexpr uint16_t kCompanyIntel = 0x0002;
+// Zephyr's open-source controller, which the bench's nRF54L15 DK firmware (tools/nrf-hci) runs.
+constexpr uint16_t kCompanyZephyr = 0x05f1;
 // Intel's opcode for the Microsoft extension (btintel_set_msft_opcode), which bluetoothd's
 // advertisement monitors go through.
 constexpr uint16_t kIntelMsft = 0xfc1e;
@@ -3117,6 +3119,66 @@ std::string intel_telemetry_value(uint8_t id, const uint8_t* v, size_t n) {
 }
 
 // The parameters of an Intel vendor event (after the event code and length); returns its summary.
+// Zephyr's vendor events (its hci_vs.h), plus the bench firmware's own: 0xb0 reports where the
+// first AUX_SYNC_IND of a periodic advertising sync landed relative to where the advertiser's
+// SyncInfo offset put it, so a controller that announces its periodic advertising wrongly (one did
+// so by a whole ISO interval) shows up in the capture instead of as an unexplained 0x3e.
+const char* zephyr_evt_name(uint32_t v) {
+  switch (v) {
+    case 0x02: return "Fatal Error";
+    case 0x03: return "Trace Info";
+    case 0x04: return "Scan Request Received";
+    case 0x05: return "LE Connectionless IQ Report";
+    case 0x06: return "LE Connection IQ Report";
+    case 0xb0: return "Periodic Sync Timing";
+    case 0xb2: return "BIG Sync Timing";
+    default: return nullptr;
+  }
+}
+
+std::string zephyr_event(Rd& r) {
+  if (!r.has(1)) return "Zephyr Vendor";
+  const uint8_t code = static_cast<uint8_t>(r.named("Subevent", 1, [](uint32_t v) {
+    const char* n = zephyr_evt_name(v);
+    return n ? n : "?";
+  }));
+  const char* name = zephyr_evt_name(code);
+  std::string s = name ? std::string("Zephyr ") + name : sf("Zephyr Vendor 0x%02x", code);
+  if (code == 0xb0 && r.has(16)) {
+    const uint8_t st = r.status();
+    const uint16_t h = r.handle("Sync handle");
+    r.time("Interval", 2, 1.25);
+    r.phy("PHY");
+    const uint8_t ev = r.u8("Events listened");
+    const uint8_t crc = r.u8("CRC failures");
+    const int32_t off = static_cast<int32_t>(r.with("First PDU offset", 4, [](uint32_t v) {
+      return sf("%+d us from the SyncInfo offset", static_cast<int32_t>(v));
+    }));
+    const uint32_t win = r.with("Window", 4, [](uint32_t v) { return sf("%u us extra each side", v); });
+    if (st == 0) {
+      s += sf(" sync handle %u: first AUX_SYNC_IND %+.2f ms from its SyncInfo (window ±%.1f ms extra), %u events, %u CRC "
+              "failures", h, off / 1000.0, win / 1000.0, ev, crc);
+    } else {
+      s += sf(" failed: %s, nothing within ±%.1f ms extra of the SyncInfo offset in %u events, %u CRC failures",
+              error_name(st), win / 1000.0, ev, crc);
+    }
+  } else if (code == 0xb2 && r.has(12)) {
+    const uint8_t st = r.status();
+    const uint8_t big = r.u8("BIG handle");
+    r.time("ISO interval", 2, 1.25);
+    const int32_t off = static_cast<int32_t>(r.with("First PDU offset", 4, [](uint32_t v) {
+      return sf("%+d us from the BIGInfo offset", static_cast<int32_t>(v));
+    }));
+    const uint32_t win = r.with("Window", 4, [](uint32_t v) { return sf("%u us", v); });
+    if (st == 0) {
+      s += sf(" BIG %u: first BIS PDU %+.2f ms from its BIGInfo (window %u us)", big, off / 1000.0, win);
+    } else {
+      s += sf(" BIG %u failed: %s", big, error_name(st));
+    }
+  }
+  return s;
+}
+
 std::string intel_event(Rd& r) {
   if (!r.has(1)) return "Intel Vendor";
   const uint8_t* p = r.cur();
@@ -5430,6 +5492,8 @@ void hci_event(Out& o, const uint8_t* d, size_t len) {
     case 0xff:
       if (o.manufacturer == kCompanyIntel) {
         s = intel_event(r);
+      } else if (o.manufacturer == kCompanyZephyr) {
+        s = zephyr_event(r);
       } else if (n) {
         F("Data", hexbytes(p, n, 64), p, n);
       }

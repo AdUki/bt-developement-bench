@@ -493,6 +493,25 @@ void test_intel_vendor() {
   CHECK_EQ(d.summary, std::string("Intel Fatal Exception LM line 4660 reason 0x07"));
   d = intel_evt("ff06" "2c68656c6c6f");
   CHECK_EQ(d.summary, std::string("Intel FW Trace String \"hello\""));
+  // Zephyr (the nRF DK firmware): the bench's sync timing events. A periodic sync to a 30 ms
+  // train on LE 2M whose first AUX_SYNC_IND came 10 ms late, caught by the 14 ms extra window
+  // after 1 event and no CRC failure; one that failed; a BIG sync 40 us early.
+  d = run_mon(btb::hci::kMonEvent, "ff11b0" "00" "0000" "1800" "02" "01" "00" "10270000" "b0360000", 0, 0, nullptr,
+              0x05f1);
+  CHECK_EQ(d.summary, std::string("Zephyr Periodic Sync Timing sync handle 0: first AUX_SYNC_IND +10.00 ms from "
+                                  "its SyncInfo (window ±14.0 ms extra), 1 events, 0 CRC failures"));
+  CHECK_EQ(field(d.fields, "First PDU offset"), std::string("+10000 us from the SyncInfo offset"));
+  CHECK(no_blob(d.fields));
+  d = run_mon(btb::hci::kMonEvent, "ff11b0" "3e" "ffff" "1800" "02" "06" "00" "00000000" "00000000", 0, 0, nullptr,
+              0x05f1);
+  CHECK_EQ(d.summary, std::string("Zephyr Periodic Sync Timing failed: Connection Failed To Be Established, nothing "
+                                  "within ±0.0 ms extra of the SyncInfo offset in 6 events, 0 CRC failures"));
+  d = run_mon(btb::hci::kMonEvent, "ff0db2" "00" "00" "0800" "d8ffffff" "1e000000", 0, 0, nullptr, 0x05f1);
+  CHECK_EQ(d.summary, std::string("Zephyr BIG Sync Timing BIG 0: first BIS PDU -0.04 ms from its BIGInfo (window 30 us)"));
+  CHECK_EQ(field(d.fields, "First PDU offset"), std::string("-40 us from the BIGInfo offset"));
+  CHECK(no_blob(d.fields));
+  d = run_mon(btb::hci::kMonEvent, "ff0104", 0, 0, nullptr, 0x05f1);
+  CHECK_EQ(d.summary, std::string("Zephyr Scan Request Received"));
   // Behind the vendor prefix 0x8780: the Microsoft extension's monitor event, then telemetry.
   d = intel_evt("ff0c878002012e5e36bba3440101");
   CHECK_EQ(d.summary, std::string("MSFT LE Monitor Device 44:A3:BB:36:5E:2E monitor 1 start"));
