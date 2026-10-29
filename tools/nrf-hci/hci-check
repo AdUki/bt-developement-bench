@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+# hci-check — talk plain HCI H:4 to a controller on a serial port, without attaching it to the
+# kernel (so no root): `make nrf-check`, or hci-check /dev/ttyACM1 [baud]. Sends HCI Reset, Read
+# Local Version Information, Read BD_ADDR, LE Read Local Supported Features and LE Read Buffer
+# Size v2 and
+# prints each answer decoded. 1 Mbaud, 8N1, with RTS/CTS as the bench's firmware expects.
+import os
+import select
+import sys
+import termios
+import time
+
+BAUDS = {1000000: termios.B1000000, 115200: termios.B115200}
+
+
+def open_port(dev, baud):
+    fd = os.open(dev, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    a = termios.tcgetattr(fd)
+    a[0] = a[1] = a[3] = 0
+    a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL | termios.CRTSCTS
+    a[4] = a[5] = BAUDS[baud]
+    termios.tcsetattr(fd, termios.TCSANOW, a)
+    termios.tcflush(fd, termios.TCIOFLUSH)
+    return fd
+
+
+def command(fd, opcode):
+    os.write(fd, bytes([1, opcode & 0xff, opcode >> 8, 0]))
+    out, deadline = b"", time.time() + 1.0
+    while time.time() < deadline:
+        if select.select([fd], [], [], 0.2)[0]:
+            out += os.read(fd, 512)
+        if len(out) >= 3 and len(out) >= 3 + out[2]:
+            break
+    return out
+
+
+# LE features (Core 6.0 vol 6 part B 4.6), the bits the bench cares about.
+LE_FEATURES = {
+    1: "2M PHY", 11: "Coded PHY", 12: "ext adv", 13: "per adv", 24: "PAST sender",
+    25: "PAST receiver", 28: "CIS central", 29: "CIS peripheral", 30: "ISO broadcaster",
+    31: "sync receiver", 32: "ISO channels (host)",
+}
+
+
+def main():
+    dev = sys.argv[1]
+    baud = int(sys.argv[2]) if len(sys.argv) > 2 else 1000000
+    fd = open_port(dev, baud)
+    ok = True
+    for name, opcode in (("Reset", 0x0c03), ("Read Local Version", 0x1001), ("Read BD_ADDR", 0x1009),
+                         ("LE Read Local Features", 0x2003), ("LE Read Buffer Size v2", 0x2060)):
+        rsp = command(fd, opcode)
+        if len(rsp) < 7 or rsp[0] != 4 or rsp[1] != 0x0e:
+            print(f"{name}: no answer" if not rsp else f"{name}: {rsp.hex(' ')}")
+            ok = False
+            continue
+        status, p = rsp[6], rsp[7:]
+        if status:
+            print(f"{name}: status 0x{status:02x}")
+            ok = False
+        elif opcode == 0x1001:
+            print(f"{name}: HCI {p[0]} rev {int.from_bytes(p[1:3], 'little')}, LMP {p[3]} "
+                  f"subversion 0x{int.from_bytes(p[6:8], 'little'):04x}, manufacturer 0x{int.from_bytes(p[4:6], 'little'):04x}")
+        elif opcode == 0x1009:
+            print(f"{name}: {':'.join(f'{b:02X}' for b in reversed(p[:6]))}")
+        elif opcode == 0x2003:
+            bits = int.from_bytes(p[:8], "little")
+            have = [n for b, n in LE_FEATURES.items() if bits >> b & 1]
+            print(f"{name}: {p.hex(' ')}: {', '.join(have)}")
+        elif opcode == 0x2060:
+            print(f"{name}: ACL {int.from_bytes(p[0:2], 'little')} x {p[2]}, "
+                  f"ISO {int.from_bytes(p[3:5], 'little')} x {p[5]}")
+        else:
+            print(f"{name}: ok")
+    sys.exit(0 if ok else 1)
+
+
+main()

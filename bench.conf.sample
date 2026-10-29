@@ -30,3 +30,12 @@ TARGET ?= root@10.55.0.1
 # ELL source for building BlueZ (its internal ELL), and the model named in BlueZ's Assisted-by:
 # UPSTREAM_ELL ?= $(HOME)/projects/ell
 # UPSTREAM_AI_MODEL ?= claude-opus-5-5
+
+# The nRF54L15 DK's controller firmware (make nrf-*; docs/system.md "An nRF54L15 DK as the
+# controller"). The Zephyr workspace and tools live outside the repo; make nrf-setup creates them.
+# ZEPHYR_WORKSPACE ?= $(HOME)/projects/zephyrproject
+# ZEPHYR_VERSION ?= v4.5.0
+# ZEPHYR_VENV ?= $(HOME)/opt/zephyr-venv
+# ZEPHYR_SDK ?= $(HOME)/opt/zephyr-sdk
+# SEGGER's J-Link software, unpacked from its .deb (dpkg-deb -x): JLinkExe and the DLL in here.
+# JLINK_DIR ?= $(HOME)/opt/jlink

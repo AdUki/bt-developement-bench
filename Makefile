@@ -13,7 +13,8 @@
 # builds in its own dir; downloads and sstate are shared through site.conf.
 #
 # The targets live in mk/*.mk by area: yocto (image, sdk, flash, configure), dev (src trees,
-# component builds, deploys), kernel (build, trial boot, commit), app (btbenchd on this PC).
+# component builds, deploys), kernel (build, trial boot, commit), app (btbenchd on this PC), nrf
+# (the nRF54L15 DK's controller firmware).
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -90,6 +91,7 @@ include mk/system.mk
 include mk/dev.mk
 include mk/kernel.mk
 include mk/app.mk
+include mk/nrf.mk
 
 ## ─── misc ────────────────────────────────────────────────────────────────────
 

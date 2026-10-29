@@ -169,6 +169,39 @@ HID remote to another. Its firmware goes in the board's image (`BTBENCH_BOARD_FI
   On the Pi 5 its Bluetooth needs the HAT to wire the M.2 slot's USB pins to one of the board's
   USB ports. A PCIe-only HAT shows the Wi-Fi alone (docs/kernel.md "Raspberry Pi 5"). The Wi-Fi
   half is `wlpcie0` (iwlwifi, `btbench-firmware-iwlwifi`), up only when you bring it up.
+- **Nordic nRF54L15 DK** running the bench's own controller firmware, over the DK's USB (its
+  J-Link's second CDC ACM port carries HCI): see below.
+
+### An nRF54L15 DK as the controller
+
+The BE200's firmware is a blob with LE Audio switched on by a DDC trick; a Nordic nRF54L15 DK
+running Zephyr's open-source link layer is a controller whose every line can be read, changed and
+rebuilt. The firmware is `tools/nrf-hci`: Zephyr's `hci_uart` sample as it is (from the Zephyr
+workspace, not copied) with every feature the bench wants switched on in `prj.conf` — extended
+and periodic advertising, PAST both ways, Coded PHY, BIG source and sink, CIS central and
+peripheral — plus one source file of its own, `src/addr.c`, which gives the link layer the chip's
+factory static address as its public one (Zephyr boots with `00:00:00:00:00:00`, which the
+kernel refuses to power). HCI runs as H:4 at 1 Mbaud with RTS/CTS on the DK's `uart20`, which the
+on-board J-Link exposes as the second of its two USB serial ports (interface 02).
+
+On this PC (once, `make nrf-setup`: west in a venv, a Zephyr workspace pinned to
+`ZEPHYR_VERSION` with only the modules this build needs, the Zephyr SDK's arm toolchain; the
+paths are `ZEPHYR_WORKSPACE`, `ZEPHYR_VENV`, `ZEPHYR_SDK`, `JLINK_DIR` in `bench.conf`). SEGGER's
+J-Link software is the one download with a licence click: unpack `JLink_Linux_x86_64.deb` with
+`dpkg-deb -x` into `JLINK_DIR`, no root needed. Then, with the DK on this PC's USB:
+
+```
+make nrf-hci      # build/nrf-hci
+make nrf-flash    # over the DK's J-Link
+make nrf-check    # HCI reset, version, BD_ADDR, LE features, buffer sizes — no root, no attach
+```
+
+Moved to a board's USB, the DK is attached by udev (`70-btbench-hci-uart.rules` starts
+`btbench-hci-uart@ttyACMn.service`, which runs `btattach -P h4 -S 1000000` on the port and is
+bound to it), and bluetoothd picks up the new hci as it does any adapter: `bench -a hciN`, Devices
+→ adapter, `bench primary`. The address is the chip's: a static random one worn as public, with
+no OUI behind it. Zephyr's controller is LE only, so the DK is for LE Audio and LE tests, never
+for A2DP or HFP.
 
 ## Changing the scripts
 
