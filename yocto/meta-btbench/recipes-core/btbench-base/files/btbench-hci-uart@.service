@@ -1,0 +1,15 @@
+[Unit]
+Description=HCI controller on /dev/%I (a Nordic DK running tools/nrf-hci)
+# Started by udev (btbench-hci-uart.rules) the moment the DK's HCI serial port appears, and bound
+# to it: unplugging the DK stops btattach, and the hci goes with it. bluetoothd picks the new hci
+# up by itself, as it does any adapter.
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+# btattach keeps the line open for as long as it runs: the kernel's hci_uart H:4 line discipline
+# carries HCI at 1 Mbaud with RTS/CTS, as the firmware's UART is set up. The firmware brings its
+# own public address, so nothing has to be set here.
+ExecStart=/usr/bin/btattach -B /dev/%I -P h4 -S 1000000
+Restart=on-failure
+RestartSec=2

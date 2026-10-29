@@ -1,0 +1,4 @@
+# A Nordic DK running the bench's HCI firmware (tools/nrf-hci, docs/system.md "An nRF54L15 DK as
+# the controller") shows up as a SEGGER J-Link with two CDC ACM ports; the second one (USB
+# interface 02) is the HCI UART. Attach it as a Bluetooth controller the moment it appears.
+ACTION=="add", SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1366", ENV{ID_MODEL_ID}=="1069", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="systemd", ENV{SYSTEMD_WANTS}+="btbench-hci-uart@%k.service"

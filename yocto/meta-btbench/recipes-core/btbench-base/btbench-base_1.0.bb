@@ -24,6 +24,8 @@ SRC_URI = " \
     file://btbench-bdaddr.service \
     file://btbench-gadget.service \
     file://btbench-wifi.service \
+    file://btbench-hci-uart@.service \
+    file://btbench-hci-uart.rules \
     file://10-usb0.network \
     file://30-wlan0.network \
     file://70-btbench-pcie-wifi.link \
@@ -123,6 +125,11 @@ do_install() {
     for u in btbench-data btbench-bdaddr btbench-gadget btbench-wifi btbench-hostname; do
         install -m 0644 ${WORKDIR}/$u.service ${D}${systemd_system_unitdir}/
     done
+    # A Nordic DK on USB as an HCI controller: udev starts the template unit per port, so it is
+    # not enabled (SYSTEMD_SERVICE) but just installed (docs/system.md "A second adapter").
+    install -m 0644 ${WORKDIR}/btbench-hci-uart@.service ${D}${systemd_system_unitdir}/
+    install -d ${D}${nonarch_base_libdir}/udev/rules.d
+    install -m 0644 ${WORKDIR}/btbench-hci-uart.rules ${D}${nonarch_base_libdir}/udev/rules.d/70-btbench-hci-uart.rules
 
     # --- settings rendered from the build ---------------------------------------------------
     # The target scripts (this recipe's, the kernel's, the audio stack's) and btbenchd read these
@@ -216,6 +223,7 @@ EOF
 
 FILES:${PN} += " \
     ${systemd_system_unitdir} \
+    ${nonarch_base_libdir}/udev/rules.d \
     ${systemd_unitdir}/network \
     ${nonarch_libdir}/tmpfiles.d \
 "
