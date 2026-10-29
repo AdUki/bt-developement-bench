@@ -99,6 +99,43 @@ function toast(msg) {
 }
 const fail = e => toast(e.message || String(e));
 
+// A request the board answers later (a scan's start or stop, a pairing, a connect). What a view
+// shows of it is the board's state, never what this browser last asked: the API carries the
+// request on its object as `busy` (its word while it runs: "starting", "pairing") and `error` (why
+// the last one failed), so every view and every browser shows the same, from the request to its
+// answer, and nothing here guesses when the answer is due.
+//   opButton(el, busy, label, running): the dots and no click while busy, the dots alone while the
+//     thing runs (a scan), else the label for the state it is in. opButtonHTML the same for a list
+//     built as a string.
+//   opRequest(el, req, refresh): a click. The button shows the dots at once, refresh() reads the
+//     state once the board took the request (its busy is in it), and a refused one is the toast's,
+//     the state read again.
+function opButton(el, busy, label, running) {
+  setHTML(el, (busy || running ? '<span class="dots"></span>' : '') + esc(label));
+  el.disabled = !!busy;
+}
+const opButtonHTML = (attrs, busy, label, running) =>
+  `<button ${attrs}${busy ? ' disabled' : ''}>${busy || running ? '<span class="dots"></span>' : ''}${esc(label)}</button>`;
+function opRequest(el, req, refresh) {
+  if (el && !el.disabled) {
+    el.disabled = true;
+    if (!el.querySelector('.dots')) el.insertAdjacentHTML('afterbegin', '<span class="dots"></span>');
+  }
+  return req.then(refresh, e => { fail(e); return refresh(); });
+}
+
+// fn at once, then at most once per `ms` while the calls keep coming (the last of them runs at the
+// end of the window): a view following a topic that chatters, such as "bt" with every RSSI change
+// during a scan, sees a change now rather than a second later.
+function throttle(fn, ms) {
+  let timer = null, more = false;
+  const run = () => {
+    fn();
+    timer = setTimeout(() => { timer = null; if (more) { more = false; run(); } }, ms);
+  };
+  return () => { if (timer) more = true; else run(); };
+}
+
 const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MiB'
   : n >= 1024 ? (n / 1024).toFixed(1) + ' KiB' : n + ' B';
 const fmtKbps = bps => (bps / 1000).toFixed(bps >= 100000 ? 0 : 1);

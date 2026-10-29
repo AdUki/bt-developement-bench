@@ -683,6 +683,11 @@ void BtManager::changed(bool request) {
   if (request) request_change_pending_ = true;
 }
 
+void BtManager::changed_now() {
+  change_pending_ = true;
+  change_now_ = true;
+}
+
 // A notification is a PropertiesChanged of a characteristic's Value, and at tens a second it must
 // not cost a re-read of the whole tree each: it goes straight to the notify hook. A device's RSSI
 // and advertising data change with every advertisement while scanning: those are re-read at the
@@ -785,9 +790,9 @@ void BtManager::tick() {
   }
   for (BusUser* u : users_) u->tick(bus_, now);
 
-  if (change_fn_ && (request_change_pending_ || (change_pending_ && now - last_change_ns_ >= kChangeMinNs))) {
+  if (change_fn_ && (request_change_pending_ || change_now_ || (change_pending_ && now - last_change_ns_ >= kChangeMinNs))) {
     const bool req = request_change_pending_;
-    change_pending_ = request_change_pending_ = false;
+    change_pending_ = request_change_pending_ = change_now_ = false;
     last_change_ns_ = now;
     change_fn_(req);
   }
@@ -932,6 +937,22 @@ void BtManager::refreshed(sd_bus_message* reply) {
     // A device that has gone (removed, or a temporary one expired) takes its busy/error with it.
     for (auto it = dev_state_.begin(); it != dev_state_.end();)
       it = objs->contains(it->first) ? std::next(it) : dev_state_.erase(it);
+    // A scan request BlueZ answered before this read was sent is over with it: the read has the
+    // Discovering that answer decided, so busy and the new state show together, never one without
+    // the other. A read sent before the answer may predate the property: the next read ends it.
+    for (auto it = scan_ops_.begin(); it != scan_ops_.end();) {
+      ScanOp& op = it->second;
+      if (!objs->contains(it->first)) {
+        it = scan_ops_.erase(it);
+        continue;
+      }
+      if (op.answered_ns && op.answered_ns <= last_refresh_ns_) {
+        op.busy.clear();
+        op.answered_ns = 0;
+        changed_now();
+      }
+      ++it;
+    }
   }
 
   // The advertisements and the local GATT applications follow the primary: a change of primary
@@ -1028,48 +1049,97 @@ void BtManager::start_scan(const std::string& apath) {
     std::lock_guard<std::mutex> lk(m_);
     error_ = why;
     scans_.erase(apath);
+    scan_ops_[apath] = ScanOp{"starting", why, mono_ns()};
     dirty_ = true;
     return;
   }
   sd_bus_error_free(&e);
-
-  r = sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "StartDiscovery", &e, nullptr, "");
-  // No answer is not a refusal: BlueZ answers once the controller has started, and one busy syncing
-  // to a broadcast takes 20 s and more. The scan is kept, so it is stopped when its time is up; one
-  // forgotten here ran on in BlueZ, and the next scan asked for was refused as already running.
-  if (r < 0 && (is_error(&e, "org.freedesktop.DBus.Error.NoReply") || is_error(&e, "org.freedesktop.DBus.Error.Timeout"))) {
-    LOG_WARN("bluetooth: {}: no answer to the scan yet (the controller is busy): it may start late", name);
-  } else if (r < 0 && !is_error(&e, "org.bluez.Error.InProgress")) {
-    const std::string why = name + ": cannot scan: " + friendly(&e);
-    LOG_WARN("bluetooth: {}", why);
-    std::lock_guard<std::mutex> lk(m_);
-    error_ = why;
-    scans_.erase(apath);
-  } else {
-    LOG_INFO("bluetooth: {} scanning ({})", name, f.transport);
-  }
-  sd_bus_error_free(&e);
-  dirty_ = true;
+  // Answered when the controller scans (on_scan_reply): a second and more on some, 20 s and more
+  // on one busy syncing to a broadcast. Asked for without waiting: the bus thread has BlueZ's
+  // signals and the other requests to serve meanwhile.
+  LOG_INFO("bluetooth: {}: starting a scan ({})", name, f.transport);
+  call_adapter(apath, "StartDiscovery", 30);
 }
 
 void BtManager::stop_scan(const std::string& apath) {
   {
     std::lock_guard<std::mutex> lk(m_);
     scans_.erase(apath);
+    // Also a scan whose time is up (tick), which no request announced.
+    ScanOp& op = scan_ops_[apath];
+    op.busy = "stopping";
+    op.error.clear();
+    op.answered_ns = 0;
   }
   if (!bus_ || apath.empty()) return;
-  sd_bus_error e = SD_BUS_ERROR_NULL;
-  sd_bus_call_method(bus_, kBluez, apath.c_str(), kAdapterIface, "StopDiscovery", &e, nullptr, "");
-  sd_bus_error_free(&e);
-  // An empty filter clears ours, so the next client's scan is not narrowed by what we last asked.
+  call_adapter(apath, "StopDiscovery", 30);
+}
+
+// An adapter's method with no arguments, answered on the bus thread (on_scan_reply).
+void BtManager::call_adapter(const std::string& apath, const char* method, unsigned timeout_s) {
   sd_bus_message* m = nullptr;
-  if (sd_bus_message_new_method_call(bus_, &m, kBluez, apath.c_str(), kAdapterIface,
-                                     "SetDiscoveryFilter") >= 0 &&
-      append_dict(m, {}) >= 0) {
-    sd_bus_call(bus_, m, 0, &e, nullptr);
-  }
+  int r = sd_bus_message_new_method_call(bus_, &m, kBluez, apath.c_str(), kAdapterIface, method);
+  auto* op = new BtBus::AsyncOp{this, apath, method, kAdapterIface};
+  sd_bus_slot* slot = nullptr;
+  if (r >= 0) r = sd_bus_call_async(bus_, &slot, m, BtBus::async, op, s_to_ns(timeout_s) / 1000);
   sd_bus_message_unref(m);
-  sd_bus_error_free(&e);
+  if (r < 0) {
+    delete op;
+    sd_bus_error e = SD_BUS_ERROR_NULL;
+    sd_bus_error_set_errno(&e, -r);
+    on_scan_reply(apath, method, &e);
+    sd_bus_error_free(&e);
+    return;
+  }
+  sd_bus_slot_set_destroy_callback(slot, [](void* p) { delete static_cast<BtBus::AsyncOp*>(p); });
+  sd_bus_slot_set_floating(slot, 1);
+  sd_bus_slot_unref(slot);
+}
+
+// StartDiscovery or StopDiscovery answered. The request's busy ends with the next read of BlueZ's
+// tree (refreshed), which has the Discovering this answer decided.
+void BtManager::on_scan_reply(const std::string& apath, const std::string& method, const sd_bus_error* e) {
+  const std::string name = adapter_from_path(apath);
+  std::string why;
+  if (method == "StartDiscovery") {
+    // No answer is not a refusal: BlueZ answers once the controller has started, and one busy
+    // syncing to a broadcast takes 20 s and more. The scan is kept, so it is stopped when its time
+    // is up; one forgotten here ran on in BlueZ, and the next scan asked for was refused as already
+    // running.
+    if (e && (is_error(e, "org.freedesktop.DBus.Error.NoReply") || is_error(e, "org.freedesktop.DBus.Error.Timeout"))) {
+      LOG_WARN("bluetooth: {}: no answer to the scan yet (the controller is busy): it may start late", name);
+    } else if (e && !is_error(e, "org.bluez.Error.InProgress")) {
+      why = name + ": cannot scan: " + friendly(e);
+      LOG_WARN("bluetooth: {}", why);
+    } else {
+      LOG_INFO("bluetooth: {} scanning", name);
+    }
+  } else {
+    if (e && !is_error(e, "org.bluez.Error.Failed")) {  // Failed: nothing was scanning
+      why = name + ": cannot stop the scan: " + friendly(e);
+      LOG_WARN("bluetooth: {}", why);
+    }
+    // An empty filter clears ours, so the next client's scan is not narrowed by what we last asked.
+    sd_bus_error fe = SD_BUS_ERROR_NULL;
+    sd_bus_message* m = nullptr;
+    if (sd_bus_message_new_method_call(bus_, &m, kBluez, apath.c_str(), kAdapterIface,
+                                       "SetDiscoveryFilter") >= 0 &&
+        append_dict(m, {}) >= 0) {
+      sd_bus_call(bus_, m, 0, &fe, nullptr);
+    }
+    sd_bus_message_unref(m);
+    sd_bus_error_free(&fe);
+  }
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    if (!why.empty()) {
+      error_ = why;
+      if (method == "StartDiscovery") scans_.erase(apath);
+    }
+    ScanOp& op = scan_ops_[apath];
+    op.error = why;
+    op.answered_ns = mono_ns();
+  }
   dirty_ = true;
 }
 
@@ -1118,6 +1188,10 @@ void BtManager::call_device(const std::string& path, const char* method, const s
 void BtManager::on_reply(const std::string& path, const std::string& method, const std::string& iface,
                          sd_bus_message* reply) {
   const sd_bus_error* e = sd_bus_message_get_error(reply);
+  if (iface == kAdapterIface) {
+    on_scan_reply(path, method, e);
+    return;
+  }
   // The BR/EDR bearer's Connect brings up the link only, and answers AlreadyConnected when it is
   // up — as it still is right after a pairing — without connecting a profile: A2DP and AVRCP
   // never came, and the idle link dropped seconds later. Device1's Connect connects the profiles
@@ -1377,6 +1451,13 @@ void BtManager::expire_request(uint64_t now_ns) {
 
 // ---- Called from web handlers --------------------------------------------------------------------
 
+json BtManager::scan_op(const std::string& adapter) const {
+  std::lock_guard<std::mutex> lk(m_);
+  const auto it = scan_ops_.find(find_adapter_locked(adapter));
+  return json{{"busy", it == scan_ops_.end() ? "" : it->second.busy},
+              {"error", it == scan_ops_.end() ? "" : it->second.error}};
+}
+
 std::shared_ptr<const json> BtManager::objects() const {
   std::lock_guard<std::mutex> lk(m_);
   return objs_;
@@ -1409,10 +1490,12 @@ json BtManager::state() const {
   std::map<std::string, DevState> ds;
   std::string policy, cap;
   std::map<std::string, Scan> scans;
+  std::map<std::string, ScanOp> ops;
   std::map<std::string, std::vector<std::string>> filters;
   std::vector<BtAdapterId> ids;
   {
     std::lock_guard<std::mutex> lk(m_);
+    ops = scan_ops_;
     objs = objs_;
     apath = adapter_path_;
     available = available_;
@@ -1442,11 +1525,14 @@ json BtManager::state() const {
     const auto id = std::find_if(ids.begin(), ids.end(), [&](const BtAdapterId& x) { return x.path == p; });
     const auto sc = scans.find(p);
     const auto fl = filters.find(p);
+    const auto op = ops.find(p);
     a["primary"] = p == apath;
     a["usb"] = id != ids.end() && id->usb;
     a["discovery"] = json{
         {"on", a.value("discovering", false)},
         {"ours", sc != scans.end()},
+        {"busy", op != ops.end() ? op->second.busy : ""},
+        {"error", op != ops.end() ? op->second.error : ""},
         {"filter", bt_scan_filter_json(sc != scans.end() ? sc->second.filter : BtScanFilter{})},
         // The keys the adapter's BlueZ takes (GetDiscoveryFilters): UUIDs, RSSI, Pathloss, ...
         {"filters", fl != filters.end() ? json(fl->second) : json::array()},
@@ -1458,8 +1544,8 @@ json BtManager::state() const {
     }
   }
   if (discovery.is_null())
-    discovery = json{{"on", false}, {"ours", false}, {"filter", bt_scan_filter_json(BtScanFilter{})},
-                     {"filters", json::array()}, {"until_s", nullptr}};
+    discovery = json{{"on", false}, {"ours", false}, {"busy", ""}, {"error", ""},
+                     {"filter", bt_scan_filter_json(BtScanFilter{})}, {"filters", json::array()}, {"until_s", nullptr}};
   json devices = model_devices(*objs, want_adapter_.empty() ? std::string{} : apath);
   for (json& d : devices) {
     const auto it = ds.find(d["path"].get<std::string>());
@@ -1697,8 +1783,11 @@ bool BtManager::scan(bool on, const std::string& adapter, const BtScanFilter& f,
       if (paths.empty() && !adapter_path_.empty()) paths.push_back(adapter_path_);
     }
     if (on) scans_[paths[0]] = Scan{f, seconds ? mono_ns() + s_to_ns(seconds) : 0};
+    // Shown at once, so a console that reads the state straight back sees its request running.
+    for (const std::string& p : paths) scan_ops_[p] = ScanOp{on ? "starting" : "stopping", "", 0};
   }
   post([this, on, paths](sd_bus*) {
+    changed_now();
     for (const std::string& p : paths) {
       if (on) start_scan(p);
       else stop_scan(p);

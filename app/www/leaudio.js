@@ -7,7 +7,9 @@
 // States are BlueZ's as they are: a stream that does not sync stays where it got to, and Listen
 // again is the retry.
 
-const la = {s: null, streams: [], route: null, poll: null, btT: null, busy: {}, codes: {}, ending: {}};
+const la = {s: null, streams: [], route: null, poll: null, busy: {}, codes: {}, ending: {}};
+// At once, then at most once a second: "bt" carries every RSSI change during a scan.
+la.onBt = throttle(() => refreshLeAudio(), 1000);
 // The route's outputs, and whether the board's broadcast `node` is one of them.
 const laOuts = () => la.route ? la.route.outputs : [];
 const laOn = node => laOuts().some(k => k.target === node);
@@ -130,12 +132,15 @@ function renderLeAudio(s) {
       <p class="hint">${a && a.receiver ? 'Scan to find the Auracast broadcasts in range (a TV, a transmitter, a phone sharing its audio, another board).' : 'This adapter cannot receive broadcasts.'}</p></div>`);
     loaded($('la-sources'));
   }
-  const scanning = !!(a && a.discovering);
-  setText($('la-scan-st'), scanning ? 'scanning' : '');
-  setClass($('la-scan-st'), scanning ? 'pill warn' : 'pill');
-  $('la-scan-st').hidden = !scanning;
-  setText($('la-scan'), scanning ? 'Stop scan' : 'Scan');
-  $('la-scan').disabled = !(a && a.receiver);
+  // The pill says what the board does for the scan: its start or stop asked for (discovery_busy),
+  // scanning, or why the last request failed.
+  const scanning = !!(a && a.discovering), busy = a ? a.discovery_busy : '', err = !busy && !scanning && a ? a.discovery_error : '';
+  setText($('la-scan-st'), busy ? busy + '…' : scanning ? 'scanning' : err ? 'scan failed' : '');
+  $('la-scan-st').title = err || '';
+  setClass($('la-scan-st'), 'pill' + (busy || scanning ? ' warn' : err ? ' bad' : ''));
+  $('la-scan-st').hidden = !(busy || scanning || err);
+  opButton($('la-scan'), busy, scanning ? 'Stop scan' : 'Scan', false);
+  if (!(a && a.receiver)) $('la-scan').disabled = true;
 }
 
 function refreshLeAudio() {
@@ -206,8 +211,8 @@ function setupLeAudio() {
     const a = laAdapter();
     if (!a) return;
     const on = !a.discovering;
-    post('/bluetooth/scan', on ? {on: true, adapter: a.adapter, transport: 'le', seconds: 30} : {on: false, adapter: a.adapter})
-      .then(() => setTimeout(refreshLeAudio, 300)).catch(fail);
+    opRequest($('la-scan'), post('/bluetooth/scan', on ? {on: true, adapter: a.adapter, transport: 'le', seconds: 30} : {on: false, adapter: a.adapter}),
+      refreshLeAudio);
   };
 }
 
@@ -223,8 +228,6 @@ registerTab('leaudio', {
   },
   hide() { clearInterval(la.poll); la.poll = null; },
   onMessage(topic) {
-    if (currentTab !== 'leaudio' || topic !== 'bt' || la.btT) return;
-    // At most one look a second: "bt" carries every RSSI change during a scan.
-    la.btT = setTimeout(() => { la.btT = null; refreshLeAudio(); }, 1000);
+    if (currentTab === 'leaudio' && topic === 'bt') la.onBt();
   },
 });

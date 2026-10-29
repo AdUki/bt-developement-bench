@@ -150,10 +150,11 @@ function renderInputs() {
     // forever.
     const reading = (au.la.sources || []).filter(x => x.rssi != null && !rows.some(r => r.kind === 'broadcast' && sameAddr(r.address, x.address)))
       .map(x => row('', false, PL_SVG.bt, x.name || devName(x.address), 'Auracast', 'reading its streams…')).join('');
-    // The dots while it scans, and while a start or stop is on the way.
-    const dots = rx.discovering || au.scanBusy ? '<span class="dots"></span>' : '';
-    html += `<div class="in-head small muted in-bc-head">Auracast<button class="small-btn" data-in-scan${au.scanBusy ? ' disabled' : ''}>${dots}${rx.discovering ? 'Stop scan' : 'Scan'}</button></div>` +
-      (some(true) + reading || `<div class="empty-line">${rx.discovering ? 'Scanning for Auracast broadcasts…' : 'No broadcast found yet: scan for the ones in range.'}</div>`);
+    // The dots while it scans, and while its start or stop is on the way (the board's discovery_busy).
+    const busy = rx.discovery_busy, err = !busy && !rx.discovering ? rx.discovery_error : '';
+    html += `<div class="in-head small muted in-bc-head">Auracast${opButtonHTML('class="small-btn" data-in-scan', busy, rx.discovering ? 'Stop scan' : 'Scan', rx.discovering)}</div>` +
+      (some(true) + reading || `<div class="empty-line${err ? ' bad-text' : ''}">${busy === 'starting' ? 'Starting a scan for Auracast broadcasts…'
+        : rx.discovering ? 'Scanning for Auracast broadcasts…' : err ? esc(err) : 'No broadcast found yet: scan for the ones in range.'}</div>`);
   }
   setHTML($('rt-inputs'), html);
   au.inRows = rows;
@@ -186,7 +187,8 @@ function pickInput(input, r) {
 }
 
 function inputClick(e) {
-  if (e.target.closest('[data-in-scan]')) { broadcastScan(); return true; }
+  const sc = e.target.closest('[data-in-scan]');
+  if (sc) { broadcastScan(sc); return true; }
   if (e.target.closest('[data-in-off]')) { if (!au.inPick) pickInput({type: 'none'}); return true; }
   const pair = e.target.closest('[data-in-pair]');
   if (pair) {
@@ -208,15 +210,11 @@ function inputClick(e) {
 // The adapter that can receive broadcasts, or null: the inputs then have an Auracast section.
 const rxAdapter = () => (au.la ? au.la.adapters : []).find(a => a.receiver) || null;
 // Scan for broadcasts (an LE scan of 30 s on that adapter, as LE Audio does), or stop it.
-function broadcastScan() {
+function broadcastScan(btn) {
   const a = rxAdapter();
-  if (!a || au.scanBusy) return;
+  if (!a || a.discovery_busy) return;
   const on = !a.discovering;
-  const over = () => { au.scanBusy = false; renderInputs(); };
-  au.scanBusy = true;
-  renderInputs();
-  post('/bluetooth/scan', on ? {on: true, adapter: a.adapter, transport: 'le', seconds: 30} : {on: false, adapter: a.adapter})
-    .then(refreshLa).then(over).catch(e => { over(); fail(e); });
+  opRequest(btn, post('/bluetooth/scan', on ? {on: true, adapter: a.adapter, transport: 'le', seconds: 30} : {on: false, adapter: a.adapter}), refreshLa);
 }
 
 // ---------------------------------------------------------------- outputs

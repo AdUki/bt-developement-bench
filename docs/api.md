@@ -24,7 +24,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
 
 | topic | data | when |
 |---|---|---|
-| `bt` | the body of `GET /api/bluetooth` | on change, at most 1 Hz; once on connect |
+| `bt` | the body of `GET /api/bluetooth` | on change, at most 1 Hz (a request's `busy` beginning or ending at once); once on connect |
 | `bt.request` | the pending agent request, or `null` | at once when it appears or goes |
 | `media` | the body of `GET /api/media` | on change, at most 1 Hz; once on connect |
 | `gatt.notify` | `{address, path, handle, uuid, value, text, ts}` | every value change BlueZ reports: notifications, indications, and the result of reads |
@@ -64,7 +64,7 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
  "devices": [ ...see below... ],
  "request": null,
  "agent": {"policy": "auto", "capability": "KeyboardDisplay", "registered": true},
- "discovery": {"on": false, "ours": false,
+ "discovery": {"on": false, "ours": false, "busy": "", "error": "",
                "filter": {"transport": "auto", "rssi": null, "pathloss": null, "duplicate_data": false,
                           "uuids": [], "pattern": null, "discoverable": false, "auto_connect": false},
                "filters": ["UUIDs", "RSSI", "Pathloss", "Transport", "DuplicateData", "Discoverable",
@@ -72,7 +72,12 @@ nobody is subscribed to. A client that falls behind loses its oldest messages (3
                "until_s": null}}
 ```
 
-`adapter` is the primary adapter, `discovery` its scan. `manufacturer` is the controller maker's
+`adapter` is the primary adapter, `discovery` its scan: `on` is BlueZ's `Discovering`, `ours` that
+btbenchd started it, `busy` a `POST /api/bluetooth/scan` BlueZ has not answered (`starting`,
+`stopping`; a controller takes a second and more to start a scan, one busy syncing to a broadcast
+20 s), kept until the first read of BlueZ's objects made after the answer, so a client never sees
+the answer without the `on` it decided, and `error` why the last one was refused, until the next.
+`manufacturer` is the controller maker's
 Bluetooth company ID (`manufacturer_name` for the common ones), `version` its HCI version; `usb`
 says the controller is on USB (a dongle, an M.2 card on an adapter) rather than the board's own.
 `system_name` is BlueZ's `Name` (the alias's default), `modalias` the Device ID bluetoothd gives
@@ -534,7 +539,8 @@ profile (`bap-sink`, `bap-duplex`).
 
 ```json
 {"adapters": [{"adapter": "hci0", "address": "44:A3:BB:36:5E:2E", "name": "btbench-vim3l",
-               "broadcaster": true, "receiver": true, "pac": "/org/bluez/hci0/pac_bcast0", "discovering": false}],
+               "broadcaster": true, "receiver": true, "pac": "/org/bluez/hci0/pac_bcast0", "discovering": false,
+               "discovery_busy": "", "discovery_error": ""}],
  "broadcasts": [{"path": "/org/bluez/hci0/pac_bcast0/fd1", "adapter": "hci0", "uuid": "1852", "big": 0, "bis": 1,
                  "state": "active", "codec": {...LC3, as in /api/media, with channels...},
                  "qos": {"big": 0, "bis": 1, "interval_us": 10000, "sdu": 200, "rtn": 4, "latency_ms": 20,
@@ -551,7 +557,9 @@ profile (`bap-sink`, `bap-duplex`).
 
 `adapters`: which can broadcast (`broadcaster`: the controller's ISO broadcaster) and receive
 (`receiver`: sync receiver), from mgmt; `pac` is the adapter's broadcast endpoint, there once
-PipeWire registered the LE Audio broadcast source role (`null` without it). `broadcasts`: the
+PipeWire registered the LE Audio broadcast source role (`null` without it); `discovering`,
+`discovery_busy` and `discovery_error` are the adapter's `discovery` of `GET /api/bluetooth`
+(`on`, `busy`, `error`). `broadcasts`: the
 board's own, a BIG each (one BIS here); `state` is the transport's: `idle` (configured, off air:
 nothing plays into it), `active` (on air), `pending`/`broadcasting` on the way. `node` is the
 PipeWire sink to play into (an Audio streams sink, `null` until PipeWire made it). `sources`: the

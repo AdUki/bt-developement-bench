@@ -35,7 +35,15 @@ json le_audio_state(BtManager& bt, audio::AudioEngine& engine) {
   json controllers = json::object();
   std::string err;
   mgmt_read_controllers(&controllers, &err);
-  return model_le_audio(*bt.objects(), controllers, engine.endpoints(false));
+  json st = model_le_audio(*bt.objects(), controllers, engine.endpoints(false));
+  // A scan asked for on the adapter, until BlueZ answered it (the discovery's busy and error of
+  // GET /api/bluetooth): a view shows the request running from the moment it was made.
+  for (json& a : st["adapters"]) {
+    const json op = bt.scan_op(a["adapter"].get<std::string>());
+    a["discovery_busy"] = op["busy"];
+    a["discovery_error"] = op["error"];
+  }
+  return st;
 }
 json le_audio_state(Deps& d) { return le_audio_state(d.bt, d.audio); }
 

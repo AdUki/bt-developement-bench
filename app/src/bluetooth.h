@@ -183,6 +183,11 @@ class BtManager {
 
   // The object tree as last read; never null (an empty object before the first read).
   std::shared_ptr<const nlohmann::json> objects() const;
+  // A scan's start or stop asked for on an adapter (hciN, address or path), as the API shows it:
+  // {busy, error}. `busy` ("starting", "stopping") stays until the first read of BlueZ's tree made
+  // after BlueZ answered, so the state never shows the answer without the Discovering it decided;
+  // `error` is why the last one was refused, until the next request.
+  nlohmann::json scan_op(const std::string& adapter) const;
   // The primary adapter's path ("" when there is none): the one the advertisements, the local GATT
   // applications (BusUser::bluez_ready) and a scan or device request that names no adapter go to.
   std::string adapter_path() const;
@@ -268,8 +273,13 @@ class BtManager {
   void unregister_agent();
   void start_scan(const std::string& apath);
   void stop_scan(const std::string& apath);
+  void call_adapter(const std::string& apath, const char* method, unsigned timeout_s);
+  void on_scan_reply(const std::string& apath, const std::string& method, const sd_bus_error* e);
   void set_error(std::string e);
   void changed(bool request);
+  // A request's state changed (its busy began or ended, its error is in): the "bt" topic goes out
+  // at the next tick, not at the once-a-second pace of BlueZ's own changes.
+  void changed_now();
   void restore_adapters(const nlohmann::json& objs, const std::vector<BtAdapterId>& ids);
   std::vector<BtAdapterId> adapter_ids(const nlohmann::json& objs) const;
   std::string default_alias(const BtAdapterId& a) const;
@@ -323,6 +333,14 @@ class BtManager {
     uint64_t until_ns = 0;  // 0: until stopped
   };
   std::map<std::string, Scan> scans_;
+  // A scan's start or stop asked for, by adapter path (scan_op). It outlives the scan: a stop is
+  // "stopping" after scans_ forgot it, and a refusal stays as its error.
+  struct ScanOp {
+    std::string busy;  // "starting", "stopping", or empty
+    std::string error;
+    uint64_t answered_ns = 0;  // when BlueZ answered; 0 while the call is out
+  };
+  std::map<std::string, ScanOp> scan_ops_;
   std::deque<std::function<void(sd_bus*)>> commands_;
 
   std::mutex life_m_;
@@ -364,6 +382,7 @@ class BtManager {
   uint64_t next_request_id_ = 1;
   bool change_pending_ = false;
   bool request_change_pending_ = false;
+  bool change_now_ = false;
   uint64_t last_change_ns_ = 0;
   std::string logged_error_;
 };

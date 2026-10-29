@@ -1098,6 +1098,8 @@ const refreshRoute = () => api('/audio/route').then(setRoute).catch(() => {});
 function refreshLa() {
   return api('/le-audio').then(s => { au.la = s; renderNowPlaying(); }).catch(() => {});
 }
+// At once, then at most once a second: "bt" carries every RSSI change during a scan.
+const refreshLaSoon = throttle(refreshLa, 1000);
 
 // The outputs come and go with Bluetooth: asked again whenever the board's audio links change,
 // and once more a moment later (PipeWire makes a speaker's sink a little after BlueZ's transport).
@@ -1423,8 +1425,7 @@ registerTab('audio', {
       }
       if (!holding()) renderNowPlaying();
     } else if (topic === 'bt') {
-      // "bt" carries every RSSI change during a scan.
-      if (!au.laT) au.laT = setTimeout(() => { au.laT = null; refreshLa(); }, 1000);
+      refreshLaSoon();
     } else if (topic === 'audio.route') {
       au.route = data;
       followRoute();

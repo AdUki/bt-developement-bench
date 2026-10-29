@@ -66,7 +66,7 @@ nlohmann::json le_metadata_json(const std::vector<uint8_t>& m);
 // GET /api/le-audio from the object snapshot, mgmt's controllers (mgmt_read_controllers: which
 // adapter can broadcast and receive) and the audio endpoints (GET /api/audio/endpoints: the node
 // each transport plays through):
-// {adapters: [{adapter, address, name, broadcaster, receiver, pac, discovering}],
+// {adapters: [{adapter, address, name, broadcaster, receiver, pac, discovering, discovery_busy, discovery_error}],
 //  broadcasts: [{path, adapter, big, bis, state, codec, qos, encrypted, node}],
 //  sources: [{address, device, adapter, name, rssi, broadcast_id, encrypted, paired, connected,
 //             streams: [{path, endpoint, big, bis, state, codec, location, metadata, program_info,
