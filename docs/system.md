@@ -198,8 +198,8 @@ make nrf-check    # HCI reset, version, BD_ADDR, LE features, buffer sizes — n
 
 The bench's own changes to Zephyr's link layer are diffs in `tools/nrf-hci/patches/`, each
 opening with why; `make nrf-hci` applies the ones not yet in the workspace's tree (a patch whose
-hunks a later one touches would fail that check, so the changes stay in one file). What is in it,
-both switched on in `prj.conf`:
+hunks a later one touches would fail that check, so changes to the same files stay in one patch).
+`sync-establishment.patch`, both switched on in `prj.conf`:
 
 - `CONFIG_BT_CTLR_SYNC_ESTAB_WINDOW_US`: a wider receive window for the first PDU of a periodic
   advertising sync. Zephyr listens exactly where the advertiser's SyncInfo offset says, which the
@@ -212,6 +212,12 @@ both switched on in `prj.conf`:
   Timing` and `Zephyr BIG Sync Timing` (`is:vendor`), so a peer with a wrong SyncInfo or BIGInfo is
   read off the capture, with the numbers its firmware's developers need, instead of guessed from a
   0x3e. More of the kind (what the standard events leave out when a peer misbehaves) belong here.
+
+`cis-lost-sdus.patch`: an SDU lost on a CIS reaches the host as lost data (Packet_Status_Flag
+0b10) with its own sequence number. Zephyr's CIS link layer passes up only the PDUs it received,
+and its ISO-AL numbered the SDUs it emitted, so a lost one left no gap: PipeWire could not conceal
+it, its ISO clock slipped an interval per loss, and the rate control swung the pitch by up to 5%
+about once a second (Pi 5 → DK unicast loses ~3% of SDUs over the air).
 
 A DK that sits on a board's USB can be reflashed without moving it: SEGGER's `JLinkRemoteServer`
 for arm64 (from the same licence-click download, `JLink_Linux_<ver>_arm64.tgz`; only

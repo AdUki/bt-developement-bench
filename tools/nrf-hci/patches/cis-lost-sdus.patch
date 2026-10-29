@@ -1,0 +1,104 @@
+Bluetooth: Controller: An unframed SDU lost on a CIS is reported to the host
+
+The CIS link layer enqueues only the PDUs it received, so a payload that was never received leaves
+nothing behind but a jump in the next PDU's payload number. The unframed ISO-AL ignored that jump
+and numbered only the SDUs it emitted, so the host never learned that an SDU was missing.
+PipeWire numbers received audio by the ISO sequence number and conceals a gap with LC3 PLC.
+Without the gap it played the next SDU in the lost one's place, its ISO clock slipped by an
+interval, and its rate control kept pulling the pitch down and back up. The BIS receiver does not
+have this problem because its link layer enqueues an error PDU for each payload it missed.
+
+The ISO-AL now releases each SDU in such a jump as lost data (Packet_Status_Flag 0b10, no data),
+one SDU interval after the previous one, so every SDU interval reaches the host with its own
+sequence number. After a jump of more than 255 SDUs it releases 255 and only advances the
+sequence number for the rest.
+
+Steps to reproduce:
+1. Pair a Pi 5 with a BE200 to the VIM3L with the nRF54L15 DK as its controller, over LE.
+2. Play music from the Pi 5 to the VIM3L over BAP unicast and listen to it in the VIM3L's console.
+3. The pitch wobbles all the time. The DK's HCI trace shows ISO data packets 15 or 22.5 ms apart
+   in its own timestamps while the sequence numbers count up by one.
+
+Applied to the workspace's Zephyr tree (ZEPHYR_VERSION) by `make nrf-hci`.
+
+diff --git a/subsys/bluetooth/controller/ll_sw/isoal.c b/subsys/bluetooth/controller/ll_sw/isoal.c
+index 9e7e1215857..c1c77d78de5 100644
+--- a/subsys/bluetooth/controller/ll_sw/isoal.c
++++ b/subsys/bluetooth/controller/ll_sw/isoal.c
+@@ -714,6 +714,67 @@ static isoal_status_t isoal_rx_append_to_sdu(struct isoal_sink *sink,
+ }
+ 
+ 
++/* Release the SDUs whose PDUs never reached the ISO-AL, unframed
++ *
++ * A CIS link layer only enqueues the PDUs it received: a payload that was
++ * flushed (not received, CRC errors, no free Rx node) leaves no trace but a
++ * jump in the payload number of the next PDU. Each SDU in that jump is released
++ * as lost data, one SDU interval after the previous one, so the host sees every
++ * SDU interval with its own sequence number and can conceal the gap (a host
++ * that numbers the audio by the sequence number otherwise plays the next SDU in
++ * the lost one's place and runs short).
++ *
++ * BT Core V5.3 : Vol 4 HCI I/F : Part E HCI Func. Spec.:
++ * 5.4.5 HCI ISO Data packets: Packet_Status_Flag 0b10, no data received.
++ */
++static isoal_status_t isoal_rx_unframed_release_lost_sdus(struct isoal_sink *sink,
++							  const struct isoal_pdu_rx *pdu_meta)
++{
++	struct isoal_sink_session *session;
++	struct isoal_sdu_production *sp;
++	struct isoal_sdu_produced *sdu;
++	uint64_t sdu_prev, sdu_next, lost_sdus;
++	isoal_status_t err;
++
++	sp = &sink->sdu_production;
++	session = &sink->session;
++	sdu = &sp->sdu;
++	err = ISOAL_STATUS_OK;
++
++	if (!sp->initialized) {
++		return err;
++	}
++
++	sdu_prev = sp->prev_pdu_id / session->pdus_per_sdu;
++	sdu_next = pdu_meta->meta->payload_number / session->pdus_per_sdu;
++	if (sdu_next <= sdu_prev + 1U) {
++		return err;
++	}
++	lost_sdus = sdu_next - sdu_prev - 1U;
++
++	/* After a long gap, release a few and only count the rest: the host
++	 * learns of them from the sequence number, without a burst of empty
++	 * packets holding up the HCI.
++	 */
++	if (lost_sdus > UINT8_MAX) {
++		session->sn += lost_sdus - UINT8_MAX;
++		lost_sdus = UINT8_MAX;
++	}
++
++	ISOAL_LOG_DBGV("[%p] Releasing %u lost SDUs", sink, (uint32_t)lost_sdus);
++
++	while (lost_sdus > 0U && !err) {
++		sdu->timestamp = isoal_get_wrapped_time_us(sdu->timestamp, session->sdu_interval);
++		sp->sdu_state = BT_ISO_START;
++		sp->sdu_status = ISOAL_SDU_STATUS_LOST_DATA;
++
++		err = isoal_rx_append_to_sdu(sink, pdu_meta, 0, 0, true, false);
++		lost_sdus--;
++	}
++
++	return err;
++}
++
+ /**
+  * @brief Consume an unframed PDU: Copy contents into SDU(s) and emit to a sink
+  * @details Destination sink may have an already partially built SDU
+@@ -796,6 +857,8 @@ static isoal_status_t isoal_rx_unframed_consume(struct isoal_sink *sink,
+ 		uint16_t sdu_offset;
+ 		int32_t latency;
+ 
++		err |= isoal_rx_unframed_release_lost_sdus(sink, pdu_meta);
++
+ 		sp->sdu_status = ISOAL_SDU_STATUS_VALID;
+ 		sp->sdu_state = BT_ISO_START;
+ 		sp->pdu_cnt = 1;
