@@ -1138,9 +1138,11 @@ h4.with-full > .full-btn, h3.with-full > .full-btn { margin-left: auto; width: 1
   html:has(body.fit-audio) { scrollbar-gutter: auto; }
   body.fit-audio #page { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
   body.fit-audio main { flex: 1; min-height: 0; max-width: none; display: flex; padding-bottom: 0; }
-  /* Now playing is always on screen: its button would choose nothing. */
-  body.fit-audio #views .view[data-view="audio/now"] { display: none; }
-  body.fit-audio #views:has(.view.active[data-view="audio/now"]) .view[data-view="audio/library"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 550; }
+  /* Now playing is always on screen: its button would choose nothing. The button is in the Audio
+     area's bar only, so this is by the button and not by fit-audio (the audio tab), or the bar
+     would grow a Players button on LE Audio and PipeWire. */
+  #views .view[data-view="audio/now"] { display: none; }
+  #views:has(.view.active[data-view="audio/now"]) .view[data-view="audio/library"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 550; }
   #audio.active { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(400px, 560px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0 1rem; }
   #audio > .pane { grid-row: 1; grid-column: 2; min-height: 0; overflow: auto; padding-bottom: 0.8rem; }
   #audio > .pane[data-pane="now"], #audio > .pane[data-pane="now"][hidden] { display: block !important; grid-column: 1; }

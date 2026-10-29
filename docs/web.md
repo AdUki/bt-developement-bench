@@ -181,7 +181,8 @@ a track without a cover of its own shows its album's in Players. Covers load fro
 itself, so a browser on another network than the server shows the plain icons.
 
 On a wide screen (from 1400 px) Players stays on the left and Route or Library is beside it
-(Library until one is picked), so Players has no view button there. On a narrow one a bar at
+(Library until one is picked), so the area's bar has no Players button there, on LE Audio and
+PipeWire too. On a narrow one a bar at
 the bottom of Route and Library keeps the track playing, play/pause and next in reach.
 
 *LE Audio*: Auracast both ways, on the adapter that can (a picker when two can; the bar says
